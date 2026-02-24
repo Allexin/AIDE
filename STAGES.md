@@ -4,7 +4,7 @@
 
 ## Stage 1 — Scaffold + Config + Lock
 
-**Status:** Implemented, awaiting user verification
+**Status:** Complete ✓
 
 ### What was built
 - `electron-vite` project scaffold with React 18, TypeScript, Zustand 5
@@ -34,5 +34,35 @@
 5. Editor window opens showing the project path; Picker closes
 6. Launch a second `npm run dev` pointing to the same folder — error message, no second window
 7. Close the Editor — confirm `.aide/lock` is deleted
+
+---
+
+## Stage 2 — Project Picker
+
+**Status:** Complete ✓
+
+### What was built
+- App-level config split into two files: `aide-config.json` (static settings) and `aide-state.json` (dynamic state — recent projects). Prevents write-crash corruption of hand-edited config.
+- `src/main/config/appState.ts`: new module — `RecentProject { path, lastOpened }`, `initAppState()`, `addRecentProject()`, `removeRecentProject()`
+- `src/main/config/appConfig.ts`: removed `recentProjects`/`maxRecentProjects`; added structured `ui` and `sessions` sub-objects matching SPEC
+- `src/main/windows/editor.ts`: extracted `openProjectAndTrack()` helper — single shared function for lock acquisition, gitignore, recent-add, and window creation; used by both IPC and startup paths
+- `src/main/ipc/index.ts`: refactored to use `openProjectAndTrack`; added `path:validate` (existence check, no side effects) and `state:remove-recent` handlers
+- `src/main/index.ts`: launch detection logic — CLI argument → `.aide/` in cwd → Picker (priority order per SPEC)
+- `src/preload/picker.ts`: added `getState()`, `validatePath()`, `removeRecentProject()` bridge methods
+- `src/renderer/src/env.d.ts`: added `RecentProject` type, extended `PickerAPI`
+- `src/renderer/src/windows/PickerApp.tsx`: full redesign — scrollable recent projects list with folder name, full path, and formatted timestamp; stale-path inline error with "Remove from list" button; "Open Folder…" in fixed bottom bar
+
+### Claude's checks
+- `tsc --noEmit -p tsconfig.node.json` — **0 errors**
+- `tsc --noEmit -p tsconfig.web.json` — **0 errors**
+- `npm run build` — **succeeded** (main 8.75 kB, preloads 0.74 kB, renderer 224 kB)
+
+### User test checklist
+1. `npm run dev` — Picker shows "No recent projects"
+2. "Open Folder…" → select directory → Editor opens, Picker closes, title bar shows folder name
+3. Close Editor, reopen — recent project appears with date
+4. Click recent project — Editor opens directly
+5. Delete the project folder, click it in recents — inline error + "Remove from list" button
+6. `npm run build && npx electron out/main/index.js <path>` — Editor opens without Picker
 
 ---

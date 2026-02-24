@@ -1,12 +1,34 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
+
+function folderName(p: string): string {
+  return p.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? p
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric'
+  })
+}
 
 export default function PickerApp(): React.ReactElement {
-  const [error, setError] = useState<string | null>(null)
+  const [recents, setRecents] = useState<RecentProject[]>([])
   const [loading, setLoading] = useState(false)
+  const [globalError, setGlobalError] = useState<string | null>(null)
+  const [staleErrors, setStaleErrors] = useState<Record<string, string>>({})
 
-  const handleOpenFolder = async (): Promise<void> => {
-    setError(null)
+  async function loadState(): Promise<void> {
+    const state = await window.pickerApi.getState()
+    setRecents(state.recentProjects)
+  }
 
+  useEffect(() => {
+    loadState()
+  }, [])
+
+  async function handleOpenFolder(): Promise<void> {
+    setGlobalError(null)
     const folderPath = await window.pickerApi.selectFolder()
     if (!folderPath) return
 
@@ -15,57 +37,225 @@ export default function PickerApp(): React.ReactElement {
     setLoading(false)
 
     if (!result.success) {
-      setError(result.error)
+      setGlobalError(result.error)
     }
-    // On success, main process closes this window
+    // On success the main process closes this window
+  }
+
+  async function handleRecentClick(project: RecentProject): Promise<void> {
+    const exists = await window.pickerApi.validatePath(project.path)
+    if (!exists) {
+      setStaleErrors(prev => ({
+        ...prev,
+        [project.path]: 'This folder no longer exists.'
+      }))
+      return
+    }
+
+    setStaleErrors(prev => {
+      const next = { ...prev }
+      delete next[project.path]
+      return next
+    })
+
+    const result = await window.pickerApi.openProject(project.path)
+    if (!result.success) {
+      setStaleErrors(prev => ({ ...prev, [project.path]: result.error }))
+    }
+  }
+
+  async function handleRemove(projectPath: string): Promise<void> {
+    await window.pickerApi.removeRecentProject(projectPath)
+    setStaleErrors(prev => {
+      const next = { ...prev }
+      delete next[projectPath]
+      return next
+    })
+    await loadState()
   }
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100vh',
-        gap: '12px'
-      }}
-    >
-      <div style={{ fontSize: '28px', fontWeight: 700, letterSpacing: '-0.5px' }}>AIDE</div>
-      <div style={{ fontSize: '13px', color: '#858585' }}>AI-Driven Code Editor</div>
-
-      <button
-        onClick={handleOpenFolder}
-        disabled={loading}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+      {/* Header */}
+      <div
         style={{
-          marginTop: '20px',
-          padding: '9px 22px',
-          fontSize: '13px',
-          backgroundColor: loading ? '#555' : '#0e639c',
-          color: '#fff',
-          border: 'none',
-          borderRadius: '3px',
-          cursor: loading ? 'wait' : 'pointer',
-          outline: 'none'
+          padding: '16px 20px 12px',
+          borderBottom: '1px solid #333',
+          flexShrink: 0
         }}
       >
-        {loading ? 'Opening…' : 'Open Folder…'}
-      </button>
+        <div style={{ fontSize: '18px', fontWeight: 700, letterSpacing: '-0.3px' }}>AIDE</div>
+        <div style={{ fontSize: '11px', color: '#858585', marginTop: '2px' }}>
+          AI-Driven Code Editor
+        </div>
+      </div>
 
-      {error && (
-        <div
+      {/* Section label */}
+      <div
+        style={{
+          padding: '10px 20px 4px',
+          fontSize: '11px',
+          color: '#858585',
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          flexShrink: 0
+        }}
+      >
+        Recent Projects
+      </div>
+
+      {/* Recent projects list */}
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+        {recents.length === 0 ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              height: '100%',
+              color: '#555',
+              fontSize: '13px'
+            }}
+          >
+            No recent projects
+          </div>
+        ) : (
+          recents.map(project => {
+            const err = staleErrors[project.path]
+            return (
+              <div key={project.path}>
+                <div
+                  onClick={() => handleRecentClick(project)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '7px 20px',
+                    cursor: 'pointer',
+                    gap: '12px'
+                  }}
+                  onMouseEnter={e => {
+                    ;(e.currentTarget as HTMLDivElement).style.backgroundColor = '#2a2d2e'
+                  }}
+                  onMouseLeave={e => {
+                    ;(e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'
+                  }}
+                >
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div
+                      style={{
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        color: '#cccccc',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      {folderName(project.path)}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        color: '#6e6e6e',
+                        marginTop: '1px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      {project.path}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '11px',
+                      color: '#6e6e6e',
+                      flexShrink: 0,
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    {formatDate(project.lastOpened)}
+                  </div>
+                </div>
+
+                {err && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      padding: '4px 20px 6px',
+                      backgroundColor: '#1a1a1a'
+                    }}
+                  >
+                    <span style={{ fontSize: '11px', color: '#f14c4c', flex: 1 }}>{err}</span>
+                    <button
+                      onClick={e => {
+                        e.stopPropagation()
+                        handleRemove(project.path)
+                      }}
+                      style={{
+                        fontSize: '11px',
+                        color: '#858585',
+                        background: 'none',
+                        border: '1px solid #444',
+                        borderRadius: '3px',
+                        padding: '2px 8px',
+                        cursor: 'pointer',
+                        flexShrink: 0
+                      }}
+                    >
+                      Remove from list
+                    </button>
+                  </div>
+                )}
+              </div>
+            )
+          })
+        )}
+      </div>
+
+      {/* Bottom bar */}
+      <div
+        style={{
+          padding: '10px 16px',
+          borderTop: '1px solid #333',
+          flexShrink: 0
+        }}
+      >
+        <button
+          onClick={handleOpenFolder}
+          disabled={loading}
           style={{
-            fontSize: '12px',
-            color: '#f14c4c',
-            maxWidth: '380px',
-            textAlign: 'center',
-            lineHeight: 1.5,
-            padding: '0 16px'
+            width: '100%',
+            padding: '8px 0',
+            fontSize: '13px',
+            backgroundColor: loading ? '#555' : '#0e639c',
+            color: '#fff',
+            border: 'none',
+            borderRadius: '3px',
+            cursor: loading ? 'wait' : 'pointer',
+            outline: 'none'
           }}
         >
-          {error}
-        </div>
-      )}
+          {loading ? 'Opening…' : 'Open Folder…'}
+        </button>
+
+        {globalError && (
+          <div
+            style={{
+              marginTop: '6px',
+              fontSize: '11px',
+              color: '#f14c4c',
+              lineHeight: 1.4
+            }}
+          >
+            {globalError}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

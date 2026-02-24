@@ -247,16 +247,12 @@ This happens automatically and silently. No user confirmation needed.
 
 ### 4.3 Application-level config
 
-Stored in Electron's `userData` (outside the project directory):
+Stored in Electron's `userData` (outside the project directory). Split into two files to isolate static settings from frequently-written dynamic state — a crash during state write cannot corrupt hand-edited configuration.
+
+**`aide-config.json`** — static settings, rarely written, safe to hand-edit:
 
 ```json
 {
-  "recentProjects": [
-    {
-      "path": "E:\\Projects\\MyApp",
-      "lastOpened": "2026-02-24T10:00:00Z"
-    }
-  ],
   "editor": {
     "maxFileSizeMb": 5,
     "fontFamily": "Cascadia Code, Consolas, monospace",
@@ -271,8 +267,22 @@ Stored in Electron's `userData` (outside the project directory):
     "logPanelExpandedHeightPx": 200
   },
   "sessions": {
-    "maxSessionsInPicker": 20
+    "maxSessionsInPicker": 20,
+    "maxRecentProjects": 20
   }
+}
+```
+
+**`aide-state.json`** — dynamic runtime state, written on every project open:
+
+```json
+{
+  "recentProjects": [
+    {
+      "path": "E:\\Projects\\MyApp",
+      "lastOpened": "2026-02-24T10:00:00Z"
+    }
+  ]
 }
 ```
 
@@ -877,7 +887,8 @@ See section 10.2 — session auto-start logic handles the `claude --resume` vs `
 | .gitignore | AIDE auto-adds `.aide` to project `.gitignore` on first open (creates file if missing). |
 | Session picker | Separate native OS window. Closed via standard system [×] button. |
 | Project picker | Separate Electron window. Opening a project closes picker, opens editor. Going to picker closes editor. |
-| Editor config | All Monaco settings (font, size, minimap, etc.) in app userData config. Restart to apply. |
+| App config split | Static settings in `aide-config.json`; dynamic state (recent projects) in `aide-state.json`. Separate files so a write crash cannot corrupt hand-edited config. |
+| Editor config | All Monaco settings (font, size, minimap, etc.) in `aide-config.json`. Restart to apply. |
 | Toolbar running | Animated spinner on button while process is alive. |
 | App close | If toolbar processes running: confirmation dialog before closing. Confirmed → kill all, close. |
 | Hotkeys | Not in v1. Architecture supports them via command registry. |

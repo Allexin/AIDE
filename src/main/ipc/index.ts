@@ -1,10 +1,8 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { existsSync } from 'fs'
-import { ensureAideDirectory } from '../config/projectConfig'
-import { checkAndAcquireLock, releaseLock } from '../lock'
-import { ensureGitignoreEntry } from '../gitignore'
-import { addRecentProject, getAppConfig } from '../config/appConfig'
-import { createEditorWindow } from '../windows/editor'
+import { removeRecentProject, getAppState } from '../config/appState'
+import { getAppConfig } from '../config/appConfig'
+import { openProjectAndTrack } from '../windows/editor'
 
 export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void {
   // ── Picker: open native folder dialog ──────────────────────────────────────
@@ -15,42 +13,25 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
 
   // ── Picker: open a project path ─────────────────────────────────────────────
   ipcMain.handle('project:open', async (event, projectPath: string) => {
-    if (!existsSync(projectPath)) {
-      return { success: false, error: `Path does not exist: ${projectPath}` }
+    const result = openProjectAndTrack(projectPath, openProjects)
+
+    if (result.success) {
+      // Close the picker that triggered this
+      const senderWin = BrowserWindow.fromWebContents(event.sender)
+      senderWin?.close()
     }
 
-    // Already open in this instance — just focus the window
-    if (openProjects.has(projectPath)) {
-      openProjects.get(projectPath)!.focus()
-      return { success: false, error: 'Project is already open in this AIDE instance.' }
-    }
+    return result
+  })
 
-    ensureAideDirectory(projectPath)
+  // ── Picker: validate path exists (no side effects) ──────────────────────────
+  ipcMain.handle('path:validate', (_event, projectPath: string): boolean => {
+    return existsSync(projectPath)
+  })
 
-    const lockResult = checkAndAcquireLock(projectPath)
-    if (!lockResult.acquired) {
-      return {
-        success: false,
-        error: `This project is already open in another AIDE instance (PID ${lockResult.pid}).`
-      }
-    }
-
-    ensureGitignoreEntry(projectPath, '.aide')
-    addRecentProject(projectPath)
-
-    const editorWin = createEditorWindow(projectPath)
-    openProjects.set(projectPath, editorWin)
-
-    editorWin.on('closed', () => {
-      releaseLock(projectPath)
-      openProjects.delete(projectPath)
-    })
-
-    // Close the picker that triggered this
-    const senderWin = BrowserWindow.fromWebContents(event.sender)
-    senderWin?.close()
-
-    return { success: true }
+  // ── Picker: remove a stale project from recent list ─────────────────────────
+  ipcMain.handle('state:remove-recent', (_event, projectPath: string): void => {
+    removeRecentProject(projectPath)
   })
 
   // ── Editor: get project path for this window ────────────────────────────────
@@ -66,4 +47,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
 
   // ── App config: get ─────────────────────────────────────────────────────────
   ipcMain.handle('config:get', () => getAppConfig())
+
+  // ── App state: get ──────────────────────────────────────────────────────────
+  ipcMain.handle('state:get', () => getAppState())
 }

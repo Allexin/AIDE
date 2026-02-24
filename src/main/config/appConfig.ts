@@ -3,6 +3,7 @@ import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 
 export interface EditorConfig {
+  maxFileSizeMb: number
   fontFamily: string
   fontSize: number
   minimap: boolean
@@ -11,27 +12,40 @@ export interface EditorConfig {
   tabSize: number
 }
 
-export interface AppConfig {
-  recentProjects: string[]
-  maxRecentProjects: number
+export interface UiConfig {
+  fileTreeWidthPx: number
+  logPanelExpandedHeightPx: number
+}
+
+export interface SessionsConfig {
   maxSessionsInPicker: number
+  maxRecentProjects: number
+}
+
+export interface AppConfig {
   editor: EditorConfig
-  maxFileSizeMb: number
+  ui: UiConfig
+  sessions: SessionsConfig
 }
 
 const DEFAULTS: AppConfig = {
-  recentProjects: [],
-  maxRecentProjects: 10,
-  maxSessionsInPicker: 20,
   editor: {
-    fontFamily: 'Consolas, monospace',
+    maxFileSizeMb: 5,
+    fontFamily: 'Cascadia Code, Consolas, monospace',
     fontSize: 14,
     minimap: false,
     wordWrap: 'off',
     lineNumbers: 'on',
     tabSize: 2
   },
-  maxFileSizeMb: 5
+  ui: {
+    fileTreeWidthPx: 220,
+    logPanelExpandedHeightPx: 200
+  },
+  sessions: {
+    maxSessionsInPicker: 20,
+    maxRecentProjects: 20
+  }
 }
 
 let config: AppConfig = structuredClone(DEFAULTS)
@@ -47,7 +61,9 @@ export function initAppConfig(): void {
       config = {
         ...DEFAULTS,
         ...parsed,
-        editor: { ...DEFAULTS.editor, ...(parsed.editor ?? {}) }
+        editor: { ...DEFAULTS.editor, ...(parsed.editor ?? {}) },
+        ui: { ...DEFAULTS.ui, ...(parsed.ui ?? {}) },
+        sessions: { ...DEFAULTS.sessions, ...(parsed.sessions ?? {}) }
       }
     } catch {
       config = structuredClone(DEFAULTS)
@@ -64,11 +80,3 @@ export function updateAppConfig(partial: Partial<AppConfig>): void {
   writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
 }
 
-export function addRecentProject(projectPath: string): void {
-  const recentProjects = [
-    projectPath,
-    ...config.recentProjects.filter(p => p !== projectPath)
-  ].slice(0, config.maxRecentProjects)
-
-  updateAppConfig({ recentProjects })
-}
