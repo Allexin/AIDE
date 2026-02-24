@@ -1,0 +1,3 @@
+# AIDE
+
+AI based IDE
