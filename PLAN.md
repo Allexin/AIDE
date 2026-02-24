@@ -378,9 +378,9 @@ Each stage is a self-contained logical block. Completion means: Claude tests pas
 ## Process per stage
 
 1. Implement the stage
-2. Claude runs automated checks (build, type check, file system assertions)
+2. Claude runs automated checks (build, type check, file system assertions) — **fix all failures before proceeding**
 3. User runs manual test steps listed above
-4. User confirms: **pass** or reports issues → fix and retest
-5. Claude writes a brief completion note to `STAGES.md`
-6. Commit everything
+4. **Wait for user to confirm pass.** If issues found → fix and retest from step 2
+5. Only after user confirms pass: Claude writes a brief completion note to `STAGES.md`
+6. Only after user confirms pass: Commit everything
 7. Reset context (start a new conversation referencing PLAN.md + STAGES.md)
