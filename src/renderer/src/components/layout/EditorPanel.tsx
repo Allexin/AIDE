@@ -1,5 +1,6 @@
 import React from 'react'
 import { usePanelStore } from '../../store/usePanelStore'
+import { useEditorStore } from '../../store/useEditorStore'
 
 const headerBtnStyle: React.CSSProperties = {
   background: 'none',
@@ -18,9 +19,10 @@ interface EditorPanelProps {
 }
 
 // Editor panel — single-file Monaco instance.
-// Populated in Stage 6; this is the Stage 3 layout placeholder.
+// Monaco is wired in Stage 6; this stage shows the open file path.
 export default function EditorPanel({ style }: EditorPanelProps): React.ReactElement {
-  const { setEditorVisible, focusEditor } = usePanelStore()
+  const { focusEditor } = usePanelStore()
+  const { openRelativePath, closeEditor } = useEditorStore()
 
   return (
     <div
@@ -51,13 +53,13 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
           style={{
             flex: 1,
             fontSize: 13,
-            color: '#858585',
+            color: openRelativePath ? '#cccccc' : '#858585',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap'
           }}
         >
-          — no file open —
+          {openRelativePath ?? '— no file open —'}
         </span>
 
         <button
@@ -76,14 +78,14 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
           style={{ ...headerBtnStyle, fontSize: 15, border: 'none' }}
           onClick={(e) => {
             e.stopPropagation()
-            setEditorVisible(false)
+            closeEditor()
           }}
         >
           ×
         </button>
       </div>
 
-      {/* Monaco Editor placeholder */}
+      {/* Monaco Editor placeholder — replaced in Stage 6 */}
       <div
         style={{
           flex: 1,
@@ -96,7 +98,7 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
           fontStyle: 'italic'
         }}
       >
-        Monaco Editor
+        {openRelativePath ? `Opened: ${openRelativePath}` : 'Monaco Editor'}
       </div>
     </div>
   )

@@ -1,5 +1,7 @@
 import React from 'react'
 import { usePanelStore } from '../../store/usePanelStore'
+import { useFileTreeStore } from '../../store/useFileTreeStore'
+import FileTree from '../filetree/FileTree'
 
 const toolbarBtnStyle: React.CSSProperties = {
   background: 'none',
@@ -13,9 +15,8 @@ const toolbarBtnStyle: React.CSSProperties = {
   flexShrink: 0
 }
 
-// Small toolbar strip inside the file tree column.
 function FileTreeToolbar(): React.ReactElement {
-  const { editorVisible, setEditorVisible } = usePanelStore()
+  const { modifiedOnly, toggleModifiedOnly, refresh } = useFileTreeStore()
 
   return (
     <div
@@ -30,39 +31,34 @@ function FileTreeToolbar(): React.ReactElement {
         borderBottom: '1px solid #3d3d3d'
       }}
     >
-      {/* Modified only toggle */}
-      <button title="Show modified files only" onClick={() => {/* Stage 4 */}} style={toolbarBtnStyle}>
+      {/* Modified only toggle — active state shown in blue */}
+      <button
+        title={modifiedOnly ? 'Show all files' : 'Show modified files only'}
+        onClick={toggleModifiedOnly}
+        style={{ ...toolbarBtnStyle, color: modifiedOnly ? '#007acc' : '#cccccc' }}
+      >
         ▣
       </button>
 
       {/* Refresh */}
-      <button title="Refresh" onClick={() => {/* Stage 4 */}} style={toolbarBtnStyle}>
+      <button title="Refresh" onClick={() => refresh()} style={toolbarBtnStyle}>
         ↺
       </button>
 
-      {/* Commit */}
-      <button title="Commit" onClick={() => {/* Stage 10 */}} style={toolbarBtnStyle}>
-        ◎
-      </button>
-
-      {/* TEMP Stage 3: toggle editor visibility for testing */}
+      {/* Commit — Stage 10 */}
       <button
-        title={editorVisible ? 'Close editor (temp)' : 'Open editor (temp)'}
-        onClick={() => setEditorVisible(!editorVisible)}
-        style={{
-          ...toolbarBtnStyle,
-          marginLeft: 'auto',
-          color: editorVisible ? '#007acc' : '#555',
-          fontSize: 12
+        title="Commit"
+        onClick={() => {
+          /* Stage 10 */
         }}
+        style={toolbarBtnStyle}
       >
-        E
+        ◎
       </button>
     </div>
   )
 }
 
-// File tree column — fixed width left column, not collapsible.
 export default function FileTreeColumn(): React.ReactElement {
   const { fileTreeWidthPx } = usePanelStore()
 
@@ -79,21 +75,7 @@ export default function FileTreeColumn(): React.ReactElement {
       }}
     >
       <FileTreeToolbar />
-
-      {/* File tree content — populated in Stage 4 */}
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#444',
-          fontSize: 12,
-          fontStyle: 'italic'
-        }}
-      >
-        File Tree
-      </div>
+      <FileTree />
     </div>
   )
 }

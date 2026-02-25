@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { usePanelStore } from '../store/usePanelStore'
+import { useFileTreeStore } from '../store/useFileTreeStore'
 import MainToolbar from '../components/layout/MainToolbar'
 import FileTreeColumn from '../components/layout/FileTreeColumn'
 import EditorPanel from '../components/layout/EditorPanel'
@@ -19,12 +20,13 @@ export default function EditorApp(): React.ReactElement {
     initFromConfig
   } = usePanelStore()
 
-  // Load config from main process and initialize the panel store
+  // Load config from main process, initialize panel store and file tree store
   useEffect(() => {
     async function init(): Promise<void> {
-      const [projectSettings, appConfig] = await Promise.all([
+      const [projectSettings, appConfig, projectPath] = await Promise.all([
         window.editorApi.getProjectSettings(),
-        window.editorApi.getConfig()
+        window.editorApi.getConfig(),
+        window.editorApi.getProjectPath()
       ])
       initFromConfig({
         activePanelRatio: projectSettings.activePanelRatio,
@@ -32,6 +34,9 @@ export default function EditorApp(): React.ReactElement {
         fileTreeWidthPx: appConfig.ui.fileTreeWidthPx,
         logPanelExpandedHeightPx: appConfig.ui.logPanelExpandedHeightPx
       })
+      if (projectPath) {
+        await useFileTreeStore.getState().init(projectPath)
+      }
       setInitialized(true)
     }
     init()

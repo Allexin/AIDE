@@ -1,9 +1,11 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
-import { existsSync } from 'fs'
+import { existsSync, readdirSync } from 'fs'
+import { join } from 'path'
 import { removeRecentProject, getAppState } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { readProjectSettings } from '../config/projectConfig'
 import { openProjectAndTrack } from '../windows/editor'
+import { runGitStatus } from '../filetree/gitStatus'
 
 export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void {
   // ── Picker: open native folder dialog ──────────────────────────────────────
@@ -64,5 +66,57 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
       }
     }
     return { activePanelRatio: 0.75, collapsedWidthPx: 20 }
+  })
+
+  // ── File tree: read a single directory level ─────────────────────────────────
+  // Returns sorted TreeNode[]: directories first, then files, alphabetical within each group.
+  // Dot-prefixed entries are excluded. relativePath uses forward slashes for git comparison.
+  ipcMain.handle('filetree:read-dir', (event, dirPath: string) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    let projectPath = ''
+    for (const [p, win] of openProjects) {
+      if (win === senderWin) {
+        projectPath = p
+        break
+      }
+    }
+
+    try {
+      const entries = readdirSync(dirPath, { withFileTypes: true })
+      const filtered = entries.filter((e) => !e.name.startsWith('.'))
+
+      const dirs = filtered
+        .filter((e) => e.isDirectory())
+        .sort((a, b) => a.name.localeCompare(b.name))
+      const files = filtered
+        .filter((e) => !e.isDirectory())
+        .sort((a, b) => a.name.localeCompare(b.name))
+
+      return [...dirs, ...files].map((entry) => {
+        const fullPath = join(dirPath, entry.name)
+        const relativePath = projectPath
+          ? fullPath.slice(projectPath.length + 1).replace(/\\/g, '/')
+          : entry.name
+        return {
+          name: entry.name,
+          path: fullPath,
+          relativePath,
+          type: entry.isDirectory() ? 'directory' : 'file'
+        }
+      })
+    } catch {
+      return []
+    }
+  })
+
+  // ── File tree: git status for the current window's project ──────────────────
+  ipcMain.handle('filetree:git-status', async (event) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    for (const [projectPath, win] of openProjects) {
+      if (win === senderWin) {
+        return runGitStatus(projectPath)
+      }
+    }
+    return { available: false, changed: [], deleted: [] }
   })
 }

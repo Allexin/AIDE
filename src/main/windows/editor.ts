@@ -7,6 +7,7 @@ import { ensureAideDirectory } from '../config/projectConfig'
 import { ensureGitignoreEntry } from '../gitignore'
 import { addRecentProject } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
+import { startProjectWatcher, stopProjectWatcher } from '../filetree/watcher'
 
 export function createEditorWindow(projectPath: string): BrowserWindow {
   const folderName = basename(projectPath)
@@ -72,7 +73,13 @@ export function openProjectAndTrack(
   const editorWin = createEditorWindow(projectPath)
   openProjects.set(projectPath, editorWin)
 
+  // Start filesystem watcher after the window is ready to receive IPC events
+  editorWin.webContents.once('did-finish-load', () => {
+    startProjectWatcher(projectPath, editorWin)
+  })
+
   editorWin.on('closed', () => {
+    stopProjectWatcher(projectPath)
     releaseLock(projectPath)
     openProjects.delete(projectPath)
   })

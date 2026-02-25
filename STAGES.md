@@ -101,3 +101,40 @@
 9. Resize window → panels scale proportionally
 
 ---
+
+## Stage 4 — File Tree
+
+**Status:** Complete ✓
+
+### What was built
+- `src/main/filetree/gitStatus.ts`: async `runGitStatus(projectPath)` — runs `git status --porcelain`, parses changed/deleted paths (always forward slashes), returns `GitStatusResult { available, changed[], deleted[] }`
+- `src/main/filetree/watcher.ts`: `startProjectWatcher(projectPath, win)` / `stopProjectWatcher(projectPath)` — `fs.watch` with `recursive: true`; dot-prefixed paths filtered; git refresh debounced 300ms via `GitRefreshQueue` class (serial execution, one pending slot — queue absorbs rapid changes without stacking git calls)
+- `src/main/ipc/index.ts`: added `filetree:read-dir(dirPath)` (returns sorted `TreeNode[]`, dirs before files, dot-prefixed excluded, `relativePath` in forward slashes) and `filetree:git-status` (returns `GitStatusResult` for the sender window's project)
+- `src/main/windows/editor.ts`: `startProjectWatcher` called on `did-finish-load`; `stopProjectWatcher` called on `closed`
+- `src/preload/editor.ts`: added `readDir`, `getGitStatus`, `onGitStatusUpdated`, `onFsChanged` bridges
+- `src/renderer/src/env.d.ts`: added `TreeNode` and `GitStatusResult` interfaces; extended `EditorAPI`
+- `src/renderer/src/store/useEditorStore.ts`: new Zustand store — `openFile`, `openRelativePath`, `openFileInEditor(abs, rel)`, `closeEditor()`; calls `usePanelStore.setEditorVisible` on open/close
+- `src/renderer/src/store/useFileTreeStore.ts`: new Zustand store — `dirContents: Map<string, TreeNode[]>` (lazy per-directory cache), `expandedDirs: Set<string>`, `gitStatus`, `modifiedOnly`, `contextMenu`; actions: `init`, `expandDir` (lazy load + expand), `collapseDir`, `selectFile`, `toggleModifiedOnly`, `refresh` (re-reads all loaded dirs + git status), `updateGitStatus`, `handleFsChange` (re-reads parent dir on fs event; closes editor if open file deleted)
+- `src/renderer/src/components/filetree/FileTree.tsx`: `FileTree` component — normal mode renders from `dirContents` with lazy expand/collapse; "Modified only" mode builds virtual tree from `gitStatus.changed` paths; `●` indicator on changed files; right-click context menu with "View Diff" (Stage 6 no-op); `ContextMenu` component with fixed overlay
+- `src/renderer/src/components/layout/FileTreeColumn.tsx`: wired toolbar buttons (▣ = modifiedOnly toggle, ↺ = refresh, ◎ = commit placeholder); removed Stage 3 temp [E] button; renders `<FileTree />`
+- `src/renderer/src/components/layout/EditorPanel.tsx`: header now shows `openRelativePath`; × calls `closeEditor()`
+- `src/renderer/src/windows/EditorApp.tsx`: `init()` now also calls `getProjectPath()` and `useFileTreeStore.getState().init(projectPath)`
+
+### Claude's checks
+- `tsc --noEmit -p tsconfig.node.json` — **0 errors**
+- `tsc --noEmit -p tsconfig.web.json` — **0 errors**
+- `npm run build` — **succeeded** (main 14.78 kB, preloads 1.00 kB, renderer 252 kB)
+
+### User test checklist
+1. Open a real project — file tree shows structure, no dot files/folders visible
+2. Expand/collapse directories by clicking
+3. Click a file — editor panel appears showing file path; previously open file is replaced
+4. Make an external change to a file — `●` indicator appears automatically (no manual refresh needed)
+5. Create a new file externally — appears in tree within ~300ms
+6. Delete a file externally — disappears from tree; if it was open in editor, editor closes
+7. Click **▣** to toggle "Modified only" — only changed files visible with directory hierarchy; click again to restore
+8. Click **↺** Refresh — tree and git status manually updated
+9. Right-click a file → "View Diff" menu item appears (no-op for now)
+10. Confirm deleted files do not appear in the tree (only in commit dialog later)
+
+---
