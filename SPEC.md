@@ -702,10 +702,9 @@ Any channel can be closed by the user (section 11.5) and will be re-created auto
 ### 11.3 Attention system
 
 `attention: true` on a channel triggers when new content arrives:
-1. Log panel expands if collapsed
-2. That channel's tab becomes active
-3. Tab label blinks until the user clicks it
-4. **Keyboard focus is not stolen** — editor or terminal keeps focus
+1. Tab label blinks until the user clicks it
+2. **Panel does NOT auto-expand** — user opens it manually if interested
+3. **Keyboard focus is not stolen** — editor or terminal keeps focus
 
 `attention: false`: content appended silently.
 
@@ -717,7 +716,7 @@ Any channel can be closed by the user (section 11.5) and will be re-created auto
 - Expanded height is configured via `ui.logPanelExpandedHeightPx` in app config (default 200px)
 - Click tab label or `[∧]` → panel expands to show content
 - Click `[∨]` → collapses back to strip
-- `attention` expands the panel if it was collapsed
+- `attention` does NOT expand the panel — tab blinks only
 - Output is plain monospace text (no ANSI parsing — this is not a terminal)
 
 ### 11.5 Tab context menu

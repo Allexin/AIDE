@@ -174,6 +174,41 @@
 
 ---
 
+## Stage 7 — Log Panel
+
+**Status:** Complete ✓
+
+### What was built
+- `src/renderer/src/utils/stripAnsi.ts`: strips ANSI escape codes and carriage returns before display
+- `src/renderer/src/store/useLogStore.ts`: Zustand store — `LogChannel { id, lines, attention, blinking }`, `channels[]`, `activeChannelId`; actions: `append` (auto-creates channel on first call, enforces 10 000-line cap with `[Older output truncated]` notice), `clear`, `close`, `setActive`, `stopBlink`; exported `logManager` singleton (`append`, `clear`) for non-component callers
+- `react-window@1.8.11` + `@types/react-window` installed for virtualized rendering
+- `src/renderer/src/store/useFileTreeStore.ts`: `refresh()` now appends to the `Git` log channel (`> git status` + summary line) — channel is auto-created on first explicit refresh
+- `src/renderer/src/components/layout/LogPanel.tsx`: full implementation —
+  - Tab strip (always visible even when collapsed) with per-tab `TabButton` that blinks amber at 500ms interval when `channel.blinking`, stops on click; clicking any tab while collapsed also expands the panel
+  - `[∧/∨]` toggle button
+  - Content area: `VirtualLogList` using `FixedSizeList` (react-window, 20px rows, `ResizeObserver` for container height, auto-scroll to bottom on new lines, `itemData` pattern for performance)
+  - Empty state: blank area when no channels; "No output" when channel exists but is empty
+  - Tab context menu (right-click): Clear (empties content, tab stays) / Close (removes tab; re-created on next append)
+  - Attention system: blink only — panel does NOT auto-expand
+
+### Claude's checks
+- `tsc --noEmit -p tsconfig.node.json` — **0 errors**
+- `tsc --noEmit -p tsconfig.web.json` — **0 errors**
+- `npm run build` — **succeeded** (renderer 8,078 kB)
+
+### User test checklist
+1. Open a project — log panel shows as thin collapsed strip, no tabs yet
+2. Click **↺** Refresh in file tree — `Git` tab appears in the strip; panel stays collapsed
+3. Click the `Git` tab — panel expands, shows `> git status` and summary line
+4. Click **↺** Refresh again — new lines appended, auto-scrolls to bottom
+5. Right-click `Git` tab → **Clear** — content cleared, tab stays
+6. Right-click `Git` tab → **Close** — tab disappears
+7. Click **↺** Refresh again — `Git` tab re-appears (auto-created)
+8. Click **[∧]** button — panel expands; click **[∨]** — collapses back
+9. Append 10 000+ lines (dev: many refreshes) — no UI lag; truncation notice appears
+
+---
+
 ## Stage 5 — Terminal + Sessions
 
 **Status:** Complete ✓

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { useEditorStore } from './useEditorStore'
+import { logManager } from './useLogStore'
 
 interface FileTreeState {
   projectPath: string | null
@@ -99,6 +100,18 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
     )
 
     const gitStatus = await window.editorApi.getGitStatus()
+
+    // Log explicit refresh to the Git channel (channel auto-created on first append)
+    logManager.append('Git', '> git status')
+    if (!gitStatus.available) {
+      logManager.append('Git', 'git not available in this directory')
+    } else {
+      logManager.append(
+        'Git',
+        `${gitStatus.changed.length} changed, ${gitStatus.deleted.length} deleted`
+      )
+    }
+
     set({ dirContents: newContents, gitStatus })
   },
 

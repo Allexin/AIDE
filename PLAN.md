@@ -223,7 +223,7 @@ Each stage is a self-contained logical block. Completion means: Claude tests pas
 - Buffer cap: 10 000 lines per channel; oldest dropped when exceeded; prepend *"[Older output truncated]"*
 - ANSI codes: stripped before display
 - Text selection enabled; `Ctrl+C` copies selected text
-- Attention system: `attention: true` channel → expand panel if collapsed, switch to that tab, blink tab label until clicked; keyboard focus not stolen
+- Attention system: `attention: true` channel → blink tab label until clicked; panel does NOT auto-expand; keyboard focus not stolen
 - Tab context menu (right-click): Clear (empties content, tab stays), Close (removes tab; re-created on next append)
 - Empty panel (no tabs): blank area shown
 - `Git` channel: created by git operations, `attention: false`
@@ -231,11 +231,11 @@ Each stage is a self-contained logical block. Completion means: Claude tests pas
 ### How Claude tests
 - `tsc --noEmit`, `npm run build`
 - Programmatically append 15 000 lines to a channel — verify DOM row count stays bounded (inspect via DevTools)
-- Trigger attention on a channel — verify panel expands
+- Trigger attention on a channel — verify tab blinks, panel stays collapsed
 
 ### How the user tests
 1. Run a git operation (Refresh in file tree) — Git channel appears, panel stays collapsed
-2. Manually trigger an attention channel (temp dev action) — panel expands, tab blinks
+2. Manually trigger an attention channel (temp dev action) — tab blinks, panel stays collapsed
 3. Click blinking tab — blink stops
 4. Right-click tab → Clear → content gone, tab stays
 5. Right-click tab → Close → tab disappears
