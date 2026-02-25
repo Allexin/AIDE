@@ -139,6 +139,41 @@
 
 ---
 
+## Stage 6 — Code Editor + Diff View
+
+**Status:** Complete ✓
+
+### What was built
+- `src/renderer/src/monacoSetup.ts`: configures Monaco's web workers locally (editorWorker, tsWorker, jsonWorker, cssWorker, htmlWorker via Vite `?worker` syntax) and tells `@monaco-editor/react` to use the bundled Monaco instead of CDN
+- `src/main/ipc/index.ts`: added `editor:read-file` (content + mtime + size), `editor:write-file` (returns new mtime), `editor:git-show-head` (runs `git show HEAD:<relPath>`, returns `{ content }` or `{ error: 'untracked' | 'other' }`)
+- `src/preload/editor.ts`: added `readFile`, `writeFile`, `gitShowHead` bridges; updated `getConfig` return type to include `editor: EditorConfig`
+- `src/renderer/src/env.d.ts`: added `EditorConfig` interface; updated `EditorAPI.getConfig` + added `readFile`, `writeFile`, `gitShowHead`
+- `src/renderer/src/store/useEditorStore.ts`: added `editorConfig` (Monaco options from app config), `openDiffOnLoad` flag (diff mode after file load), `triggerDiffNow` flag (diff on already-open file), `setEditorConfig`, `setOpenDiffOnLoad`, `setTriggerDiffNow`, `viewDiff` action (handles both "file already open" and "open then diff" cases)
+- `src/renderer/src/store/useFileTreeStore.ts`: updated `contextMenu` to include `relativePath`
+- `src/renderer/src/windows/EditorApp.tsx`: calls `useEditorStore.setEditorConfig(appConfig.editor)` on init
+- `src/renderer/src/components/layout/EditorPanel.tsx`: full implementation — Monaco Editor + DiffEditor (both always mounted, CSS toggled); language auto-detection from file extension; auto-save on blur (only if content changed); external modification → silent reload (no local changes) or conflict dialog (local changes); `applyFileToEditor` handles race between load and mount via `pendingContentRef`; large file dialog (> maxFileSizeMb); conflict dialog (Reload / Keep mine / Backup & Open); diff view via `git show HEAD` with no-diff dialogs for "identical" and "untracked"; `viewDiff` triggers handled via `triggerDiffNow` and `openDiffOnLoad` flags
+- `src/renderer/src/components/filetree/FileTree.tsx`: wired "View Diff" context menu item to `useEditorStore.viewDiff()`; passes `relativePath` in context menu state
+
+### Claude's checks
+- `tsc --noEmit -p tsconfig.node.json` — **0 errors**
+- `tsc --noEmit -p tsconfig.web.json` — **0 errors**
+- `npm run build` — **succeeded** (renderer 8,047 kB including full Monaco bundle)
+
+### User test checklist
+1. Click a file in tree → opens in Monaco with syntax highlighting, correct language
+2. Edit content, click terminal → file saved (verify in OS explorer or another editor)
+3. Modify the file externally while AIDE is open → conflict dialog appears
+4. Choose **Reload** → editor shows new content; **Keep mine** → disk overwritten; **Backup & Open** → backup file created, opens in editor
+5. Click **[Diff]** → diff view opens (HEAD vs disk); read-only; colors correct (green = added, red = removed)
+6. Click **[Edit]** → back to editor with previous content intact
+7. Click **[×]** → editor hidden, terminal expands
+8. Right-click an unchanged file → "View Diff" → "File has not changed since last commit."
+9. Right-click an untracked file → "View Diff" → "File is not tracked by git — there is no diff to show." → `[ Open Editor ]` opens the file in edit mode
+10. Open a file > 5 MB → large file confirmation dialog; No → editor not opened; Yes → opens
+11. Make changes then switch files in tree → previous file auto-saved before new one loads
+
+---
+
 ## Stage 5 — Terminal + Sessions
 
 **Status:** Complete ✓

@@ -74,13 +74,18 @@ function buildModifiedTree(changedPaths: string[], projectPath: string): VNode[]
 function ContextMenu({
   x,
   y,
+  filePath,
+  relativePath,
   onClose
 }: {
   x: number
   y: number
   filePath: string
+  relativePath: string
   onClose: () => void
 }): React.ReactElement {
+  const { viewDiff } = useEditorStore()
+
   return (
     <>
       <div
@@ -109,7 +114,7 @@ function ContextMenu({
         <ContextMenuItem
           label="View Diff"
           onClick={() => {
-            /* Stage 6 */
+            viewDiff(filePath, relativePath)
             onClose()
           }}
         />
@@ -198,7 +203,7 @@ function NodeItem({
   const handleContextMenu = (e: React.MouseEvent): void => {
     if (!isDir) {
       e.preventDefault()
-      setContextMenu({ x: e.clientX, y: e.clientY, filePath: node.path })
+      setContextMenu({ x: e.clientX, y: e.clientY, filePath: node.path, relativePath: node.relativePath })
     }
   }
 
@@ -343,6 +348,7 @@ export default function FileTree(): React.ReactElement {
           x={contextMenu.x}
           y={contextMenu.y}
           filePath={contextMenu.filePath}
+          relativePath={contextMenu.relativePath}
           onClose={() => setContextMenu(null)}
         />
       )}

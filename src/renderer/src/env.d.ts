@@ -47,10 +47,21 @@ interface SessionTabInfo {
   slug: string // 'Claude Code' until slug is read from JSONL
 }
 
+interface EditorConfig {
+  maxFileSizeMb: number
+  fontFamily: string
+  fontSize: number
+  minimap: boolean
+  wordWrap: string
+  lineNumbers: string
+  tabSize: number
+}
+
 interface EditorAPI {
   getProjectPath: () => Promise<string | null>
   getProjectSettings: () => Promise<ProjectSettings>
   getConfig: () => Promise<{
+    editor: EditorConfig
     ui: { fileTreeWidthPx: number; logPanelExpandedHeightPx: number }
   }>
 
@@ -59,6 +70,11 @@ interface EditorAPI {
   getGitStatus: () => Promise<GitStatusResult>
   onGitStatusUpdated: (cb: (status: GitStatusResult) => void) => () => void
   onFsChanged: (cb: (event: { path: string }) => void) => () => void
+
+  // Editor file operations
+  readFile: (filePath: string) => Promise<{ content: string; mtime: number; size: number }>
+  writeFile: (filePath: string, content: string) => Promise<{ mtime: number }>
+  gitShowHead: (relPath: string) => Promise<{ content: string } | { error: 'untracked' | 'other' }>
 
   // Terminal
   terminalCreateInitial: () => Promise<SessionTabInfo | null>

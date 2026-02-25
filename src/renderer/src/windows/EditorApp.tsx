@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { usePanelStore } from '../store/usePanelStore'
+import { useEditorStore } from '../store/useEditorStore'
 import { useFileTreeStore } from '../store/useFileTreeStore'
 import MainToolbar from '../components/layout/MainToolbar'
 import FileTreeColumn from '../components/layout/FileTreeColumn'
@@ -34,6 +35,7 @@ export default function EditorApp(): React.ReactElement {
         fileTreeWidthPx: appConfig.ui.fileTreeWidthPx,
         logPanelExpandedHeightPx: appConfig.ui.logPanelExpandedHeightPx
       })
+      useEditorStore.getState().setEditorConfig(appConfig.editor)
       if (projectPath) {
         await useFileTreeStore.getState().init(projectPath)
       }

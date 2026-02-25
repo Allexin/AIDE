@@ -26,10 +26,21 @@ interface SessionTabInfo {
   slug: string
 }
 
+export interface EditorConfig {
+  maxFileSizeMb: number
+  fontFamily: string
+  fontSize: number
+  minimap: boolean
+  wordWrap: string
+  lineNumbers: string
+  tabSize: number
+}
+
 export interface EditorAPI {
   getProjectPath: () => Promise<string | null>
   getProjectSettings: () => Promise<ProjectSettings>
   getConfig: () => Promise<{
+    editor: EditorConfig
     ui: { fileTreeWidthPx: number; logPanelExpandedHeightPx: number }
   }>
 
@@ -38,6 +49,11 @@ export interface EditorAPI {
   getGitStatus: () => Promise<GitStatusResult>
   onGitStatusUpdated: (cb: (status: GitStatusResult) => void) => () => void
   onFsChanged: (cb: (event: { path: string }) => void) => () => void
+
+  // Editor file operations
+  readFile: (filePath: string) => Promise<{ content: string; mtime: number; size: number }>
+  writeFile: (filePath: string, content: string) => Promise<{ mtime: number }>
+  gitShowHead: (relPath: string) => Promise<{ content: string } | { error: 'untracked' | 'other' }>
 
   // Terminal
   terminalCreateInitial: () => Promise<SessionTabInfo | null>
@@ -61,6 +77,10 @@ const editorApi: EditorAPI = {
 
   readDir: (dirPath: string) => ipcRenderer.invoke('filetree:read-dir', dirPath),
   getGitStatus: () => ipcRenderer.invoke('filetree:git-status'),
+
+  readFile: (filePath) => ipcRenderer.invoke('editor:read-file', filePath),
+  writeFile: (filePath, content) => ipcRenderer.invoke('editor:write-file', filePath, content),
+  gitShowHead: (relPath) => ipcRenderer.invoke('editor:git-show-head', relPath),
 
   onGitStatusUpdated: (cb: (status: GitStatusResult) => void) => {
     const handler = (_: unknown, status: GitStatusResult): void => cb(status)

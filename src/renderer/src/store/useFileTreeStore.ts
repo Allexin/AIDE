@@ -8,7 +8,7 @@ interface FileTreeState {
   expandedDirs: Set<string>
   gitStatus: GitStatusResult | null
   modifiedOnly: boolean
-  contextMenu: { x: number; y: number; filePath: string } | null
+  contextMenu: { x: number; y: number; filePath: string; relativePath: string } | null
   loading: boolean
 
   init: (projectPath: string) => Promise<void>
@@ -19,7 +19,7 @@ interface FileTreeState {
   refresh: () => Promise<void>
   updateGitStatus: (status: GitStatusResult) => void
   handleFsChange: (event: { path: string }) => Promise<void>
-  setContextMenu: (menu: { x: number; y: number; filePath: string } | null) => void
+  setContextMenu: (menu: { x: number; y: number; filePath: string; relativePath: string } | null) => void
 }
 
 export const useFileTreeStore = create<FileTreeState>((set, get) => ({

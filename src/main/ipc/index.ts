@@ -1,6 +1,7 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
-import { existsSync, readdirSync } from 'fs'
+import { existsSync, readdirSync, promises as fsAsync } from 'fs'
 import { join } from 'path'
+import { spawn } from 'child_process'
 import { removeRecentProject, getAppState } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { readProjectSettings } from '../config/projectConfig'
@@ -228,6 +229,61 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     const tabInfo = await ptyMgr.resumeSessionTab(sessionId)
     editorWin.webContents.send('terminal:new-tab', tabInfo)
     pickerWin.close()
+  })
+
+  // ── Editor: read file (content + mtime + size) ────────────────────────────────
+  ipcMain.handle('editor:read-file', async (_event, filePath: string) => {
+    const [stat, content] = await Promise.all([
+      fsAsync.stat(filePath),
+      fsAsync.readFile(filePath, 'utf-8')
+    ])
+    return { content, mtime: stat.mtimeMs, size: stat.size }
+  })
+
+  // ── Editor: write file (returns new mtime) ────────────────────────────────────
+  ipcMain.handle('editor:write-file', async (_event, filePath: string, content: string) => {
+    await fsAsync.writeFile(filePath, content, 'utf-8')
+    const stat = await fsAsync.stat(filePath)
+    return { mtime: stat.mtimeMs }
+  })
+
+  // ── Editor: git show HEAD:<relPath> ───────────────────────────────────────────
+  // Returns { content } on success, or { error: 'untracked' | 'other' } on failure.
+  ipcMain.handle('editor:git-show-head', async (event, relPath: string) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    let projectPath = ''
+    for (const [p, win] of openProjects) {
+      if (win === senderWin) {
+        projectPath = p
+        break
+      }
+    }
+    if (!projectPath) return { error: 'other' as const }
+
+    return new Promise<{ content: string } | { error: 'untracked' | 'other' }>((resolve) => {
+      const proc = spawn('git', ['show', `HEAD:${relPath}`], { cwd: projectPath })
+      const chunks: Buffer[] = []
+      const errChunks: Buffer[] = []
+      proc.stdout.on('data', (d: Buffer) => chunks.push(d))
+      proc.stderr.on('data', (d: Buffer) => errChunks.push(d))
+      proc.on('close', (code) => {
+        if (code !== 0) {
+          const errMsg = Buffer.concat(errChunks).toString()
+          if (
+            errMsg.includes('exists on disk') ||
+            errMsg.includes('did not match any') ||
+            errMsg.includes('does not exist')
+          ) {
+            resolve({ error: 'untracked' })
+          } else {
+            resolve({ error: 'other' })
+          }
+        } else {
+          resolve({ content: Buffer.concat(chunks).toString('utf-8') })
+        }
+      })
+      proc.on('error', () => resolve({ error: 'other' }))
+    })
   })
 
   // ── Session picker: new session ───────────────────────────────────────────────
