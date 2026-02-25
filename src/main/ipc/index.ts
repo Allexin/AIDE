@@ -532,7 +532,10 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
       }
 
       // Step 2: git commit
-      sendLine(`> git commit -m "${message}"`, 'stdout')
+      const msgPreview = message.includes('\n')
+        ? message.split('\n')[0].trimEnd() + ' …'
+        : message
+      sendLine(`> git commit -m "${msgPreview}"`, 'stdout')
       const commitResult = await runGitSubcommand(
         projectPath,
         ['commit', '-m', message],
