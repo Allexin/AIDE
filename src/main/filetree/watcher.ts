@@ -35,6 +35,7 @@ class GitRefreshQueue {
 
 interface WatchEntry {
   watcher: fs.FSWatcher
+  gitIndexWatcher: fs.FSWatcher | null
   queue: GitRefreshQueue
   timer: ReturnType<typeof setTimeout> | null
 }
@@ -47,28 +48,31 @@ export function startProjectWatcher(projectPath: string, win: BrowserWindow): vo
   if (watchers.has(projectPath)) return
 
   const queue = new GitRefreshQueue()
-  const entry: WatchEntry = { watcher: null!, queue, timer: null }
+  const entry: WatchEntry = { watcher: null!, gitIndexWatcher: null, queue, timer: null }
 
   const sendGit = (status: GitStatusResult): void => {
     if (!win.isDestroyed()) win.webContents.send('filetree:git-status-updated', status)
+  }
+
+  const scheduleGitRefresh = (): void => {
+    if (entry.timer) clearTimeout(entry.timer)
+    entry.timer = setTimeout(() => {
+      entry.timer = null
+      queue.request(projectPath, sendGit)
+    }, DEBOUNCE_MS)
   }
 
   const onFsEvent = (_event: string, rawFilename: string | Buffer | null): void => {
     if (!rawFilename) return
     const filename = rawFilename.toString()
 
-    // Skip dot-prefixed path segments
+    // Skip dot-prefixed path segments (e.g. .git, .aide)
     if (filename.split(/[/\\]/).some((p) => p.startsWith('.'))) return
 
     const fullPath = path.join(projectPath, filename)
     if (!win.isDestroyed()) win.webContents.send('filetree:fs-changed', { path: fullPath })
 
-    // Debounce git refresh so rapid file changes result in a single git call
-    if (entry.timer) clearTimeout(entry.timer)
-    entry.timer = setTimeout(() => {
-      entry.timer = null
-      queue.request(projectPath, sendGit)
-    }, DEBOUNCE_MS)
+    scheduleGitRefresh()
   }
 
   try {
@@ -78,6 +82,18 @@ export function startProjectWatcher(projectPath: string, win: BrowserWindow): vo
   } catch {
     // fs.watch may fail due to permissions or path issues — ignore silently
   }
+
+  // Watch .git/index to detect commits, staging, and other git operations.
+  // No filetree:fs-changed sent — only a git status refresh.
+  const gitIndexPath = path.join(projectPath, '.git', 'index')
+  try {
+    entry.gitIndexWatcher = fs.watch(gitIndexPath, () => scheduleGitRefresh())
+    entry.gitIndexWatcher.on('error', () => {
+      entry.gitIndexWatcher = null
+    })
+  } catch {
+    // .git/index may not exist (no git repo) — ignore silently
+  }
 }
 
 export function stopProjectWatcher(projectPath: string): void {
@@ -85,5 +101,6 @@ export function stopProjectWatcher(projectPath: string): void {
   if (!entry) return
   if (entry.timer) clearTimeout(entry.timer)
   entry.watcher.close()
+  entry.gitIndexWatcher?.close()
   watchers.delete(projectPath)
 }

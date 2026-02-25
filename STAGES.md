@@ -138,3 +138,44 @@
 10. Confirm deleted files do not appear in the tree (only in commit dialog later)
 
 ---
+
+## Stage 5 — Terminal + Sessions
+
+**Status:** Complete ✓
+
+### What was built
+- `src/main/pty/sessionScanner.ts`: `encodeProjectPath()` (e.g. `E:\Projects\AIDE` → `E--Projects-AIDE`), `getSessionsDir()`, `readSlugFromJsonl()` (scans JSONL lines for first `slug` field), `scanSessions()` (sorted by mtime descending), `watchSessionsDir()` (detects new `.jsonl` files, polls if dir doesn't exist yet), `watchJsonlFile()` (detects slug appearance in a specific JSONL file)
+- `src/main/pty/registry.ts`: module-level `ptyRegistry: Map<BrowserWindow, PtyManager>` and `pickerEditorMap: Map<BrowserWindow, BrowserWindow>` — avoids circular dependencies
+- `src/main/pty/ptyManager.ts`: `PtyManager` class — `createInitialTab()` (resume newest session or start fresh), `createNewSessionTab()`, `resumeSessionTab(sessionId)`, `write()`, `resize()`, `getTabs()`, `disposeAll()`; spawns PowerShell PTY; pushes `terminal:data`, `terminal:tab-exited`, `terminal:tab-slug-updated`, `terminal:tab-session-id` events to renderer
+- `src/main/windows/editor.ts`: creates `PtyManager` on project open, stores in `ptyRegistry`; calls `disposeAll()` on window close
+- `src/main/windows/sessionPicker.ts`: 500×400 BrowserWindow, no menu bar, `sessionPicker.js` preload, stores association in `pickerEditorMap`
+- `src/main/ipc/index.ts`: added handlers — `terminal:create-initial`, `terminal:create-new`, `terminal:resume-session` (invoke), `terminal:write`, `terminal:resize` (fire-and-forget via `ipcMain.on`), `terminal:open-session-picker`; session picker handlers: `session-picker:get-sessions`, `session-picker:switch-tab`, `session-picker:resume-session`, `session-picker:new-session`
+- `src/preload/editor.ts`: added full terminal API — `terminalCreateInitial`, `terminalCreateNew`, `terminalResumeSession`, `terminalWrite`, `terminalResize`, `terminalOpenSessionPicker`, `onTerminalData`, `onTerminalTabSlugUpdated`, `onTerminalTabSessionId`, `onTerminalTabExited`, `onTerminalSwitchTab`, `onTerminalNewTab`
+- `src/preload/sessionPicker.ts`: new preload — `getSessions`, `switchTab`, `resumeSession`, `newSession`
+- `electron.vite.config.ts`: added `sessionPicker` preload entry
+- `src/renderer/src/env.d.ts`: added `DiskSession`, `SessionTabInfo`, `SessionPickerAPI`; extended `EditorAPI` with terminal methods; added `window.sessionPickerApi`
+- `src/renderer/src/store/useSessionStore.ts`: Zustand store — `tabs: SessionTab[]`, `activeTabId`, `initialized`; actions: `initWithTab`, `addTab`, `setActiveTab`, `updateSlug`, `updateSessionId`, `markExited`
+- `src/renderer/src/components/layout/TerminalPanel.tsx`: full implementation — `TerminalTab` (one xterm.js + FitAddon per tab, VS Dark theme, `onData` → PTY write, PTY data → `terminal.write`), `TabStrip` (horizontal scroll with `‹`/`›` overflow buttons, active tab highlighted), `TerminalContextMenu` (right-click → Copy/Paste via `navigator.clipboard`), `ResizeObserver` on container triggers fit on panel resize; `TerminalPanel` orchestrates init, push-event listeners, fit routing
+- `src/renderer/src/windows/SessionPickerApp.tsx`: session picker UI — sorted session list with `●` indicator for open tabs, relative timestamps, "New session" button; closes picker on any selection
+- `src/renderer/src/App.tsx`: added `session-picker` window type routing
+- `src/main/filetree/watcher.ts`: added `fs.watch` on `.git/index` — triggers git status refresh on commit, `git add`, `git reset`, `git checkout` without sending `filetree:fs-changed` (no workspace files changed)
+
+### Claude's checks
+- `tsc --noEmit -p tsconfig.node.json` — **0 errors**
+- `tsc --noEmit -p tsconfig.web.json` — **0 errors**
+- `npm run build` — **succeeded** (main 28.23 kB, preloads 4.08 kB, renderer 692 kB)
+
+### User test checklist
+1. Open a project — terminal starts automatically; `claude --resume <id>` or `claude` runs in PowerShell PTY
+2. Interact with Claude — full ANSI colors and cursor movement render correctly
+3. Type `exit` in Claude — PowerShell prompt appears; terminal remains interactive
+4. Right-click in terminal — context menu shows Copy (enabled if text selected) and Paste
+5. Click `[ + ]` → Session Picker opens; existing sessions listed with dates; open sessions marked with `●`
+6. Click a past session → new tab opens, `claude --resume` runs
+7. Click "New session" → new tab, new `claude` session
+8. Multiple tabs: all run simultaneously; switching tabs works; tab strip scrolls horizontally if overflow
+9. Resize panel → terminal content reflows correctly
+10. Collapse terminal → 20px strip; restore → terminal intact
+11. Make a `git commit` in terminal → file tree git indicators update automatically (`.git/index` watcher)
+
+---

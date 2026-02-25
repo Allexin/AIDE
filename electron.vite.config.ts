@@ -12,7 +12,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           picker: resolve(__dirname, 'src/preload/picker.ts'),
-          editor: resolve(__dirname, 'src/preload/editor.ts')
+          editor: resolve(__dirname, 'src/preload/editor.ts'),
+          sessionPicker: resolve(__dirname, 'src/preload/sessionPicker.ts')
         }
       }
     }

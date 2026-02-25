@@ -8,6 +8,8 @@ import { ensureGitignoreEntry } from '../gitignore'
 import { addRecentProject } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { startProjectWatcher, stopProjectWatcher } from '../filetree/watcher'
+import { PtyManager } from '../pty/ptyManager'
+import { ptyRegistry } from '../pty/registry'
 
 export function createEditorWindow(projectPath: string): BrowserWindow {
   const folderName = basename(projectPath)
@@ -73,12 +75,18 @@ export function openProjectAndTrack(
   const editorWin = createEditorWindow(projectPath)
   openProjects.set(projectPath, editorWin)
 
+  // Create PTY manager for this window
+  const ptyMgr = new PtyManager(editorWin, projectPath)
+  ptyRegistry.set(editorWin, ptyMgr)
+
   // Start filesystem watcher after the window is ready to receive IPC events
   editorWin.webContents.once('did-finish-load', () => {
     startProjectWatcher(projectPath, editorWin)
   })
 
   editorWin.on('closed', () => {
+    ptyMgr.disposeAll()
+    ptyRegistry.delete(editorWin)
     stopProjectWatcher(projectPath)
     releaseLock(projectPath)
     openProjects.delete(projectPath)

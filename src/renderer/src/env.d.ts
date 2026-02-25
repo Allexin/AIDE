@@ -33,6 +33,20 @@ interface GitStatusResult {
   deleted: string[] // relative forward-slash paths of deleted files
 }
 
+// A Claude Code session as stored on disk.
+interface DiskSession {
+  sessionId: string
+  slug: string | null
+  mtime: number // ms since epoch
+}
+
+// A terminal session tab (open in the editor).
+interface SessionTabInfo {
+  tabId: string
+  sessionId: string | null // null until .jsonl appears (new sessions)
+  slug: string // 'Claude Code' until slug is read from JSONL
+}
+
 interface EditorAPI {
   getProjectPath: () => Promise<string | null>
   getProjectSettings: () => Promise<ProjectSettings>
@@ -45,9 +59,31 @@ interface EditorAPI {
   getGitStatus: () => Promise<GitStatusResult>
   onGitStatusUpdated: (cb: (status: GitStatusResult) => void) => () => void
   onFsChanged: (cb: (event: { path: string }) => void) => () => void
+
+  // Terminal
+  terminalCreateInitial: () => Promise<SessionTabInfo | null>
+  terminalCreateNew: () => Promise<SessionTabInfo | null>
+  terminalResumeSession: (sessionId: string) => Promise<SessionTabInfo | null>
+  terminalWrite: (tabId: string, data: string) => void
+  terminalResize: (tabId: string, cols: number, rows: number) => void
+  terminalOpenSessionPicker: () => void
+  onTerminalData: (cb: (tabId: string, data: string) => void) => () => void
+  onTerminalTabSlugUpdated: (cb: (tabId: string, slug: string) => void) => () => void
+  onTerminalTabSessionId: (cb: (tabId: string, sessionId: string) => void) => () => void
+  onTerminalTabExited: (cb: (tabId: string) => void) => () => void
+  onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void
+  onTerminalNewTab: (cb: (tab: SessionTabInfo) => void) => () => void
+}
+
+interface SessionPickerAPI {
+  getSessions: () => Promise<{ diskSessions: DiskSession[]; openTabs: SessionTabInfo[] }>
+  switchTab: (tabId: string) => void
+  resumeSession: (sessionId: string) => Promise<void>
+  newSession: () => Promise<void>
 }
 
 declare interface Window {
   pickerApi: PickerAPI
   editorApi: EditorAPI
+  sessionPickerApi: SessionPickerAPI
 }

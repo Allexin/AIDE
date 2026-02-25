@@ -6,6 +6,9 @@ import { getAppConfig } from '../config/appConfig'
 import { readProjectSettings } from '../config/projectConfig'
 import { openProjectAndTrack } from '../windows/editor'
 import { runGitStatus } from '../filetree/gitStatus'
+import { ptyRegistry, pickerEditorMap } from '../pty/registry'
+import { scanSessions } from '../pty/sessionScanner'
+import { createSessionPickerWindow } from '../windows/sessionPicker'
 
 export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void {
   // ── Picker: open native folder dialog ──────────────────────────────────────
@@ -118,5 +121,127 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
       }
     }
     return { available: false, changed: [], deleted: [] }
+  })
+
+  // ── Terminal: create initial tab on project open ─────────────────────────────
+  ipcMain.handle('terminal:create-initial', async (event) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return null
+    const ptyMgr = ptyRegistry.get(senderWin)
+    if (!ptyMgr) return null
+    return ptyMgr.createInitialTab()
+  })
+
+  // ── Terminal: create new session tab ─────────────────────────────────────────
+  ipcMain.handle('terminal:create-new', async (event) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return null
+    const ptyMgr = ptyRegistry.get(senderWin)
+    if (!ptyMgr) return null
+    return ptyMgr.createNewSessionTab()
+  })
+
+  // ── Terminal: resume a session by ID ─────────────────────────────────────────
+  ipcMain.handle('terminal:resume-session', async (event, sessionId: string) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return null
+    const ptyMgr = ptyRegistry.get(senderWin)
+    if (!ptyMgr) return null
+    return ptyMgr.resumeSessionTab(sessionId)
+  })
+
+  // ── Terminal: write data to PTY (fire-and-forget) ─────────────────────────────
+  ipcMain.on('terminal:write', (event, tabId: string, data: string) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return
+    ptyRegistry.get(senderWin)?.write(tabId, data)
+  })
+
+  // ── Terminal: resize PTY (fire-and-forget) ────────────────────────────────────
+  ipcMain.on('terminal:resize', (event, tabId: string, cols: number, rows: number) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return
+    ptyRegistry.get(senderWin)?.resize(tabId, cols, rows)
+  })
+
+  // ── Terminal: get current tabs ────────────────────────────────────────────────
+  ipcMain.handle('terminal:get-tabs', (event) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return []
+    return ptyRegistry.get(senderWin)?.getTabs() ?? []
+  })
+
+  // ── Terminal: open session picker window ──────────────────────────────────────
+  ipcMain.on('terminal:open-session-picker', (event) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return
+    createSessionPickerWindow(senderWin)
+  })
+
+  // ── Session picker: get sessions (disk sessions + open tabs) ──────────────────
+  ipcMain.handle('session-picker:get-sessions', async (event) => {
+    const pickerWin = BrowserWindow.fromWebContents(event.sender)
+    if (!pickerWin) return { diskSessions: [], openTabs: [] }
+
+    const editorWin = pickerEditorMap.get(pickerWin)
+    if (!editorWin) return { diskSessions: [], openTabs: [] }
+
+    const ptyMgr = ptyRegistry.get(editorWin)
+    const openTabs = ptyMgr?.getTabs() ?? []
+
+    // Find project path for this editor window
+    let projectPath: string | undefined
+    for (const [p, w] of openProjects) {
+      if (w === editorWin) {
+        projectPath = p
+        break
+      }
+    }
+
+    const diskSessions = projectPath ? await scanSessions(projectPath) : []
+    const maxSessions = getAppConfig().sessions.maxSessionsInPicker
+
+    return { diskSessions: diskSessions.slice(0, maxSessions), openTabs }
+  })
+
+  // ── Session picker: switch to already-open tab ────────────────────────────────
+  ipcMain.on('session-picker:switch-tab', (event, tabId: string) => {
+    const pickerWin = BrowserWindow.fromWebContents(event.sender)
+    if (!pickerWin) return
+    const editorWin = pickerEditorMap.get(pickerWin)
+    if (editorWin && !editorWin.isDestroyed()) {
+      editorWin.webContents.send('terminal:switch-tab', { tabId })
+    }
+    pickerWin.close()
+  })
+
+  // ── Session picker: resume session (create new tab) ───────────────────────────
+  ipcMain.handle('session-picker:resume-session', async (event, sessionId: string) => {
+    const pickerWin = BrowserWindow.fromWebContents(event.sender)
+    if (!pickerWin) return
+    const editorWin = pickerEditorMap.get(pickerWin)
+    if (!editorWin || editorWin.isDestroyed()) return
+
+    const ptyMgr = ptyRegistry.get(editorWin)
+    if (!ptyMgr) return
+
+    const tabInfo = await ptyMgr.resumeSessionTab(sessionId)
+    editorWin.webContents.send('terminal:new-tab', tabInfo)
+    pickerWin.close()
+  })
+
+  // ── Session picker: new session ───────────────────────────────────────────────
+  ipcMain.handle('session-picker:new-session', async (event) => {
+    const pickerWin = BrowserWindow.fromWebContents(event.sender)
+    if (!pickerWin) return
+    const editorWin = pickerEditorMap.get(pickerWin)
+    if (!editorWin || editorWin.isDestroyed()) return
+
+    const ptyMgr = ptyRegistry.get(editorWin)
+    if (!ptyMgr) return
+
+    const tabInfo = await ptyMgr.createNewSessionTab()
+    editorWin.webContents.send('terminal:new-tab', tabInfo)
+    pickerWin.close()
   })
 }
