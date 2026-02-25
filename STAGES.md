@@ -246,6 +246,38 @@
 
 ---
 
+## Stage 9 — Main Toolbar
+
+**Status:** Complete ✓
+
+### What was built
+- `src/main/config/toolbarConfig.ts`: `ToolbarButton` / `ToolbarConfig` interfaces; `DEFAULT_TOOLBAR` constant (5 default buttons: Open in Explorer, Open in VS Code, Build, Dev Server, Test); `ensureDefaultToolbar(projectDir)` writes `.aide/toolbar.json` on first project open if absent; `readToolbarButtons(projectDir)` reads and merges `aide/toolbar.json` (shared) + `.aide/toolbar.json` (local) — local wins on duplicate `id`
+- `src/main/toolbar/processManager.ts`: per-window `Map<BrowserWindow, Map<buttonId, RunningProcess>>`; `spawnButtonProcess()` spawns shell command, pipes stdout/stderr to renderer via `toolbar:output` IPC events, sends `toolbar:process-started` / `toolbar:process-exited`; `killButtonProcess()` runs `taskkill /f /t` on Windows, removes from map before kill so 'close' event skips double-notification; `killAllProcesses()` and `disposeProcessManager()` for window cleanup
+- `src/main/ipc/index.ts`: added `toolbar:get-buttons`, `toolbar:run-button`, `toolbar:kill-button`, `toolbar:kill-restart-button` handlers; kill-restart waits 200ms between kill and spawn
+- `src/main/windows/editor.ts`: calls `ensureDefaultToolbar(projectPath)` on project open; added `close` event handler — if any toolbar processes are running, shows native `dialog.showMessageBox` (Yes/No); Yes → `killAllProcesses` + `destroy()`; added `disposeProcessManager` to `closed` cleanup
+- `src/preload/editor.ts`: added `getToolbarButtons`, `toolbarRunButton`, `toolbarKillButton`, `toolbarKillRestartButton` invokes; `onToolbarOutput`, `onToolbarProcessStarted`, `onToolbarProcessExited` event subscriptions
+- `src/renderer/src/env.d.ts`: added `ToolbarChannel` and `ToolbarButton` interfaces; extended `EditorAPI` with toolbar methods
+- `src/renderer/src/store/useToolbarStore.ts`: Zustand store — `buttons`, `runningButtonIds: Set<string>`, `setButtons`, `markRunning`, `markStopped`
+- `src/renderer/src/components/layout/MainToolbar.tsx`: full implementation — loads buttons from IPC on mount; subscribes to `onToolbarOutput` (→ `logManager.append`), `onToolbarProcessStarted` / `Exited` (→ store); renders 32×32px buttons with emoji or `<img>` icon; animated spinner overlay (CSS keyframes injected once) while process running; `[‹]` / `[›]` scroll buttons appear when buttons overflow the strip (detected via `ResizeObserver` + scroll listener); modal dialog (Kill / Kill & Restart / Cancel) when clicking a running button
+
+### Claude's checks
+- `tsc --noEmit -p tsconfig.node.json` — **0 errors**
+- `tsc --noEmit -p tsconfig.web.json` — **0 errors**
+- `npm run build` — **succeeded** (main 38.48 kB, preloads 4.44 kB, renderer 8,091 kB)
+
+### User test checklist
+1. Open a project — toolbar shows 5 default buttons (📂 💻 🔨 ▶ 🧪) with tooltips on hover
+2. Confirm `.aide/toolbar.json` was created in the project directory with the default config
+3. Click 📂 (Open in Explorer) — Windows Explorer opens at project root; spinner flashes briefly
+4. Click 💻 (Open in VS Code) — VS Code opens at project root
+5. Click 🔨 (Build) while project has `npm run build` — spinner animates; Build Output / Build Errors channels appear in log panel
+6. Click 🔨 again while running → Kill / Kill & Restart / Cancel dialog appears
+7. Kill & Restart → previous process killed, new one starts immediately
+8. Add enough buttons in `.aide/toolbar.json` to overflow toolbar width → `[‹]` and `[›]` buttons appear; scrolling works
+9. Close AIDE while a build is running → confirmation dialog "1 process is still running / Close AIDE anyway?" → Yes closes; No returns to editor
+
+---
+
 ## Stage 5 — Terminal + Sessions
 
 **Status:** Complete ✓
@@ -284,5 +316,88 @@
 9. Resize panel → terminal content reflows correctly
 10. Collapse terminal → 20px strip; restore → terminal intact
 11. Make a `git commit` in terminal → file tree git indicators update automatically (`.git/index` watcher)
+
+---
+
+## Stage 9 Follow-up — Toolbar Presets + Auto-Detection
+
+**Status:** Complete ✓
+
+### What was built
+- `src/main/config/toolbarConfig.ts` — full rewrite:
+  - `DEFAULT_TOOLBAR` trimmed to only 📂 Open in Explorer; `projectType: ''`
+  - `ToolbarConfig.projectType?: string` field added
+  - `ToolbarPresetGroup` interface: `{ type, label, buttons[] }`
+  - `PRESET_GROUPS` constant: 7 groups — npm (build/dev/test/install), Unreal Engine, Unity, Python, Rust, Go, Docker
+  - `detectProjectType(projectDir)` — priority: uproject → unity → npm → rust → go → python → docker
+  - `readLocalToolbarConfig` / `writeLocalToolbarConfig` helpers
+  - Presets are UI-only; the config stores only a flat `buttons[]` array
+- `src/main/ipc/index.ts`:
+  - Replaced `toolbar:get-buttons` → `toolbar:get-info` (returns `{ buttons, projectType, suggestedType }`)
+  - Added `toolbar:get-presets` → returns `PRESET_GROUPS`
+  - Added `toolbar:save-buttons(buttons[])` → replaces local buttons, returns merged result
+  - Added `toolbar:set-project-type(type)` → persists type to `.aide/toolbar.json`
+- `src/preload/editor.ts` — added `getToolbarInfo`, `getToolbarPresets`, `toolbarSaveButtons`, `toolbarSetProjectType`
+- `src/renderer/src/env.d.ts` — added `ToolbarPresetGroup`, `ToolbarInfo` interfaces; updated `EditorAPI`
+- `src/renderer/src/store/useToolbarStore.ts` — added `projectType`, `suggestedType`, `showAutoDetectDialog`, `showPresetDialog` + setters
+- `src/renderer/src/components/layout/MainToolbar.tsx` — full rewrite:
+  - On mount: calls `getToolbarInfo()` + `getToolbarPresets()`; shows auto-detect modal if `suggestedType !== null`
+  - **Auto-detect dialog**: title "Detected X project", checkbox list of detected group's buttons (all pre-checked), "Add Selected" / "Skip (don't ask again)"
+  - **Preset manager dialog**: shows all preset groups with headers + current non-preset buttons under "Other"; each button is checkbox + icon + tooltip + command; Save replaces toolbar buttons, Cancel closes
+  - Hardcoded **"+" button** at right end of toolbar strip (always visible)
+
+### Claude's checks
+- `tsc --noEmit` — **0 errors**
+- `npm run build` — **succeeded** (main 46.73 kB, preloads 4.70 kB, renderer 8.1 MB)
+
+### User test checklist
+1. Open a new project → `.aide/toolbar.json` created with `projectType: ''`, only 📂 visible
+2. Project with `package.json` → auto-detect modal appears with npm buttons pre-checked
+3. "Add Selected" → npm buttons appear; modal gone; next open = no modal
+4. "Skip" → modal gone; next open = no modal
+5. Click "+" → preset manager opens; all groups shown with headers; currently active buttons pre-checked
+6. Check/uncheck any buttons → Save → toolbar updates immediately
+7. Uncheck 📂 → it disappears from toolbar
+8. Close AIDE with running process → confirm dialog still works
+
+---
+
+## Stage 9 Follow-up #2 — Unreal commands + General preset group + Configure manually
+
+**Status:** Complete ✓
+
+### What was built
+- `src/main/config/toolbarConfig.ts`:
+  - Added `General` preset group at the top of `PRESET_GROUPS` with the 📂 Open in Explorer button — makes it visible and removable in the preset manager dialog
+  - Unreal Engine group expanded from 2 → 5 buttons with correct production commands:
+    - **Open in UE Editor** — `${unrealVersionSelector} /editor <project.uproject>` (via `for %f in ("*.uproject")`)
+    - **Build** — `UnrealBuildTool.exe <ProjectName>Editor Win64 Development <project.uproject> -rocket`
+    - **Open in Visual Studio** — `for %f in ("*.sln") do start "" "%f"`
+    - **Clear Intermediate** — PowerShell: removes `Intermediate DerivedDataCache Saved Binaries .vs Build Script`, `*.sln`, and `Plugins\*/Intermediate`
+    - **Generate VS Files** — `GenerateProjectFiles.bat -project=<project.uproject> -game -rocket`
+  - Unreal commands use `${unrealEngine}` and `${unrealVersionSelector}` placeholders (resolved at spawn time)
+- `src/main/unreal/engineFinder.ts` — new file:
+  - `queryRegSZ(keyPath, valueName)` — thin wrapper around `reg query` + REG_SZ output parser
+  - `getEngineAssociation(projectDir)` — reads `EngineAssociation` from `.uproject` JSON
+  - `findUnrealEngineDir(projectDir)` — looks up engine root: HKLM first (Launcher installs), then HKCU (custom/source builds)
+  - `findUnrealVersionSelector()` — reads UVS path from `HKCR\Unreal.ProjectFile\shell\switchversion` → `Icon`
+- `src/main/toolbar/processManager.ts`:
+  - Added `${unrealVersionSelector}` substitution (lazy, only queries registry when placeholder is present)
+- `src/renderer/src/components/layout/MainToolbar.tsx` — auto-detect dialog:
+  - Added **"Configure manually…"** link at bottom-left — dismisses auto-detect, sets `projectType = 'dismissed'`, opens preset manager immediately
+
+### Claude's checks
+- `tsc --noEmit` — **0 errors**
+- `npm run build` — **succeeded**
+
+### User test checklist
+1. Open Unreal project → auto-detect shows "Detected Unreal Engine project" with 5 buttons pre-checked
+2. "Add Selected" → UE buttons appear in toolbar
+3. Click "Open in UE Editor" → UVS opens correct engine version for this project
+4. Click "Build" → UBT runs, output appears in log panel
+5. Click "Clear Intermediate" → all build artifact folders removed (including plugin intermediates)
+6. Click "Generate VS Files" → GenerateProjectFiles.bat runs with correct .uproject path
+7. "Configure manually…" in auto-detect → closes modal, opens full preset manager directly
+8. General group visible in preset manager with 📂 checked; uncheck it → disappears from toolbar
 
 ---

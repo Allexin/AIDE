@@ -5,11 +5,23 @@ import { spawn } from 'child_process'
 import { removeRecentProject, getAppState } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { readProjectSettings } from '../config/projectConfig'
+import {
+  readToolbarButtons,
+  readLocalToolbarConfig,
+  writeLocalToolbarConfig,
+  detectProjectType,
+  PRESET_GROUPS,
+  type ToolbarButton
+} from '../config/toolbarConfig'
 import { openProjectAndTrack } from '../windows/editor'
 import { runGitStatus } from '../filetree/gitStatus'
 import { ptyRegistry, pickerEditorMap } from '../pty/registry'
 import { scanSessions } from '../pty/sessionScanner'
 import { createSessionPickerWindow } from '../windows/sessionPicker'
+import {
+  spawnButtonProcess,
+  killButtonProcess
+} from '../toolbar/processManager'
 
 export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void {
   // ── Picker: open native folder dialog ──────────────────────────────────────
@@ -284,6 +296,97 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
       })
       proc.on('error', () => resolve({ error: 'other' }))
     })
+  })
+
+  // ── Toolbar: get info (buttons + projectType + suggestedType) ────────────────
+  ipcMain.handle('toolbar:get-info', (event) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return { buttons: [], projectType: '', suggestedType: null }
+    for (const [projectPath, win] of openProjects) {
+      if (win === senderWin) {
+        const localConfig = readLocalToolbarConfig(projectPath)
+        const projectType = localConfig.projectType ?? ''
+        const buttons = readToolbarButtons(projectPath)
+        const suggestedType = projectType === '' ? detectProjectType(projectPath) : null
+        return { buttons, projectType, suggestedType }
+      }
+    }
+    return { buttons: [], projectType: '', suggestedType: null }
+  })
+
+  // ── Toolbar: get all preset groups ───────────────────────────────────────────
+  ipcMain.handle('toolbar:get-presets', () => PRESET_GROUPS)
+
+  // ── Toolbar: save local buttons (replaces .aide/toolbar.json buttons array) ──
+  ipcMain.handle('toolbar:save-buttons', (event, buttons: ToolbarButton[]) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return []
+    for (const [projectPath, win] of openProjects) {
+      if (win === senderWin) {
+        const localConfig = readLocalToolbarConfig(projectPath)
+        localConfig.buttons = buttons
+        writeLocalToolbarConfig(projectPath, localConfig)
+        return readToolbarButtons(projectPath)
+      }
+    }
+    return []
+  })
+
+  // ── Toolbar: set project type (persists to .aide/toolbar.json) ───────────────
+  ipcMain.handle('toolbar:set-project-type', (event, type: string) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return
+    for (const [projectPath, win] of openProjects) {
+      if (win === senderWin) {
+        const localConfig = readLocalToolbarConfig(projectPath)
+        localConfig.projectType = type
+        writeLocalToolbarConfig(projectPath, localConfig)
+        return
+      }
+    }
+  })
+
+  // ── Toolbar: run a button process ─────────────────────────────────────────────
+  ipcMain.handle('toolbar:run-button', (event, buttonId: string) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return { success: false, error: 'No window' }
+    for (const [projectPath, win] of openProjects) {
+      if (win === senderWin) {
+        const buttons = readToolbarButtons(projectPath)
+        const button = buttons.find((b) => b.id === buttonId)
+        if (!button) return { success: false, error: 'Button not found' }
+        spawnButtonProcess(senderWin, button, projectPath)
+        return { success: true }
+      }
+    }
+    return { success: false, error: 'Project not found' }
+  })
+
+  // ── Toolbar: kill a running button process ────────────────────────────────────
+  ipcMain.handle('toolbar:kill-button', (event, buttonId: string) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (senderWin) killButtonProcess(senderWin, buttonId)
+  })
+
+  // ── Toolbar: kill and restart a button process ────────────────────────────────
+  ipcMain.handle('toolbar:kill-restart-button', async (event, buttonId: string) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return
+
+    killButtonProcess(senderWin, buttonId)
+
+    // Brief delay so the OS has time to release resources (port, file handles)
+    // before the new process spawns. 200ms is enough for most cases.
+    await new Promise<void>((resolve) => setTimeout(resolve, 200))
+
+    for (const [projectPath, win] of openProjects) {
+      if (win === senderWin) {
+        const buttons = readToolbarButtons(projectPath)
+        const button = buttons.find((b) => b.id === buttonId)
+        if (button) spawnButtonProcess(senderWin, button, projectPath)
+        break
+      }
+    }
   })
 
   // ── Session picker: new session ───────────────────────────────────────────────

@@ -1,15 +1,17 @@
-import { BrowserWindow, shell } from 'electron'
+import { BrowserWindow, shell, dialog } from 'electron'
 import { join, basename } from 'path'
 import { existsSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { checkAndAcquireLock, releaseLock } from '../lock'
 import { ensureAideDirectory } from '../config/projectConfig'
+import { ensureDefaultToolbar } from '../config/toolbarConfig'
 import { ensureGitignoreEntry } from '../gitignore'
 import { addRecentProject } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { startProjectWatcher, stopProjectWatcher } from '../filetree/watcher'
 import { PtyManager } from '../pty/ptyManager'
 import { ptyRegistry } from '../pty/registry'
+import { getRunningCount, killAllProcesses, disposeProcessManager } from '../toolbar/processManager'
 
 export function createEditorWindow(projectPath: string): BrowserWindow {
   const folderName = basename(projectPath)
@@ -60,6 +62,7 @@ export function openProjectAndTrack(
   }
 
   ensureAideDirectory(projectPath)
+  ensureDefaultToolbar(projectPath)
 
   const lockResult = checkAndAcquireLock(projectPath)
   if (!lockResult.acquired) {
@@ -84,7 +87,32 @@ export function openProjectAndTrack(
     startProjectWatcher(projectPath, editorWin)
   })
 
+  // Intercept close to check for running toolbar processes
+  editorWin.on('close', (event) => {
+    const count = getRunningCount(editorWin)
+    if (count > 0) {
+      event.preventDefault()
+      dialog
+        .showMessageBox(editorWin, {
+          type: 'question',
+          title: 'AIDE',
+          message: `${count} process${count !== 1 ? 'es are' : ' is'} still running.`,
+          detail: 'Close AIDE anyway?',
+          buttons: ['Yes', 'No'],
+          defaultId: 1,
+          cancelId: 1
+        })
+        .then(({ response }) => {
+          if (response === 0) {
+            killAllProcesses(editorWin)
+            editorWin.destroy()
+          }
+        })
+    }
+  })
+
   editorWin.on('closed', () => {
+    disposeProcessManager(editorWin)
     ptyMgr.disposeAll()
     ptyRegistry.delete(editorWin)
     stopProjectWatcher(projectPath)

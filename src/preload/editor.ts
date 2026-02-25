@@ -36,6 +36,30 @@ export interface EditorConfig {
   tabSize: number
 }
 
+interface ToolbarButton {
+  id: string
+  icon: string
+  tooltip: string
+  command: string
+  cwd?: string
+  channels?: {
+    stdout?: { name: string; attention?: boolean }
+    stderr?: { name: string; attention?: boolean }
+  }
+}
+
+interface ToolbarPresetGroup {
+  type: string
+  label: string
+  buttons: ToolbarButton[]
+}
+
+interface ToolbarInfo {
+  buttons: ToolbarButton[]
+  projectType: string
+  suggestedType: string | null
+}
+
 export interface EditorAPI {
   getProjectPath: () => Promise<string | null>
   getProjectSettings: () => Promise<ProjectSettings>
@@ -68,6 +92,22 @@ export interface EditorAPI {
   onTerminalTabExited: (cb: (tabId: string) => void) => () => void
   onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void
   onTerminalNewTab: (cb: (tab: SessionTabInfo) => void) => () => void
+
+  // Toolbar
+  getToolbarInfo: () => Promise<ToolbarInfo>
+  getToolbarPresets: () => Promise<ToolbarPresetGroup[]>
+  toolbarSaveButtons: (buttons: ToolbarButton[]) => Promise<ToolbarButton[]>
+  toolbarSetProjectType: (type: string) => Promise<void>
+  toolbarRunButton: (buttonId: string) => Promise<{ success: boolean; error?: string }>
+  toolbarKillButton: (buttonId: string) => Promise<void>
+  toolbarKillRestartButton: (buttonId: string) => Promise<void>
+  onToolbarOutput: (
+    cb: (payload: { channelName: string; line: string; attention: boolean }) => void
+  ) => () => void
+  onToolbarProcessStarted: (cb: (payload: { buttonId: string }) => void) => () => void
+  onToolbarProcessExited: (
+    cb: (payload: { buttonId: string; exitCode: number | null }) => void
+  ) => () => void
 }
 
 const editorApi: EditorAPI = {
@@ -139,6 +179,40 @@ const editorApi: EditorAPI = {
     const handler = (_: unknown, tab: SessionTabInfo): void => cb(tab)
     ipcRenderer.on('terminal:new-tab', handler)
     return () => ipcRenderer.removeListener('terminal:new-tab', handler)
+  },
+
+  // Toolbar
+  getToolbarInfo: () => ipcRenderer.invoke('toolbar:get-info'),
+  getToolbarPresets: () => ipcRenderer.invoke('toolbar:get-presets'),
+  toolbarSaveButtons: (buttons) => ipcRenderer.invoke('toolbar:save-buttons', buttons),
+  toolbarSetProjectType: (type) => ipcRenderer.invoke('toolbar:set-project-type', type),
+  toolbarRunButton: (buttonId) => ipcRenderer.invoke('toolbar:run-button', buttonId),
+  toolbarKillButton: (buttonId) => ipcRenderer.invoke('toolbar:kill-button', buttonId),
+  toolbarKillRestartButton: (buttonId) =>
+    ipcRenderer.invoke('toolbar:kill-restart-button', buttonId),
+
+  onToolbarOutput: (cb) => {
+    const handler = (
+      _: unknown,
+      payload: { channelName: string; line: string; attention: boolean }
+    ): void => cb(payload)
+    ipcRenderer.on('toolbar:output', handler)
+    return () => ipcRenderer.removeListener('toolbar:output', handler)
+  },
+
+  onToolbarProcessStarted: (cb) => {
+    const handler = (_: unknown, payload: { buttonId: string }): void => cb(payload)
+    ipcRenderer.on('toolbar:process-started', handler)
+    return () => ipcRenderer.removeListener('toolbar:process-started', handler)
+  },
+
+  onToolbarProcessExited: (cb) => {
+    const handler = (
+      _: unknown,
+      payload: { buttonId: string; exitCode: number | null }
+    ): void => cb(payload)
+    ipcRenderer.on('toolbar:process-exited', handler)
+    return () => ipcRenderer.removeListener('toolbar:process-exited', handler)
   }
 }
 

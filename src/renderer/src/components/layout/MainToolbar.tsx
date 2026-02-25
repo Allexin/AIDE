@@ -1,23 +1,828 @@
-import React from 'react'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
+import { useToolbarStore } from '../../store/useToolbarStore'
+import { logManager } from '../../store/useLogStore'
 
-// Main toolbar — full application width, below native menu bar.
-// Stage 9 will populate this with config-driven icon buttons.
-export default function MainToolbar(): React.ReactElement {
+// Inject spinner keyframes once into document head
+let spinnerStyleInjected = false
+function injectSpinnerStyle(): void {
+  if (spinnerStyleInjected) return
+  spinnerStyleInjected = true
+  const style = document.createElement('style')
+  style.textContent =
+    '@keyframes aide-spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }'
+  document.head.appendChild(style)
+}
+
+// ── Spinner ───────────────────────────────────────────────────────────────────
+
+function Spinner(): React.ReactElement {
   return (
     <div
       style={{
-        height: 36,
-        flexShrink: 0,
-        background: '#2d2d2d',
-        borderBottom: '1px solid #3d3d3d',
-        display: 'flex',
-        alignItems: 'center',
-        paddingLeft: 8,
-        paddingRight: 8,
-        gap: 4
+        width: 14,
+        height: 14,
+        border: '2px solid rgba(255,255,255,0.2)',
+        borderTopColor: '#ffffff',
+        borderRadius: '50%',
+        animation: 'aide-spin 0.8s linear infinite',
+        flexShrink: 0
+      }}
+    />
+  )
+}
+
+// ── Dialog button ─────────────────────────────────────────────────────────────
+
+function DialogButton({
+  label,
+  onClick,
+  primary,
+  danger
+}: {
+  label: string
+  onClick: () => void
+  primary?: boolean
+  danger?: boolean
+}): React.ReactElement {
+  const [hovered, setHovered] = useState(false)
+  let bg = hovered ? '#3d3d3d' : '#2d2d2d'
+  if (primary) bg = hovered ? '#1177bb' : '#0e639c'
+  if (danger) bg = hovered ? '#c0392b' : '#a93226'
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        padding: '5px 14px',
+        fontSize: 12,
+        borderRadius: 3,
+        cursor: 'pointer',
+        border: '1px solid #555',
+        background: bg,
+        color: '#cccccc',
+        flexShrink: 0
       }}
     >
-      {/* Toolbar buttons rendered in Stage 9 */}
+      {label}
+    </button>
+  )
+}
+
+// ── Modal overlay wrapper ─────────────────────────────────────────────────────
+
+function ModalOverlay({
+  onBackdropClick,
+  children
+}: {
+  onBackdropClick: () => void
+  children: React.ReactNode
+}): React.ReactElement {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'rgba(0, 0, 0, 0.55)'
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onBackdropClick()
+      }}
+    >
+      {children}
     </div>
+  )
+}
+
+// ── Single toolbar button ─────────────────────────────────────────────────────
+
+interface ToolbarButtonItemProps {
+  button: ToolbarButton
+  running: boolean
+  onClick: (btn: ToolbarButton) => void
+}
+
+function ToolbarButtonItem({
+  button,
+  running,
+  onClick
+}: ToolbarButtonItemProps): React.ReactElement {
+  const [hovered, setHovered] = useState(false)
+
+  const isImage =
+    button.icon.startsWith('.') ||
+    button.icon.startsWith('/') ||
+    button.icon.startsWith('file://') ||
+    /^[A-Za-z]:[\\/]/.test(button.icon)
+
+  return (
+    <button
+      title={button.tooltip}
+      onClick={() => onClick(button)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        width: 32,
+        height: 32,
+        background: hovered ? '#3d3d3d' : 'none',
+        border: '1px solid transparent',
+        borderRadius: 4,
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        position: 'relative',
+        fontSize: 18,
+        lineHeight: 1,
+        flexShrink: 0,
+        padding: 0,
+        color: '#cccccc',
+        transition: 'background 0.1s'
+      }}
+    >
+      {isImage ? (
+        <img src={button.icon} width={20} height={20} alt="" style={{ display: 'block' }} />
+      ) : (
+        <span style={{ userSelect: 'none' }}>{button.icon}</span>
+      )}
+
+      {running && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(30, 30, 30, 0.75)',
+            borderRadius: 4
+          }}
+        >
+          <Spinner />
+        </div>
+      )}
+    </button>
+  )
+}
+
+// ── Running process dialog ────────────────────────────────────────────────────
+
+interface RunningDialogProps {
+  button: ToolbarButton
+  onKill: () => void
+  onKillRestart: () => void
+  onCancel: () => void
+}
+
+function RunningDialog({
+  button,
+  onKill,
+  onKillRestart,
+  onCancel
+}: RunningDialogProps): React.ReactElement {
+  return (
+    <ModalOverlay onBackdropClick={onCancel}>
+      <div
+        style={{
+          background: '#252526',
+          border: '1px solid #454545',
+          borderRadius: 6,
+          padding: '20px 24px',
+          minWidth: 320,
+          maxWidth: 420,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
+        }}
+      >
+        <div style={{ color: '#cccccc', fontSize: 13, marginBottom: 20 }}>
+          <strong style={{ color: '#ffffff' }}>&ldquo;{button.tooltip}&rdquo;</strong> is already
+          running.
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <DialogButton onClick={onKill} label="Kill" danger />
+          <DialogButton onClick={onKillRestart} label="Kill & Restart" primary />
+          <DialogButton onClick={onCancel} label="Cancel" />
+        </div>
+      </div>
+    </ModalOverlay>
+  )
+}
+
+// ── Scroll button ─────────────────────────────────────────────────────────────
+
+function ScrollButton({
+  direction,
+  onClick
+}: {
+  direction: 'left' | 'right'
+  onClick: () => void
+}): React.ReactElement {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        width: 22,
+        height: 32,
+        flexShrink: 0,
+        background: hovered ? '#3d3d3d' : 'none',
+        border: 'none',
+        color: '#cccccc',
+        cursor: 'pointer',
+        fontSize: 14,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 0,
+        borderRadius: 3
+      }}
+    >
+      {direction === 'left' ? '‹' : '›'}
+    </button>
+  )
+}
+
+// ── Button row used in dialogs ────────────────────────────────────────────────
+
+function ButtonRow({
+  button,
+  checked,
+  onChange
+}: {
+  button: ToolbarButton
+  checked: boolean
+  onChange: (id: string, checked: boolean) => void
+}): React.ReactElement {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <label
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '5px 8px',
+        borderRadius: 4,
+        cursor: 'pointer',
+        background: hovered ? '#2a2a2a' : 'transparent',
+        userSelect: 'none'
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(button.id, e.target.checked)}
+        style={{ flexShrink: 0, accentColor: '#0e639c', width: 14, height: 14 }}
+      />
+      <span style={{ fontSize: 16, flexShrink: 0, width: 22, textAlign: 'center' }}>
+        {button.icon}
+      </span>
+      <span style={{ color: '#cccccc', fontSize: 12, flex: 1, minWidth: 0 }}>
+        {button.tooltip}
+      </span>
+      <span
+        style={{
+          color: '#555',
+          fontSize: 11,
+          fontFamily: 'monospace',
+          flexShrink: 0,
+          maxWidth: 160,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        }}
+        title={button.command}
+      >
+        {button.command}
+      </span>
+    </label>
+  )
+}
+
+// ── Auto-detect dialog ────────────────────────────────────────────────────────
+
+interface AutoDetectDialogProps {
+  suggestedType: string
+  presetGroups: ToolbarPresetGroup[]
+  currentButtonIds: Set<string>
+  onAddSelected: (buttons: ToolbarButton[]) => void
+  onSkip: () => void
+  onConfigureManually: () => void
+}
+
+function AutoDetectDialog({
+  suggestedType,
+  presetGroups,
+  currentButtonIds,
+  onAddSelected,
+  onSkip,
+  onConfigureManually
+}: AutoDetectDialogProps): React.ReactElement {
+  const group = presetGroups.find((g) => g.type === suggestedType)
+  const label = group?.label ?? suggestedType
+  const groupButtons = group?.buttons ?? []
+
+  const [checked, setChecked] = useState<Set<string>>(
+    () => new Set(groupButtons.map((b) => b.id))
+  )
+
+  const toggle = (id: string, val: boolean): void => {
+    setChecked((prev) => {
+      const next = new Set(prev)
+      val ? next.add(id) : next.delete(id)
+      return next
+    })
+  }
+
+  const handleAdd = (): void => {
+    // Keep existing buttons that are already in the toolbar, add newly checked ones
+    const toAdd = groupButtons.filter((b) => checked.has(b.id) && !currentButtonIds.has(b.id))
+    onAddSelected(toAdd)
+  }
+
+  return (
+    <ModalOverlay onBackdropClick={onSkip}>
+      <div
+        style={{
+          background: '#252526',
+          border: '1px solid #454545',
+          borderRadius: 6,
+          padding: '20px 24px',
+          minWidth: 360,
+          maxWidth: 480,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
+        }}
+      >
+        <div style={{ color: '#ffffff', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+          Detected {label} project
+        </div>
+        <div style={{ color: '#888', fontSize: 12, marginBottom: 14 }}>
+          Add these buttons to your toolbar?
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          {groupButtons.map((btn) => (
+            <ButtonRow
+              key={btn.id}
+              button={btn}
+              checked={checked.has(btn.id)}
+              onChange={toggle}
+            />
+          ))}
+          {groupButtons.length === 0 && (
+            <div style={{ color: '#666', fontSize: 12 }}>No buttons in this preset.</div>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+          {/* Left: configure manually link */}
+          <button
+            onClick={onConfigureManually}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#888',
+              fontSize: 12,
+              cursor: 'pointer',
+              padding: 0,
+              textDecoration: 'underline',
+              textUnderlineOffset: 2,
+              flex: 1,
+              textAlign: 'left'
+            }}
+          >
+            Configure manually…
+          </button>
+          {/* Right: action buttons */}
+          <DialogButton onClick={handleAdd} label="Add Selected" primary />
+          <DialogButton onClick={onSkip} label="Skip (don't ask again)" />
+        </div>
+      </div>
+    </ModalOverlay>
+  )
+}
+
+// ── Preset manager dialog ─────────────────────────────────────────────────────
+
+interface PresetDialogProps {
+  presetGroups: ToolbarPresetGroup[]
+  currentButtons: ToolbarButton[]
+  onSave: (buttons: ToolbarButton[]) => void
+  onCancel: () => void
+}
+
+function PresetDialog({
+  presetGroups,
+  currentButtons,
+  onSave,
+  onCancel
+}: PresetDialogProps): React.ReactElement {
+  // Build the full list: preset buttons + any current buttons not in any preset
+  const presetButtonIds = new Set(presetGroups.flatMap((g) => g.buttons.map((b) => b.id)))
+
+  // Buttons currently in the toolbar that aren't covered by any preset group
+  const extraButtons = currentButtons.filter((b) => !presetButtonIds.has(b.id))
+
+  // Start checked: all buttons currently in toolbar
+  const currentIds = new Set(currentButtons.map((b) => b.id))
+  const [checked, setChecked] = useState<Set<string>>(() => new Set(currentIds))
+
+  // Map: id → button object (for building the final save list)
+  const buttonMap = new Map<string, ToolbarButton>()
+  for (const g of presetGroups) {
+    for (const b of g.buttons) buttonMap.set(b.id, b)
+  }
+  for (const b of extraButtons) buttonMap.set(b.id, b)
+
+  const toggle = (id: string, val: boolean): void => {
+    setChecked((prev) => {
+      const next = new Set(prev)
+      val ? next.add(id) : next.delete(id)
+      return next
+    })
+  }
+
+  const handleSave = (): void => {
+    // Preserve order: current checked buttons first, then newly added preset buttons
+    const result: ToolbarButton[] = []
+    const added = new Set<string>()
+
+    // Existing checked buttons in their current order
+    for (const b of currentButtons) {
+      if (checked.has(b.id)) {
+        result.push(b)
+        added.add(b.id)
+      }
+    }
+    // Newly checked preset buttons (not already added)
+    for (const g of presetGroups) {
+      for (const b of g.buttons) {
+        if (checked.has(b.id) && !added.has(b.id)) {
+          result.push(b)
+          added.add(b.id)
+        }
+      }
+    }
+
+    onSave(result)
+  }
+
+  return (
+    <ModalOverlay onBackdropClick={onCancel}>
+      <div
+        style={{
+          background: '#252526',
+          border: '1px solid #454545',
+          borderRadius: 6,
+          padding: '20px 24px',
+          width: 520,
+          maxHeight: '75vh',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
+        }}
+      >
+        <div style={{ color: '#ffffff', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+          Toolbar Buttons
+        </div>
+        <div style={{ color: '#888', fontSize: 12, marginBottom: 14 }}>
+          Check the buttons you want in the toolbar. Uncheck to remove.
+        </div>
+
+        {/* Scrollable list */}
+        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+          {/* Extra (non-preset) buttons that are already installed */}
+          {extraButtons.length > 0 && (
+            <>
+              <div
+                style={{
+                  color: '#888',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  padding: '6px 8px 4px',
+                  borderBottom: '1px solid #333',
+                  marginBottom: 4
+                }}
+              >
+                Other
+              </div>
+              {extraButtons.map((btn) => (
+                <ButtonRow
+                  key={btn.id}
+                  button={btn}
+                  checked={checked.has(btn.id)}
+                  onChange={toggle}
+                />
+              ))}
+            </>
+          )}
+
+          {/* Preset groups */}
+          {presetGroups.map((group) => (
+            <div key={group.type}>
+              <div
+                style={{
+                  color: '#888',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  padding: '6px 8px 4px',
+                  borderBottom: '1px solid #333',
+                  marginBottom: 4,
+                  marginTop: 8
+                }}
+              >
+                {group.label}
+              </div>
+              {group.buttons.map((btn) => (
+                <ButtonRow
+                  key={btn.id}
+                  button={btn}
+                  checked={checked.has(btn.id)}
+                  onChange={toggle}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+          <DialogButton onClick={handleSave} label="Save" primary />
+          <DialogButton onClick={onCancel} label="Cancel" />
+        </div>
+      </div>
+    </ModalOverlay>
+  )
+}
+
+// ── Main toolbar ──────────────────────────────────────────────────────────────
+
+export default function MainToolbar(): React.ReactElement {
+  const {
+    buttons,
+    runningButtonIds,
+    suggestedType,
+    showAutoDetectDialog,
+    showPresetDialog,
+    setButtons,
+    markRunning,
+    markStopped,
+    setProjectType,
+    setSuggestedType,
+    setShowAutoDetectDialog,
+    setShowPresetDialog
+  } = useToolbarStore()
+
+  const [runningDialog, setRunningDialog] = useState<ToolbarButton | null>(null)
+  const [presetGroups, setPresetGroups] = useState<ToolbarPresetGroup[]>([])
+  const stripRef = useRef<HTMLDivElement>(null)
+  const [canScrollLeft, setCanScrollLeft] = useState(false)
+  const [canScrollRight, setCanScrollRight] = useState(false)
+
+  // ── Spinner CSS injection ──
+  useEffect(() => {
+    injectSpinnerStyle()
+  }, [])
+
+  // ── Load toolbar info + presets + IPC subscriptions ──
+  useEffect(() => {
+    window.editorApi.getToolbarInfo().then((info) => {
+      setButtons(info.buttons)
+      setProjectType(info.projectType)
+      setSuggestedType(info.suggestedType)
+      if (info.suggestedType !== null) {
+        setShowAutoDetectDialog(true)
+      }
+    })
+
+    window.editorApi.getToolbarPresets().then(setPresetGroups)
+
+    const unsubOutput = window.editorApi.onToolbarOutput(({ channelName, line, attention }) => {
+      logManager.append(channelName, line, attention)
+    })
+    const unsubStarted = window.editorApi.onToolbarProcessStarted(({ buttonId }) => {
+      markRunning(buttonId)
+    })
+    const unsubExited = window.editorApi.onToolbarProcessExited(({ buttonId }) => {
+      markStopped(buttonId)
+    })
+
+    return () => {
+      unsubOutput()
+      unsubStarted()
+      unsubExited()
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Overflow detection ──
+  const updateOverflow = useCallback(() => {
+    const el = stripRef.current
+    if (!el) return
+    setCanScrollLeft(el.scrollLeft > 0)
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1)
+  }, [])
+
+  useEffect(() => {
+    updateOverflow()
+    const el = stripRef.current
+    if (!el) return
+    el.addEventListener('scroll', updateOverflow)
+    const ro = new ResizeObserver(updateOverflow)
+    ro.observe(el)
+    return () => {
+      el.removeEventListener('scroll', updateOverflow)
+      ro.disconnect()
+    }
+  }, [buttons, updateOverflow])
+
+  // ── Button click handler ──
+  const handleButtonClick = async (button: ToolbarButton): Promise<void> => {
+    if (runningButtonIds.has(button.id)) {
+      setRunningDialog(button)
+    } else {
+      await window.editorApi.toolbarRunButton(button.id)
+    }
+  }
+
+  const handleKill = async (): Promise<void> => {
+    if (!runningDialog) return
+    await window.editorApi.toolbarKillButton(runningDialog.id)
+    setRunningDialog(null)
+  }
+
+  const handleKillRestart = async (): Promise<void> => {
+    if (!runningDialog) return
+    await window.editorApi.toolbarKillRestartButton(runningDialog.id)
+    setRunningDialog(null)
+  }
+
+  // ── Auto-detect: user clicks "Add Selected" ──
+  const handleAutoDetectAdd = async (newButtons: ToolbarButton[]): Promise<void> => {
+    // Merge: existing buttons + newly selected ones
+    const merged = [...buttons, ...newButtons]
+    const updated = await window.editorApi.toolbarSaveButtons(merged)
+    setButtons(updated)
+    await window.editorApi.toolbarSetProjectType(suggestedType ?? '')
+    setProjectType(suggestedType ?? '')
+    setSuggestedType(null)
+    setShowAutoDetectDialog(false)
+  }
+
+  // ── Auto-detect: user skips ──
+  const handleAutoDetectSkip = async (): Promise<void> => {
+    await window.editorApi.toolbarSetProjectType('dismissed')
+    setProjectType('dismissed')
+    setSuggestedType(null)
+    setShowAutoDetectDialog(false)
+  }
+
+  // ── Auto-detect: user wants manual configuration ──
+  const handleAutoDetectConfigureManually = async (): Promise<void> => {
+    await window.editorApi.toolbarSetProjectType('dismissed')
+    setProjectType('dismissed')
+    setSuggestedType(null)
+    setShowAutoDetectDialog(false)
+    setShowPresetDialog(true)
+  }
+
+  // ── Preset dialog: save ──
+  const handlePresetSave = async (selectedButtons: ToolbarButton[]): Promise<void> => {
+    const updated = await window.editorApi.toolbarSaveButtons(selectedButtons)
+    setButtons(updated)
+    setShowPresetDialog(false)
+  }
+
+  return (
+    <>
+      <div
+        style={{
+          height: 36,
+          flexShrink: 0,
+          background: '#2d2d2d',
+          borderBottom: '1px solid #3d3d3d',
+          display: 'flex',
+          alignItems: 'center',
+          overflow: 'hidden',
+          paddingLeft: canScrollLeft ? 0 : 4,
+          paddingRight: 4,
+          gap: 0
+        }}
+      >
+        {canScrollLeft && (
+          <ScrollButton
+            direction="left"
+            onClick={() => stripRef.current?.scrollBy({ left: -120 })}
+          />
+        )}
+
+        {/* Scrollable button strip */}
+        <div
+          ref={stripRef}
+          style={{
+            display: 'flex',
+            flex: 1,
+            overflow: 'hidden',
+            gap: 4,
+            alignItems: 'center',
+            paddingLeft: canScrollLeft ? 4 : 0,
+            paddingRight: canScrollRight ? 4 : 0
+          }}
+        >
+          {buttons.map((btn) => (
+            <ToolbarButtonItem
+              key={btn.id}
+              button={btn}
+              running={runningButtonIds.has(btn.id)}
+              onClick={handleButtonClick}
+            />
+          ))}
+        </div>
+
+        {canScrollRight && (
+          <ScrollButton
+            direction="right"
+            onClick={() => stripRef.current?.scrollBy({ left: 120 })}
+          />
+        )}
+
+        {/* Hardcoded "+" button — always at the right end, outside scroll strip */}
+        <AddButton onClick={() => setShowPresetDialog(true)} />
+      </div>
+
+      {/* Running process dialog */}
+      {runningDialog && (
+        <RunningDialog
+          button={runningDialog}
+          onKill={handleKill}
+          onKillRestart={handleKillRestart}
+          onCancel={() => setRunningDialog(null)}
+        />
+      )}
+
+      {/* Auto-detect dialog */}
+      {showAutoDetectDialog && suggestedType !== null && (
+        <AutoDetectDialog
+          suggestedType={suggestedType}
+          presetGroups={presetGroups}
+          currentButtonIds={new Set(buttons.map((b) => b.id))}
+          onAddSelected={handleAutoDetectAdd}
+          onSkip={handleAutoDetectSkip}
+          onConfigureManually={handleAutoDetectConfigureManually}
+        />
+      )}
+
+      {/* Preset manager dialog */}
+      {showPresetDialog && (
+        <PresetDialog
+          presetGroups={presetGroups}
+          currentButtons={buttons}
+          onSave={handlePresetSave}
+          onCancel={() => setShowPresetDialog(false)}
+        />
+      )}
+    </>
+  )
+}
+
+// ── Add button ────────────────────────────────────────────────────────────────
+
+function AddButton({ onClick }: { onClick: () => void }): React.ReactElement {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <button
+      title="Manage toolbar buttons"
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        width: 28,
+        height: 28,
+        flexShrink: 0,
+        background: hovered ? '#3d3d3d' : 'none',
+        border: '1px solid',
+        borderColor: hovered ? '#555' : '#444',
+        borderRadius: 4,
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 16,
+        color: '#888',
+        padding: 0,
+        marginLeft: 2,
+        transition: 'background 0.1s, color 0.1s'
+      }}
+    >
+      +
+    </button>
   )
 }

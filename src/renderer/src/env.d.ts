@@ -59,6 +59,35 @@ interface EditorConfig {
   tabSize: number
 }
 
+interface ToolbarChannel {
+  name: string
+  attention?: boolean
+}
+
+interface ToolbarButton {
+  id: string
+  icon: string
+  tooltip: string
+  command: string
+  cwd?: string
+  channels?: {
+    stdout?: ToolbarChannel
+    stderr?: ToolbarChannel
+  }
+}
+
+interface ToolbarPresetGroup {
+  type: string
+  label: string
+  buttons: ToolbarButton[]
+}
+
+interface ToolbarInfo {
+  buttons: ToolbarButton[]
+  projectType: string
+  suggestedType: string | null
+}
+
 interface EditorAPI {
   getProjectPath: () => Promise<string | null>
   getProjectSettings: () => Promise<ProjectSettings>
@@ -91,6 +120,22 @@ interface EditorAPI {
   onTerminalTabExited: (cb: (tabId: string) => void) => () => void
   onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void
   onTerminalNewTab: (cb: (tab: SessionTabInfo) => void) => () => void
+
+  // Toolbar
+  getToolbarInfo: () => Promise<ToolbarInfo>
+  getToolbarPresets: () => Promise<ToolbarPresetGroup[]>
+  toolbarSaveButtons: (buttons: ToolbarButton[]) => Promise<ToolbarButton[]>
+  toolbarSetProjectType: (type: string) => Promise<void>
+  toolbarRunButton: (buttonId: string) => Promise<{ success: boolean; error?: string }>
+  toolbarKillButton: (buttonId: string) => Promise<void>
+  toolbarKillRestartButton: (buttonId: string) => Promise<void>
+  onToolbarOutput: (
+    cb: (payload: { channelName: string; line: string; attention: boolean }) => void
+  ) => () => void
+  onToolbarProcessStarted: (cb: (payload: { buttonId: string }) => void) => () => void
+  onToolbarProcessExited: (
+    cb: (payload: { buttonId: string; exitCode: number | null }) => void
+  ) => () => void
 }
 
 interface SessionPickerAPI {
