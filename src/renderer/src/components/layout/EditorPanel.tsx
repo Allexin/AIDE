@@ -285,6 +285,7 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
       diskMtimeRef.current = mtime
       const lang = getLanguage(filePath)
       setLanguage(lang)
+      useEditorStore.getState().setCurrentLanguage(lang)
 
       if (editorRef.current && monacoRef.current) {
         if (editorRef.current.getValue() !== content) {
@@ -376,6 +377,8 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
       setNoDiffState(null)
       setLargeFileSizeMb(null)
       pendingLargeFileRef.current = null
+      useEditorStore.getState().setCursorPosition(null)
+      useEditorStore.getState().setCurrentLanguage(null)
       return
     }
 
@@ -548,6 +551,21 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
     }
 
     editor.onDidBlurEditorText(() => handleBlurRef.current())
+
+    // Track cursor position for status bar
+    editor.onDidChangeCursorPosition((e) => {
+      useEditorStore.getState().setCursorPosition({
+        line: e.position.lineNumber,
+        column: e.position.column
+      })
+    })
+    const initialPos = editor.getPosition()
+    if (initialPos) {
+      useEditorStore.getState().setCursorPosition({
+        line: initialPos.lineNumber,
+        column: initialPos.column
+      })
+    }
   }
 
   // ── Large file handlers ─────────────────────────────────────────────────────

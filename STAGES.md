@@ -209,6 +209,43 @@
 
 ---
 
+## Stage 8 — Status Bar
+
+**Status:** Complete ✓
+
+### What was built
+- `src/main/filetree/gitStatus.ts`: extended `GitStatusResult` with `untracked: string[]` (files with `??` status, previously folded into `changed`) and `branch: string | null` (from `git rev-parse --abbrev-ref HEAD`, run in parallel with `git status --porcelain` via `Promise.allSettled`); `parsePorcelain` now routes `??` lines to `untracked` instead of `changed`
+- `src/renderer/src/env.d.ts`: updated `GitStatusResult` to match — added `untracked` and `branch` fields
+- `src/renderer/src/store/useEditorStore.ts`: added `cursorPosition: { line, column } | null` and `currentLanguage: string | null` state fields; added `setCursorPosition` and `setCurrentLanguage` actions; `closeEditor` now clears both fields
+- `src/renderer/src/components/layout/EditorPanel.tsx`: `applyFileToEditor` calls `setCurrentLanguage(lang)` after computing the Monaco language ID; close path calls `setCursorPosition(null)` and `setCurrentLanguage(null)`; `handleEditorMount` subscribes to `editor.onDidChangeCursorPosition` → `setCursorPosition`; also sets initial cursor position on mount
+- `src/renderer/src/components/filetree/FileTree.tsx`: `isChanged` check and "Modified only" mode now include both `changed` and `untracked` paths; "No changes" guard checks `changed.length === 0 && untracked.length === 0`; `buildModifiedTree` receives `[...changed, ...untracked]`
+- `src/renderer/src/store/useFileTreeStore.ts`: log message in `refresh()` updated to count `changed + untracked` combined
+- `src/renderer/src/components/layout/StatusBar.tsx`: full implementation with 5 sensors:
+  - **Git branch** (left): shows `⎇ <branch>` when git available; hidden if git not initialized
+  - **File git status** (left): shows `●` if `openRelativePath ∈ changed`, `?` if `∈ untracked`, empty if clean or no file open
+  - **Cursor position** (right): `Ln N, Col N` from Monaco cursor events; hidden if no file open
+  - **File language** (right): Monaco language ID mapped to display name (TypeScript, JSON, etc.); hidden if no file open
+  - **File encoding** (right): always `UTF-8` when file is open; hidden otherwise
+
+### Claude's checks
+- `tsc --noEmit -p tsconfig.node.json` — **0 errors**
+- `tsc --noEmit -p tsconfig.web.json` — **0 errors**
+- `npm run build` — **succeeded** (renderer 8,081 kB)
+
+### User test checklist
+1. Open a project with a git repo — status bar shows `⎇ main` (or current branch) on the left
+2. Open a non-git directory — branch sensor hidden; status bar shows no left content
+3. Click a tracked file with no changes — no `●` or `?` shown in status bar
+4. Click a modified tracked file — `●` appears in status bar
+5. Click a new untracked file — `?` appears in status bar
+6. Move cursor in editor — `Ln N, Col N` updates in real time on the right
+7. File language shows correct name (e.g. `TypeScript`, `Python`, `Markdown`)
+8. File encoding shows `UTF-8` when a file is open
+9. Close the editor (×) — cursor, language, encoding, and file status sensors all disappear
+10. Switch files — all right sensors update to reflect the new file
+
+---
+
 ## Stage 5 — Terminal + Sessions
 
 **Status:** Complete ✓

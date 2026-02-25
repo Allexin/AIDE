@@ -29,8 +29,10 @@ interface TreeNode {
 // Result of running git status --porcelain.
 interface GitStatusResult {
   available: boolean
-  changed: string[] // relative forward-slash paths of changed/untracked files
-  deleted: string[] // relative forward-slash paths of deleted files
+  changed: string[]   // relative forward-slash paths of tracked changed files
+  deleted: string[]   // relative forward-slash paths of deleted files
+  untracked: string[] // relative forward-slash paths of untracked files (??)
+  branch: string | null // current branch name; null if git unavailable
 }
 
 // A Claude Code session as stored on disk.

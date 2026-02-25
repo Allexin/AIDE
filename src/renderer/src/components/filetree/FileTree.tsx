@@ -184,9 +184,10 @@ function NodeItem({
     preloadedChildren ?? (isExpanded ? ((dirContents.get(node.path) as AnyNode[]) ?? []) : [])
 
   const isSelected = openFile === node.path
+  const allChanged = gitStatus ? [...gitStatus.changed, ...gitStatus.untracked] : []
   const isChanged = isDir
-    ? (gitStatus?.changed.some((p) => p.startsWith(node.relativePath + '/')) ?? false)
-    : (gitStatus?.changed.includes(node.relativePath) ?? false)
+    ? allChanged.some((p) => p.startsWith(node.relativePath + '/'))
+    : allChanged.includes(node.relativePath)
 
   const bgColor = isSelected ? '#37373d' : hovered ? '#2a2d2e' : 'transparent'
 
@@ -310,7 +311,7 @@ export default function FileTree(): React.ReactElement {
         </div>
       )
     }
-    if (gitStatus.changed.length === 0) {
+    if (gitStatus.changed.length === 0 && gitStatus.untracked.length === 0) {
       return (
         <div style={centerStyle}>
           <span style={msgStyle}>No changes in project</span>
@@ -318,7 +319,7 @@ export default function FileTree(): React.ReactElement {
       )
     }
 
-    const virtualTree = buildModifiedTree(gitStatus.changed, projectPath)
+    const virtualTree = buildModifiedTree([...gitStatus.changed, ...gitStatus.untracked], projectPath)
     return (
       <div style={{ overflowY: 'auto', flex: 1 }}>
         {virtualTree.map((vnode) => (

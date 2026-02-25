@@ -108,7 +108,7 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
     } else {
       logManager.append(
         'Git',
-        `${gitStatus.changed.length} changed, ${gitStatus.deleted.length} deleted`
+        `${gitStatus.changed.length + gitStatus.untracked.length} changed, ${gitStatus.deleted.length} deleted`
       )
     }
 

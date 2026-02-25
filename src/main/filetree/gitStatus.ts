@@ -5,13 +5,16 @@ const execFileAsync = promisify(execFile)
 
 export interface GitStatusResult {
   available: boolean
-  changed: string[] // relative paths, forward slashes
-  deleted: string[] // relative paths, forward slashes
+  changed: string[]   // tracked changed files (modified, staged, etc. — not deleted, not untracked)
+  deleted: string[]   // deleted tracked files
+  untracked: string[] // files git does not know about (??)
+  branch: string | null // current branch name; null if unavailable or detached HEAD
 }
 
-function parsePorcelain(output: string): Pick<GitStatusResult, 'changed' | 'deleted'> {
+function parsePorcelain(output: string): Pick<GitStatusResult, 'changed' | 'deleted' | 'untracked'> {
   const changed: string[] = []
   const deleted: string[] = []
+  const untracked: string[] = []
 
   for (const line of output.split('\n')) {
     if (line.length < 4) continue
@@ -25,27 +28,38 @@ function parsePorcelain(output: string): Pick<GitStatusResult, 'changed' | 'dele
     filePath = filePath.trim()
     if (!filePath) continue
 
-    // git always uses forward slashes; check for delete status
-    const isDeleted = xy[0] === 'D' || xy[1] === 'D'
-    if (isDeleted) {
+    if (xy === '??') {
+      untracked.push(filePath)
+    } else if (xy[0] === 'D' || xy[1] === 'D') {
       deleted.push(filePath)
     } else {
       changed.push(filePath)
     }
   }
 
-  return { changed, deleted }
+  return { changed, deleted, untracked }
 }
 
 export async function runGitStatus(projectPath: string): Promise<GitStatusResult> {
-  try {
-    const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
+  const [statusResult, branchResult] = await Promise.allSettled([
+    execFileAsync('git', ['status', '--porcelain'], {
       cwd: projectPath,
       timeout: 15000,
       windowsHide: true
+    }),
+    execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: projectPath,
+      timeout: 5000,
+      windowsHide: true
     })
-    return { available: true, ...parsePorcelain(stdout) }
-  } catch {
-    return { available: false, changed: [], deleted: [] }
+  ])
+
+  if (statusResult.status === 'rejected') {
+    return { available: false, changed: [], deleted: [], untracked: [], branch: null }
   }
+
+  const branch =
+    branchResult.status === 'fulfilled' ? branchResult.value.stdout.trim() || null : null
+
+  return { available: true, ...parsePorcelain(statusResult.value.stdout), branch }
 }

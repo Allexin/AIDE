@@ -7,6 +7,8 @@ interface EditorState {
   editorConfig: EditorConfig | null // Monaco editor options from app config
   openDiffOnLoad: boolean // if true, switch to diff mode after next file load
   triggerDiffNow: boolean // if true, trigger diff on the already-open file
+  cursorPosition: { line: number; column: number } | null // for status bar
+  currentLanguage: string | null // Monaco language ID of the open file
 
   openFileInEditor: (absolutePath: string, relativePath: string) => void
   closeEditor: () => void
@@ -14,6 +16,8 @@ interface EditorState {
   setOpenDiffOnLoad: (val: boolean) => void
   setTriggerDiffNow: (val: boolean) => void
   viewDiff: (absolutePath: string, relativePath: string) => void
+  setCursorPosition: (pos: { line: number; column: number } | null) => void
+  setCurrentLanguage: (lang: string | null) => void
 }
 
 export const useEditorStore = create<EditorState>((set, get) => ({
@@ -22,6 +26,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   editorConfig: null,
   openDiffOnLoad: false,
   triggerDiffNow: false,
+  cursorPosition: null,
+  currentLanguage: null,
 
   openFileInEditor: (absolutePath: string, relativePath: string) => {
     set({ openFile: absolutePath, openRelativePath: relativePath })
@@ -29,7 +35,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   closeEditor: () => {
-    set({ openFile: null, openRelativePath: null, openDiffOnLoad: false, triggerDiffNow: false })
+    set({
+      openFile: null,
+      openRelativePath: null,
+      openDiffOnLoad: false,
+      triggerDiffNow: false,
+      cursorPosition: null,
+      currentLanguage: null
+    })
     usePanelStore.getState().setEditorVisible(false)
   },
 
@@ -49,5 +62,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       set({ openDiffOnLoad: true })
       get().openFileInEditor(absolutePath, relativePath)
     }
-  }
+  },
+
+  setCursorPosition: (pos) => set({ cursorPosition: pos }),
+
+  setCurrentLanguage: (lang) => set({ currentLanguage: lang })
 }))
