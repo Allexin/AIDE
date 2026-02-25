@@ -2,6 +2,7 @@ import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { existsSync } from 'fs'
 import { removeRecentProject, getAppState } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
+import { readProjectSettings } from '../config/projectConfig'
 import { openProjectAndTrack } from '../windows/editor'
 
 export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void {
@@ -50,4 +51,18 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
 
   // ── App state: get ──────────────────────────────────────────────────────────
   ipcMain.handle('state:get', () => getAppState())
+
+  // ── Editor: get project panel settings (activePanelRatio, collapsedWidthPx) ─
+  ipcMain.handle('editor:get-project-settings', (event) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return { activePanelRatio: 0.75, collapsedWidthPx: 20 }
+
+    for (const [projectPath, win] of openProjects) {
+      if (win === senderWin) {
+        const s = readProjectSettings(projectPath)
+        return { activePanelRatio: s.activePanelRatio, collapsedWidthPx: s.collapsedWidthPx }
+      }
+    }
+    return { activePanelRatio: 0.75, collapsedWidthPx: 20 }
+  })
 }

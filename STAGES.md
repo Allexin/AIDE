@@ -66,3 +66,38 @@
 6. `npm run build && npx electron out/main/index.js <path>` — Editor opens without Picker
 
 ---
+
+## Stage 3 — Layout + Panel System
+
+**Status:** Complete ✓
+
+### What was built
+- `src/renderer/src/store/usePanelStore.ts`: Zustand store — `activePanelRatio`, `collapsedWidthPx`, `fileTreeWidthPx`, `logPanelExpandedHeightPx`, `editorVisible`, `terminalCollapsed`, `logPanelExpanded`, `focusedPanel`; actions: `initFromConfig`, `setEditorVisible`, `toggleTerminalCollapse`, `focusEditor`, `focusTerminal`, `toggleLogPanel`
+- `src/renderer/src/components/layout/MainToolbar.tsx`: full-width 36px toolbar strip (empty, Stage 9 populates)
+- `src/renderer/src/components/layout/FileTreeColumn.tsx`: fixed-width left column with FileTreeToolbar (▣ ↺ ◎ buttons + temp [E] toggle for testing); file tree content placeholder
+- `src/renderer/src/components/layout/EditorPanel.tsx`: panel with header (file path, [Diff], [×]) + Monaco placeholder; `onMouseDown` triggers `focusEditor()`; [×] calls `setEditorVisible(false)`
+- `src/renderer/src/components/layout/TerminalPanel.tsx`: full panel (header with tabs placeholder, [+], [⌄] collapse) or 20px collapsed strip with vertical "Claude Code" label; `onMouseDown` triggers `focusTerminal()`; strip click restores
+- `src/renderer/src/components/layout/LogPanel.tsx`: collapsed 28px strip with [∧]/[∨] toggle; expands to `logPanelExpandedHeightPx`; channel tabs in Stage 7
+- `src/renderer/src/components/layout/StatusBar.tsx`: 22px blue bar; sensors in Stage 8
+- `src/renderer/src/windows/EditorApp.tsx`: full layout — loads `getProjectSettings()` + `getConfig()` on mount via IPC, calls `initFromConfig()`, computes editor/terminal flex widths from `focusedPanel` + `activePanelRatio`; terminal always on right (empty spacer for collapsed strip when editor hidden)
+- `src/preload/editor.ts`: added `getProjectSettings()` and `getConfig()` IPC bridges
+- `src/main/ipc/index.ts`: added `editor:get-project-settings` handler (reads `readProjectSettings` for sender window's project)
+- `src/renderer/src/env.d.ts`: updated `EditorAPI` with `getProjectSettings` and `getConfig`
+
+### Claude's checks
+- `tsc --noEmit -p tsconfig.node.json` — **0 errors**
+- `tsc --noEmit -p tsconfig.web.json` — **0 errors**
+- `npm run build` — **succeeded** (main 9.75 kB, preloads 0.89 kB, renderer 240 kB)
+
+### User test checklist
+1. `npm run dev` — Editor window opens; terminal placeholder takes full width, no editor visible
+2. Click **[E]** temp button (top-right of file tree toolbar) → editor appears at ~75%, terminal at ~25%
+3. Click in editor area → editor stays at 75%, terminal at 25%
+4. Click in terminal area → terminal expands to ~75%, editor shrinks to ~25%
+5. Click **[⌄]** collapse button in terminal header → terminal shrinks to 20px strip with "Claude Code" label
+6. Click the strip → terminal restores to previous size
+7. Click **[E]** again to close editor → terminal expands to full width; if terminal was collapsed before close, it remains collapsed
+8. Click **[∧]** button in log strip → log panel expands; click **[∨]** → collapses back
+9. Resize window → panels scale proportionally
+
+---

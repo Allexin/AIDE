@@ -1,30 +1,106 @@
 import React, { useEffect, useState } from 'react'
+import { usePanelStore } from '../store/usePanelStore'
+import MainToolbar from '../components/layout/MainToolbar'
+import FileTreeColumn from '../components/layout/FileTreeColumn'
+import EditorPanel from '../components/layout/EditorPanel'
+import TerminalPanel from '../components/layout/TerminalPanel'
+import LogPanel from '../components/layout/LogPanel'
+import StatusBar from '../components/layout/StatusBar'
 
 export default function EditorApp(): React.ReactElement {
-  const [projectPath, setProjectPath] = useState<string | null>(null)
+  const [initialized, setInitialized] = useState(false)
 
+  const {
+    activePanelRatio,
+    collapsedWidthPx,
+    editorVisible,
+    terminalCollapsed,
+    focusedPanel,
+    initFromConfig
+  } = usePanelStore()
+
+  // Load config from main process and initialize the panel store
   useEffect(() => {
-    window.editorApi.getProjectPath().then(setProjectPath)
-  }, [])
+    async function init(): Promise<void> {
+      const [projectSettings, appConfig] = await Promise.all([
+        window.editorApi.getProjectSettings(),
+        window.editorApi.getConfig()
+      ])
+      initFromConfig({
+        activePanelRatio: projectSettings.activePanelRatio,
+        collapsedWidthPx: projectSettings.collapsedWidthPx,
+        fileTreeWidthPx: appConfig.ui.fileTreeWidthPx,
+        logPanelExpandedHeightPx: appConfig.ui.logPanelExpandedHeightPx
+      })
+      setInitialized(true)
+    }
+    init()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Blank dark screen while config loads (IPC is fast — imperceptible)
+  if (!initialized) {
+    return <div style={{ background: '#1e1e1e', height: '100vh' }} />
+  }
+
+  // ── Panel sizing ─────────────────────────────────────────────────────────────
+  //
+  // Center area is a flex row: [left slot] [terminal]
+  // The terminal is always on the right. The left slot holds the editor (or an
+  // empty spacer that keeps the terminal pinned to the right when collapsed).
+  //
+  // focusedPanel === 'editor'  → editor gets activePanelRatio,   terminal gets 1-ratio
+  // focusedPanel === 'terminal' → terminal gets activePanelRatio, editor gets 1-ratio
+
+  const editorRatio = focusedPanel === 'editor' ? activePanelRatio : 1 - activePanelRatio
+  const terminalRatio = focusedPanel === 'terminal' ? activePanelRatio : 1 - activePanelRatio
+
+  // Left slot style (editor panel or empty spacer)
+  const leftStyle: React.CSSProperties = terminalCollapsed
+    ? { flex: 1, minWidth: 0, overflow: 'hidden' }
+    : { flex: editorRatio, minWidth: 0, overflow: 'hidden' }
+
+  // Terminal panel style
+  let terminalStyle: React.CSSProperties
+  if (terminalCollapsed) {
+    terminalStyle = { width: collapsedWidthPx, flexShrink: 0 }
+  } else if (editorVisible) {
+    terminalStyle = { flex: terminalRatio, minWidth: 0, overflow: 'hidden' }
+  } else {
+    terminalStyle = { flex: 1, minWidth: 0, overflow: 'hidden' }
+  }
 
   return (
     <div
       style={{
         display: 'flex',
         flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
         height: '100vh',
-        gap: '8px',
-        fontFamily: 'Consolas, monospace'
+        overflow: 'hidden',
+        background: '#1e1e1e'
       }}
     >
-      <div style={{ fontSize: '11px', color: '#555', textTransform: 'uppercase', letterSpacing: '1px' }}>
-        Stage 1 — Editor Placeholder
+      <MainToolbar />
+
+      {/* Main content row: file tree + center area */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        <FileTreeColumn />
+
+        {/* Center area: editor (left) + terminal (right) */}
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+          {editorVisible ? (
+            // Editor panel with computed flex width
+            <EditorPanel style={leftStyle} />
+          ) : (
+            // Empty spacer keeps terminal strip pinned to the right when collapsed
+            terminalCollapsed && <div style={{ flex: 1 }} />
+          )}
+
+          <TerminalPanel style={terminalStyle} />
+        </div>
       </div>
-      <div style={{ fontSize: '14px', color: '#858585' }}>
-        {projectPath ?? 'Loading…'}
-      </div>
+
+      <LogPanel />
+      <StatusBar />
     </div>
   )
 }

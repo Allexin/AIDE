@@ -13,8 +13,17 @@ interface PickerAPI {
   removeRecentProject: (path: string) => Promise<void>
 }
 
+interface ProjectSettings {
+  activePanelRatio: number
+  collapsedWidthPx: number
+}
+
 interface EditorAPI {
   getProjectPath: () => Promise<string | null>
+  getProjectSettings: () => Promise<ProjectSettings>
+  getConfig: () => Promise<{
+    ui: { fileTreeWidthPx: number; logPanelExpandedHeightPx: number }
+  }>
 }
 
 declare interface Window {
