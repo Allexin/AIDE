@@ -26,7 +26,7 @@ function buildModifiedTree(changedPaths: string[], projectPath: string): VNode[]
     for (let i = 0; i < parts.length; i++) {
       const p = parts[i]
       if (i === parts.length - 1) {
-        cur.files.push(p)
+        if (p) cur.files.push(p) // skip empty segment (trailing slash = untracked dir entry)
       } else {
         if (!cur.subs.has(p)) {
           cur.subs.set(p, {
@@ -187,7 +187,10 @@ function NodeItem({
   const allChanged = gitStatus ? [...gitStatus.changed, ...gitStatus.untracked] : []
   const isChanged = isDir
     ? allChanged.some((p) => p.startsWith(node.relativePath + '/'))
-    : allChanged.includes(node.relativePath)
+    : allChanged.includes(node.relativePath) ||
+      (gitStatus?.untracked.some(
+        (p) => p.endsWith('/') && node.relativePath.startsWith(p)
+      ) ?? false)
 
   const bgColor = isSelected ? '#37373d' : hovered ? '#2a2d2e' : 'transparent'
 

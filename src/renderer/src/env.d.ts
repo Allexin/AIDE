@@ -136,6 +136,19 @@ interface EditorAPI {
   onToolbarProcessExited: (
     cb: (payload: { buttonId: string; exitCode: number | null }) => void
   ) => () => void
+
+  // Git commit
+  gitGetCommitFiles: () => Promise<{
+    available: boolean
+    changed: string[]
+    deleted: string[]
+    untracked: string[]
+    truncated: boolean
+  }>
+  gitRunCommit: (files: string[], message: string, stageAll?: boolean) => Promise<{ success: boolean; error?: string }>
+  onGitCommitOutput: (
+    cb: (payload: { line: string; stream: 'stdout' | 'stderr' }) => void
+  ) => () => void
 }
 
 interface SessionPickerAPI {

@@ -22,10 +22,15 @@ export interface SessionsConfig {
   maxRecentProjects: number
 }
 
+export interface GitConfig {
+  addBatchSize: number // files per `git add` call in commit dialog
+}
+
 export interface AppConfig {
   editor: EditorConfig
   ui: UiConfig
   sessions: SessionsConfig
+  git: GitConfig
 }
 
 const DEFAULTS: AppConfig = {
@@ -45,6 +50,9 @@ const DEFAULTS: AppConfig = {
   sessions: {
     maxSessionsInPicker: 20,
     maxRecentProjects: 20
+  },
+  git: {
+    addBatchSize: 10
   }
 }
 
@@ -63,7 +71,8 @@ export function initAppConfig(): void {
         ...parsed,
         editor: { ...DEFAULTS.editor, ...(parsed.editor ?? {}) },
         ui: { ...DEFAULTS.ui, ...(parsed.ui ?? {}) },
-        sessions: { ...DEFAULTS.sessions, ...(parsed.sessions ?? {}) }
+        sessions: { ...DEFAULTS.sessions, ...(parsed.sessions ?? {}) },
+        git: { ...DEFAULTS.git, ...(parsed.git ?? {}) }
       }
     } catch {
       config = structuredClone(DEFAULTS)

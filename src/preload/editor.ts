@@ -108,6 +108,23 @@ export interface EditorAPI {
   onToolbarProcessExited: (
     cb: (payload: { buttonId: string; exitCode: number | null }) => void
   ) => () => void
+
+  // Git commit
+  gitGetCommitFiles: () => Promise<{
+    available: boolean
+    changed: string[]
+    deleted: string[]
+    untracked: string[]
+    truncated: boolean
+  }>
+  gitRunCommit: (
+    files: string[],
+    message: string,
+    stageAll?: boolean
+  ) => Promise<{ success: boolean; error?: string }>
+  onGitCommitOutput: (
+    cb: (payload: { line: string; stream: 'stdout' | 'stderr' }) => void
+  ) => () => void
 }
 
 const editorApi: EditorAPI = {
@@ -213,6 +230,21 @@ const editorApi: EditorAPI = {
     ): void => cb(payload)
     ipcRenderer.on('toolbar:process-exited', handler)
     return () => ipcRenderer.removeListener('toolbar:process-exited', handler)
+  },
+
+  // Git commit
+  gitGetCommitFiles: () => ipcRenderer.invoke('git:get-commit-files'),
+
+  gitRunCommit: (files, message, stageAll) =>
+    ipcRenderer.invoke('git:run-commit', { files, message, stageAll }),
+
+  onGitCommitOutput: (cb) => {
+    const handler = (
+      _: unknown,
+      payload: { line: string; stream: 'stdout' | 'stderr' }
+    ): void => cb(payload)
+    ipcRenderer.on('git:commit-output', handler)
+    return () => ipcRenderer.removeListener('git:commit-output', handler)
   }
 }
 

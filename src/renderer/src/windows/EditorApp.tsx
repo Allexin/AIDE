@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { usePanelStore } from '../store/usePanelStore'
 import { useEditorStore } from '../store/useEditorStore'
 import { useFileTreeStore } from '../store/useFileTreeStore'
+import { useToastStore } from '../store/useToastStore'
 import MainToolbar from '../components/layout/MainToolbar'
 import FileTreeColumn from '../components/layout/FileTreeColumn'
 import EditorPanel from '../components/layout/EditorPanel'
@@ -11,6 +12,8 @@ import StatusBar from '../components/layout/StatusBar'
 
 export default function EditorApp(): React.ReactElement {
   const [initialized, setInitialized] = useState(false)
+  const toast = useToastStore((s) => s.message)
+  const hideToast = useToastStore((s) => s.hide)
 
   const {
     activePanelRatio,
@@ -108,6 +111,34 @@ export default function EditorApp(): React.ReactElement {
 
       <LogPanel />
       <StatusBar />
+
+      {/* Toast notification */}
+      {toast && (
+        <div
+          onClick={hideToast}
+          style={{
+            position: 'fixed',
+            bottom: 36,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#252526',
+            border: '1px solid #454545',
+            borderRadius: 4,
+            color: '#cccccc',
+            fontSize: 13,
+            padding: '8px 16px',
+            zIndex: 2000,
+            cursor: 'pointer',
+            maxWidth: 500,
+            textAlign: 'center',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+            fontFamily: 'Cascadia Code, Consolas, monospace',
+            whiteSpace: 'pre-wrap'
+          }}
+        >
+          {toast}
+        </div>
+      )}
     </div>
   )
 }

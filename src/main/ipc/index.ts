@@ -23,6 +23,44 @@ import {
   killButtonProcess
 } from '../toolbar/processManager'
 
+// Helper: spawn one git subcommand, stream stdout/stderr lines, return success/error.
+function runGitSubcommand(
+  projectPath: string,
+  args: string[],
+  onLine: (line: string, stream: 'stdout' | 'stderr') => void
+): Promise<{ success: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    const proc = spawn('git', args, { cwd: projectPath })
+    const stderrChunks: Buffer[] = []
+
+    proc.stdout.on('data', (d: Buffer) => {
+      d.toString()
+        .split('\n')
+        .filter((l: string) => l.length > 0)
+        .forEach((l: string) => onLine(l, 'stdout'))
+    })
+
+    proc.stderr.on('data', (d: Buffer) => {
+      stderrChunks.push(d)
+      d.toString()
+        .split('\n')
+        .filter((l: string) => l.length > 0)
+        .forEach((l: string) => onLine(l, 'stderr'))
+    })
+
+    proc.on('close', (code: number | null) => {
+      if (code === 0) {
+        resolve({ success: true })
+      } else {
+        const errMsg = Buffer.concat(stderrChunks).toString().trim()
+        resolve({ success: false, error: errMsg || `git exited with code ${code}` })
+      }
+    })
+
+    proc.on('error', (err: Error) => resolve({ success: false, error: err.message }))
+  })
+}
+
 export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void {
   // ── Picker: open native folder dialog ──────────────────────────────────────
   ipcMain.handle('pick:select-folder', async () => {
@@ -388,6 +426,121 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
       }
     }
   })
+
+  // ── Git: get individual files for commit dialog ──────────────────────────────
+  // Uses --untracked-files=all to expand untracked directories into individual files.
+  // Capped at 2000 entries to avoid freezing on non-gitignored node_modules etc.
+  ipcMain.handle('git:get-commit-files', async (event) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin)
+      return { available: false, changed: [], deleted: [], untracked: [], truncated: false }
+
+    let projectPath = ''
+    for (const [p, win] of openProjects) {
+      if (win === senderWin) {
+        projectPath = p
+        break
+      }
+    }
+    if (!projectPath)
+      return { available: false, changed: [], deleted: [], untracked: [], truncated: false }
+
+    return new Promise<{
+      available: boolean
+      changed: string[]
+      deleted: string[]
+      untracked: string[]
+      truncated: boolean
+    }>((resolve) => {
+      const proc = spawn('git', ['status', '--porcelain', '--untracked-files=all'], {
+        cwd: projectPath,
+        windowsHide: true
+      })
+      const chunks: Buffer[] = []
+      proc.stdout.on('data', (d: Buffer) => chunks.push(d))
+      proc.on('close', (code: number | null) => {
+        if (code !== 0) {
+          resolve({ available: false, changed: [], deleted: [], untracked: [], truncated: false })
+          return
+        }
+        const output = Buffer.concat(chunks).toString()
+        const changed: string[] = []
+        const deleted: string[] = []
+        const untracked: string[] = []
+        const MAX = 2000
+        const lines = output.split('\n').filter((l) => l.length >= 4)
+        for (const line of lines) {
+          if (changed.length + deleted.length + untracked.length >= MAX) break
+          const xy = line.substring(0, 2)
+          let filePath = line.substring(3)
+          if (filePath.includes(' -> ')) filePath = filePath.split(' -> ')[1]
+          filePath = filePath.trim()
+          if (!filePath || filePath.endsWith('/')) continue
+          if (xy === '??') untracked.push(filePath)
+          else if (xy[0] === 'D' || xy[1] === 'D') deleted.push(filePath)
+          else changed.push(filePath)
+        }
+        resolve({ available: true, changed, deleted, untracked, truncated: lines.length > MAX })
+      })
+      proc.on('error', () =>
+        resolve({ available: false, changed: [], deleted: [], untracked: [], truncated: false })
+      )
+    })
+  })
+
+  // ── Git: run commit (git add batched + git commit, streams output) ────────────
+  ipcMain.handle(
+    'git:run-commit',
+    async (event, { files, message, stageAll }: { files: string[]; message: string; stageAll?: boolean }) => {
+      const senderWin = BrowserWindow.fromWebContents(event.sender)
+      if (!senderWin) return { success: false, error: 'No window' }
+
+      let projectPath = ''
+      for (const [p, win] of openProjects) {
+        if (win === senderWin) {
+          projectPath = p
+          break
+        }
+      }
+      if (!projectPath) return { success: false, error: 'Project not found' }
+
+      const sendLine = (line: string, stream: 'stdout' | 'stderr'): void => {
+        if (!senderWin.isDestroyed()) {
+          senderWin.webContents.send('git:commit-output', { line, stream })
+        }
+      }
+
+      // Step 1: git add — either "add -A" (stage everything) or batched individual files
+      if (stageAll) {
+        sendLine('> git add -A', 'stdout')
+        const addResult = await runGitSubcommand(projectPath, ['add', '-A'], sendLine)
+        if (!addResult.success) return { success: false, error: addResult.error }
+      } else {
+        const batchSize = Math.max(1, getAppConfig().git.addBatchSize)
+        const totalBatches = Math.ceil(files.length / batchSize)
+        for (let i = 0; i < files.length; i += batchSize) {
+          const batch = files.slice(i, i + batchSize)
+          const batchNum = Math.floor(i / batchSize) + 1
+          const label =
+            totalBatches > 1
+              ? `> git add [batch ${batchNum}/${totalBatches}: ${batch.length} files]`
+              : `> git add [${batch.length} file${batch.length !== 1 ? 's' : ''}]`
+          sendLine(label, 'stdout')
+          const addResult = await runGitSubcommand(projectPath, ['add', '--', ...batch], sendLine)
+          if (!addResult.success) return { success: false, error: addResult.error }
+        }
+      }
+
+      // Step 2: git commit
+      sendLine(`> git commit -m "${message}"`, 'stdout')
+      const commitResult = await runGitSubcommand(
+        projectPath,
+        ['commit', '-m', message],
+        sendLine
+      )
+      return { success: commitResult.success, error: commitResult.error }
+    }
+  )
 
   // ── Session picker: new session ───────────────────────────────────────────────
   ipcMain.handle('session-picker:new-session', async (event) => {
