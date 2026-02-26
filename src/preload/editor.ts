@@ -78,9 +78,9 @@ export interface EditorAPI {
   onGitStatusUpdated: (cb: (status: GitStatusResult) => void) => () => void
   onFsChanged: (cb: (event: { path: string }) => void) => () => void
 
-  // Editor file operations
-  readFile: (filePath: string) => Promise<{ content: string; mtime: number; size: number }>
-  writeFile: (filePath: string, content: string) => Promise<{ mtime: number }>
+  // Editor file operations (sync)
+  readFile: (filePath: string) => { content: string; mtime: number; size: number } | { error: string }
+  writeFile: (filePath: string, content: string) => { mtime: number } | { error: string }
   gitShowHead: (relPath: string) => Promise<{ content: string } | { error: 'untracked' | 'other' }>
 
   // Terminal
@@ -157,8 +157,8 @@ const editorApi: EditorAPI = {
   readDir: (dirPath: string) => ipcRenderer.invoke('filetree:read-dir', dirPath),
   getGitStatus: () => ipcRenderer.invoke('filetree:git-status'),
 
-  readFile: (filePath) => ipcRenderer.invoke('editor:read-file', filePath),
-  writeFile: (filePath, content) => ipcRenderer.invoke('editor:write-file', filePath, content),
+  readFile: (filePath) => ipcRenderer.sendSync('editor:read-file-sync', filePath),
+  writeFile: (filePath, content) => ipcRenderer.sendSync('editor:write-file-sync', filePath, content),
   gitShowHead: (relPath) => ipcRenderer.invoke('editor:git-show-head', relPath),
 
   onGitStatusUpdated: (cb: (status: GitStatusResult) => void) => {

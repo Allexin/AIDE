@@ -184,3 +184,43 @@ No file caching — title is read fresh from JSONL on each `scanSessions` call.
 
 **Files changed:**
 - `src/main/pty/ptyManager.ts`
+
+---
+
+## Batch F — Sync IO + Dirty Flag for Editor ✅
+
+### Problem
+
+EditorPanel had a critical bug: closing a file could zero its contents. Root cause: async `readFile`/`writeFile` IPC created race conditions. Save-on-close compared `editor.getValue()` against `diskContentRef` — if Monaco hadn't loaded content yet (empty from `defaultValue=""`), `"" !== fileContent` → wrote `""` to disk. Additionally, `EditorPanel` is conditionally rendered (unmounts/remounts on every close/open cycle), resetting all refs.
+
+### F1. Sync IPC for editor read/write
+
+**Done.** Replaced async `ipcMain.handle` + `ipcRenderer.invoke` with sync `ipcMain.on` + `event.returnValue` / `ipcRenderer.sendSync`.
+
+- `editor:read-file` → `editor:read-file-sync` — `readFileSync` + `statSync`, returns `{ content, mtime, size }` or `{ error }`
+- `editor:write-file` → `editor:write-file-sync` — `writeFileSync` + `statSync`, returns `{ mtime }` or `{ error }`
+- Return types in `EditorAPI` and `env.d.ts` changed from `Promise<T>` to `T | { error: string }`
+
+### F2. Dirty flag
+
+**Done.** `dirtyRef = useRef(false)` tracks whether the editor has unsaved changes.
+
+- Set `true` by `editor.onDidChangeModelContent()` in `handleEditorMount`
+- Set `false` in `applyFileToEditor` (freshly loaded = clean) and after every successful save
+- All save points now check `dirtyRef.current` instead of `getValue() !== diskContent`:
+  - `handleClose` — save only if dirty
+  - `handleBlurRef` — save only if dirty
+  - Auto-save on file switch (openFile useEffect) — save only if dirty
+
+### F3. Removed async patterns from EditorPanel
+
+- `loadFile`, `saveFile`, `handleConflictKeepMine`, `handleConflictBackup` — all sync now
+- `onFsChanged` handler — sync `readFile`, uses `dirtyRef.current` for conflict detection
+- Removed `.catch(() => {})` patterns, replaced with `'error' in result` checks
+- Removed stale-file bail check (`if (filePath !== openFile) return`) — no async gap
+
+**Files changed:**
+- `src/main/ipc/index.ts` — sync IPC handlers, added `readFileSync`/`writeFileSync`/`statSync` imports
+- `src/preload/editor.ts` — sync bridge methods + updated `EditorAPI` types
+- `src/renderer/src/env.d.ts` — sync return types for `readFile`/`writeFile`
+- `src/renderer/src/components/layout/EditorPanel.tsx` — dirty flag + all sync conversions

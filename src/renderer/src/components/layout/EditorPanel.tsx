@@ -256,6 +256,9 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
   const pendingContentRef = useRef<string | null>(null)
   const pendingLangRef = useRef<string | null>(null)
 
+  // ── Dirty flag ──────────────────────────────────────────────────────────────
+  const dirtyRef = useRef(false)
+
   // ── Conflict refs ───────────────────────────────────────────────────────────
   const conflictSuppressedRef = useRef<boolean>(false)
   const conflictDiskContentRef = useRef<string>('')
@@ -283,6 +286,7 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
       loadedFileRef.current = filePath
       diskContentRef.current = content
       diskMtimeRef.current = mtime
+      dirtyRef.current = false
       const lang = getLanguage(filePath)
       setLanguage(lang)
       useEditorStore.getState().setCurrentLanguage(lang)
@@ -336,32 +340,25 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
   // ── File loading ────────────────────────────────────────────────────────────
 
   const loadFile = useCallback(
-    async (filePath: string) => {
-      let result: { content: string; mtime: number; size: number }
-      try {
-        result = await window.editorApi.readFile(filePath)
-      } catch {
-        return
-      }
-
-      // Bail if the user switched to a different file while we were reading
-      if (filePath !== useEditorStore.getState().openFile) return
+    (filePath: string) => {
+      const readResult = window.editorApi.readFile(filePath)
+      if ('error' in readResult) return
 
       const maxBytes = (editorConfig?.maxFileSizeMb ?? 5) * 1024 * 1024
-      if (result.size > maxBytes) {
-        pendingLargeFileRef.current = { path: filePath, content: result.content, mtime: result.mtime }
-        setLargeFileSizeMb(result.size / (1024 * 1024))
+      if (readResult.size > maxBytes) {
+        pendingLargeFileRef.current = { path: filePath, content: readResult.content, mtime: readResult.mtime }
+        setLargeFileSizeMb(readResult.size / (1024 * 1024))
         return
       }
 
-      applyFileToEditor(filePath, result.content, result.mtime)
+      applyFileToEditor(filePath, readResult.content, readResult.mtime)
       setDiffMode(false)
 
       // If openDiffOnLoad was set (from "View Diff" context menu), load diff now
       const shouldDiff = useEditorStore.getState().openDiffOnLoad
       if (shouldDiff) {
         setOpenDiffOnLoad(false)
-        await loadDiff(filePath, result.content, 'context')
+        loadDiff(filePath, readResult.content, 'context')
       }
     },
     [editorConfig, applyFileToEditor, loadDiff, setOpenDiffOnLoad]
@@ -384,11 +381,14 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
 
     // Auto-save previous file before loading the new one
     const prevFile = loadedFileRef.current
-    if (prevFile && prevFile !== openFile && editorRef.current) {
+    if (prevFile && prevFile !== openFile && editorRef.current && dirtyRef.current) {
       const content = editorRef.current.getValue()
-      if (content !== diskContentRef.current) {
-        window.editorApi.writeFile(prevFile, content).catch(() => {})
+      const writeResult = window.editorApi.writeFile(prevFile, content)
+      if (!('error' in writeResult)) {
+        diskContentRef.current = content
+        diskMtimeRef.current = writeResult.mtime
       }
+      dirtyRef.current = false
     }
 
     setLargeFileSizeMb(null)
@@ -410,16 +410,13 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
 
   // ── Auto-save ───────────────────────────────────────────────────────────────
 
-  const saveFile = useCallback(async (filePath: string, content: string): Promise<void> => {
-    try {
-      const result = await window.editorApi.writeFile(filePath, content)
-      // Only update refs if this file is still loaded (user might have switched)
-      if (loadedFileRef.current === filePath) {
-        diskContentRef.current = content
-        diskMtimeRef.current = result.mtime
-      }
-    } catch {
-      // ignore write errors
+  const saveFile = useCallback((filePath: string, content: string): void => {
+    const result = window.editorApi.writeFile(filePath, content)
+    if ('error' in result) return
+    if (loadedFileRef.current === filePath) {
+      diskContentRef.current = content
+      diskMtimeRef.current = result.mtime
+      dirtyRef.current = false
     }
   }, [])
 
@@ -428,36 +425,29 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
   useEffect(() => {
     handleBlurRef.current = () => {
       if (conflictSuppressedRef.current) return
+      if (!dirtyRef.current) return
       const filePath = loadedFileRef.current
       if (!filePath || !editorRef.current) return
-      const content = editorRef.current.getValue()
-      if (content !== diskContentRef.current) {
-        saveFile(filePath, content)
-      }
+      saveFile(filePath, editorRef.current.getValue())
     }
   })
 
   // ── External modification (FS watcher) ──────────────────────────────────────
 
   useEffect(() => {
-    const unsub = window.editorApi.onFsChanged(async (event) => {
+    const unsub = window.editorApi.onFsChanged((event) => {
       if (conflictSuppressedRef.current) return
       const changedPath = event.path
       if (changedPath !== loadedFileRef.current) return
 
-      let result: { content: string; mtime: number; size: number }
-      try {
-        result = await window.editorApi.readFile(changedPath)
-      } catch {
-        return // File deleted — FileTreeStore will close the editor
-      }
+      const result = window.editorApi.readFile(changedPath)
+      if ('error' in result) return // File deleted — FileTreeStore will close the editor
 
       // Ignore if mtime hasn't advanced (means this was triggered by our own save)
       if (result.mtime <= diskMtimeRef.current) return
 
       if (!editorRef.current) return
-      const currentContent = editorRef.current.getValue()
-      const hasLocalChanges = currentContent !== diskContentRef.current
+      const hasLocalChanges = dirtyRef.current
 
       if (!hasLocalChanges) {
         // Silent reload: user has no pending edits
@@ -484,25 +474,21 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
     setShowConflict(false)
   }
 
-  const handleConflictKeepMine = async (): Promise<void> => {
+  const handleConflictKeepMine = (): void => {
     if (!loadedFileRef.current || !editorRef.current) return
-    const content = editorRef.current.getValue()
-    await saveFile(loadedFileRef.current, content)
+    saveFile(loadedFileRef.current, editorRef.current.getValue())
     conflictSuppressedRef.current = false
     setShowConflict(false)
   }
 
-  const handleConflictBackup = async (): Promise<void> => {
+  const handleConflictBackup = (): void => {
     if (!loadedFileRef.current || !editorRef.current || !openRelativePath) return
     const content = editorRef.current.getValue()
     const timestamp = Date.now()
     const backupAbsPath = `${loadedFileRef.current}.${timestamp}.backup`
     const backupRelPath = `${openRelativePath}.${timestamp}.backup`
-    try {
-      await window.editorApi.writeFile(backupAbsPath, content)
-    } catch {
-      return
-    }
+    const result = window.editorApi.writeFile(backupAbsPath, content)
+    if ('error' in result) return
     conflictSuppressedRef.current = false
     setShowConflict(false)
     openFileInEditor(backupAbsPath, backupRelPath)
@@ -523,11 +509,8 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
 
   const handleClose = (): void => {
     // Auto-save before closing
-    if (loadedFileRef.current && editorRef.current) {
-      const content = editorRef.current.getValue()
-      if (content !== diskContentRef.current) {
-        window.editorApi.writeFile(loadedFileRef.current, content).catch(() => {})
-      }
+    if (loadedFileRef.current && editorRef.current && dirtyRef.current) {
+      saveFile(loadedFileRef.current, editorRef.current.getValue())
     }
     closeEditor()
   }
@@ -582,6 +565,7 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
       pendingLangRef.current = null
     }
 
+    editor.onDidChangeModelContent(() => { dirtyRef.current = true })
     editor.onDidBlurEditorText(() => handleBlurRef.current())
 
     // Track cursor position for status bar

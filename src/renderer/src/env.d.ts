@@ -106,8 +106,8 @@ interface EditorAPI {
   onFsChanged: (cb: (event: { path: string }) => void) => () => void
 
   // Editor file operations
-  readFile: (filePath: string) => Promise<{ content: string; mtime: number; size: number }>
-  writeFile: (filePath: string, content: string) => Promise<{ mtime: number }>
+  readFile: (filePath: string) => { content: string; mtime: number; size: number } | { error: string }
+  writeFile: (filePath: string, content: string) => { mtime: number } | { error: string }
   gitShowHead: (relPath: string) => Promise<{ content: string } | { error: 'untracked' | 'other' }>
 
   // Terminal

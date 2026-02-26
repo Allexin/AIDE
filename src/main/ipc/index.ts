@@ -1,5 +1,5 @@
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
-import { existsSync, readdirSync, promises as fsAsync } from 'fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync, statSync, promises as fsAsync } from 'fs'
 import { join } from 'path'
 import { spawn } from 'child_process'
 import { removeRecentProject, getAppState } from '../config/appState'
@@ -282,20 +282,26 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     pickerWin.close()
   })
 
-  // ── Editor: read file (content + mtime + size) ────────────────────────────────
-  ipcMain.handle('editor:read-file', async (_event, filePath: string) => {
-    const [stat, content] = await Promise.all([
-      fsAsync.stat(filePath),
-      fsAsync.readFile(filePath, 'utf-8')
-    ])
-    return { content, mtime: stat.mtimeMs, size: stat.size }
+  // ── Editor: read file sync (content + mtime + size) ────────────────────────────
+  ipcMain.on('editor:read-file-sync', (event, filePath: string) => {
+    try {
+      const content = readFileSync(filePath, 'utf-8')
+      const stat = statSync(filePath)
+      event.returnValue = { content, mtime: stat.mtimeMs, size: stat.size }
+    } catch (err) {
+      event.returnValue = { error: (err as Error).message }
+    }
   })
 
-  // ── Editor: write file (returns new mtime) ────────────────────────────────────
-  ipcMain.handle('editor:write-file', async (_event, filePath: string, content: string) => {
-    await fsAsync.writeFile(filePath, content, 'utf-8')
-    const stat = await fsAsync.stat(filePath)
-    return { mtime: stat.mtimeMs }
+  // ── Editor: write file sync (returns new mtime) ────────────────────────────────
+  ipcMain.on('editor:write-file-sync', (event, filePath: string, content: string) => {
+    try {
+      writeFileSync(filePath, content, 'utf-8')
+      const stat = statSync(filePath)
+      event.returnValue = { mtime: stat.mtimeMs }
+    } catch (err) {
+      event.returnValue = { error: (err as Error).message }
+    }
   })
 
   // ── Editor: git show HEAD:<relPath> ───────────────────────────────────────────
