@@ -7,6 +7,7 @@ import { releaseLock } from './lock'
 import { createPickerWindow } from './windows/picker'
 import { openProjectAndTrack } from './windows/editor'
 import { setupIpcHandlers } from './ipc'
+import { setupMenu } from './menu'
 
 // Map of projectPath → editor BrowserWindow
 const openProjects = new Map<string, BrowserWindow>()
@@ -35,6 +36,7 @@ app.whenReady().then(() => {
   initAppConfig()
   initAppState()
   setupIpcHandlers(openProjects)
+  setupMenu(openProjects, (path) => openProjectAndTrack(path, openProjects))
 
   const startupPath = resolveStartupProject()
 

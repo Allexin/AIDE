@@ -22,6 +22,7 @@ import {
   spawnButtonProcess,
   killButtonProcess
 } from '../toolbar/processManager'
+import { setEditorFileOpen } from '../menu'
 
 // Helper: spawn one git subcommand, stream stdout/stderr lines, return success/error.
 function runGitSubcommand(
@@ -544,6 +545,13 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
       return { success: commitResult.success, error: commitResult.error }
     }
   )
+
+  // ── Menu: editor file open state ──────────────────────────────────────────────
+  // Renderer notifies when a file is opened/closed so Edit menu can be enabled/disabled
+  ipcMain.on('menu:editor-file-changed', (event, hasFile: boolean) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (senderWin) setEditorFileOpen(senderWin, hasFile)
+  })
 
   // ── Session picker: new session ───────────────────────────────────────────────
   ipcMain.handle('session-picker:new-session', async (event) => {

@@ -1,4 +1,4 @@
-import { l as languages } from "./index-DoqN-NTn.js";
+import { l as languages } from "./index-BAkB4JZt.js";
 const EMPTY_ELEMENTS = [
   "area",
   "base",

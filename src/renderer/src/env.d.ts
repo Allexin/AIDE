@@ -89,6 +89,10 @@ interface ToolbarInfo {
 }
 
 interface EditorAPI {
+  // Menu
+  notifyEditorFileChanged: (hasFile: boolean) => void
+  onMenuEditCommand: (cb: (command: string) => void) => () => void
+
   getProjectPath: () => Promise<string | null>
   getProjectSettings: () => Promise<ProjectSettings>
   getConfig: () => Promise<{

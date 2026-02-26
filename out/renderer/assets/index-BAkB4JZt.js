@@ -1,4 +1,4 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["./cssMode-D77Jxk-y.js","./lspLanguageFeatures-DgqSsygY.js","./htmlMode-DyDPKC2p.js","./jsonMode-D7uMixlk.js","./javascript-BWymSDFY.js","./typescript-DL7bJrml.js"])))=>i.map(i=>d[i]);
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["./cssMode-DH3UBIOt.js","./lspLanguageFeatures-DvHQQbde.js","./htmlMode-CKnKcdzu.js","./jsonMode-BXuOxl3Y.js","./javascript-9mNUKz-_.js","./typescript-gePX66DY.js"])))=>i.map(i=>d[i]);
 function getDefaultExportFromCjs(x2) {
   return x2 && x2.__esModule && Object.prototype.hasOwnProperty.call(x2, "default") ? x2["default"] : x2;
 }
@@ -8226,7 +8226,7 @@ function buildModifiedTree(changedPaths, projectPath) {
     for (let i2 = 0; i2 < parts.length; i2++) {
       const p2 = parts[i2];
       if (i2 === parts.length - 1) {
-        cur.files.push(p2);
+        if (p2) cur.files.push(p2);
       } else {
         if (!cur.subs.has(p2)) {
           cur.subs.set(p2, {
@@ -8343,7 +8343,9 @@ function NodeItem({
   const children = preloadedChildren ?? (isExpanded ? dirContents.get(node.path) ?? [] : []);
   const isSelected = openFile === node.path;
   const allChanged = gitStatus ? [...gitStatus.changed, ...gitStatus.untracked] : [];
-  const isChanged = isDir ? allChanged.some((p2) => p2.startsWith(node.relativePath + "/")) : allChanged.includes(node.relativePath);
+  const isChanged = isDir ? allChanged.some((p2) => p2.startsWith(node.relativePath + "/")) : allChanged.includes(node.relativePath) || (gitStatus?.untracked.some(
+    (p2) => p2.endsWith("/") && node.relativePath.startsWith(p2)
+  ) ?? false);
   const bgColor = isSelected ? "#37373d" : hovered ? "#2a2d2e" : "transparent";
   const handleClick = () => {
     if (isDir) {
@@ -8478,73 +8480,248 @@ function FileTree() {
     )
   ] });
 }
-const overlayStyle = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.5)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 1e3
+function buildTree(files) {
+  const root2 = { subs: /* @__PURE__ */ new Map(), files: [], relPath: "" };
+  for (const file of files) {
+    const parts = file.path.split("/");
+    let cur = root2;
+    for (let i2 = 0; i2 < parts.length - 1; i2++) {
+      const p2 = parts[i2];
+      if (!cur.subs.has(p2)) {
+        cur.subs.set(p2, {
+          subs: /* @__PURE__ */ new Map(),
+          files: [],
+          relPath: cur.relPath ? `${cur.relPath}/${p2}` : p2
+        });
+      }
+      cur = cur.subs.get(p2);
+    }
+    cur.files.push(file);
+  }
+  function toNodes(vdir) {
+    const dirs = Array.from(vdir.subs.entries()).sort(([a], [b2]) => a.localeCompare(b2)).map(([name, child]) => ({
+      name,
+      relPath: child.relPath,
+      type: "dir",
+      children: toNodes(child)
+    }));
+    const fileNodes = vdir.files.slice().sort((a, b2) => a.path.localeCompare(b2.path)).map((f2) => ({
+      name: f2.path.split("/").pop() ?? f2.path,
+      relPath: f2.path,
+      type: "file",
+      status: f2.status,
+      children: []
+    }));
+    return [...dirs, ...fileNodes];
+  }
+  return toNodes(root2);
+}
+function collectFiles(node) {
+  if (node.type === "file") return [node.relPath];
+  return node.children.flatMap(collectFiles);
+}
+function collectAllDirs(nodes) {
+  const result = [];
+  for (const n2 of nodes) {
+    if (n2.type === "dir") {
+      result.push(n2.relPath);
+      result.push(...collectAllDirs(n2.children));
+    }
+  }
+  return result;
+}
+function nodeCheckState(node, checked) {
+  const files = collectFiles(node);
+  if (files.length === 0) return "unchecked";
+  const n2 = files.filter((f2) => checked.has(f2)).length;
+  if (n2 === 0) return "unchecked";
+  if (n2 === files.length) return "checked";
+  return "indeterminate";
+}
+const FILE_COLOR = {
+  changed: "#cccccc",
+  deleted: "#f48771",
+  untracked: "#4ec9b0"
 };
-const dialogStyle = {
-  background: "#252526",
-  border: "1px solid #454545",
-  borderRadius: 6,
-  width: 500,
-  maxHeight: "80vh",
-  display: "flex",
-  flexDirection: "column",
-  overflow: "hidden",
-  fontFamily: "Cascadia Code, Consolas, monospace",
-  fontSize: 13,
-  color: "#cccccc"
-};
+function TreeRow({
+  node,
+  depth,
+  checked,
+  expanded: expanded2,
+  onToggleCheck,
+  onToggleExpand
+}) {
+  const isDir = node.type === "dir";
+  const isExpanded = isDir ? expanded2.has(node.relPath) : false;
+  const checkState = nodeCheckState(node, checked);
+  const [hovered, setHovered] = reactExports.useState(false);
+  const cbRef = reactExports.useRef(null);
+  reactExports.useEffect(() => {
+    if (cbRef.current) cbRef.current.indeterminate = checkState === "indeterminate";
+  }, [checkState]);
+  const color = isDir ? "#cccccc" : FILE_COLOR[node.status ?? "changed"] ?? "#cccccc";
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "div",
+      {
+        style: {
+          display: "flex",
+          alignItems: "center",
+          paddingLeft: depth * 16 + 6,
+          paddingRight: 8,
+          height: 22,
+          background: hovered ? "#2a2d2e" : "transparent",
+          userSelect: "none",
+          fontSize: 13
+        },
+        onMouseEnter: () => setHovered(true),
+        onMouseLeave: () => setHovered(false),
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "span",
+            {
+              onClick: () => isDir && onToggleExpand(node.relPath),
+              style: {
+                width: 14,
+                flexShrink: 0,
+                fontSize: 10,
+                color: "#777",
+                textAlign: "center",
+                cursor: isDir ? "pointer" : "default",
+                display: "inline-block"
+              },
+              children: isDir ? isExpanded ? "▾" : "▸" : ""
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              ref: cbRef,
+              type: "checkbox",
+              checked: checkState === "checked",
+              onChange: () => onToggleCheck(node),
+              style: { cursor: "pointer", flexShrink: 0, margin: "0 6px 0 2px" }
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "span",
+            {
+              onClick: () => isDir ? onToggleExpand(node.relPath) : onToggleCheck(node),
+              style: {
+                flex: 1,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                color,
+                textDecoration: node.status === "deleted" ? "line-through" : void 0,
+                cursor: "pointer"
+              },
+              children: [
+                node.name,
+                isDir && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "#555", marginLeft: 1 }, children: "/" })
+              ]
+            }
+          ),
+          node.status === "deleted" && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "#666", fontSize: 11, fontStyle: "italic", flexShrink: 0, marginLeft: 6 }, children: "deleted" })
+        ]
+      }
+    ),
+    isDir && isExpanded && node.children.map((child) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+      TreeRow,
+      {
+        node: child,
+        depth: depth + 1,
+        checked,
+        expanded: expanded2,
+        onToggleCheck,
+        onToggleExpand
+      },
+      child.relPath
+    ))
+  ] });
+}
 function CommitDialog({ onClose }) {
-  const gitStatus = useFileTreeStore((s15) => s15.gitStatus);
   const refresh = useFileTreeStore((s15) => s15.refresh);
   const showToast = useToastStore((s15) => s15.show);
-  const [files, setFiles] = reactExports.useState([]);
+  const [loading, setLoading] = reactExports.useState(true);
+  const [truncated, setTruncated] = reactExports.useState(false);
+  const [tree, setTree] = reactExports.useState([]);
+  const [allFilePaths, setAllFilePaths] = reactExports.useState([]);
   const [checked, setChecked] = reactExports.useState(/* @__PURE__ */ new Set());
+  const [expanded2, setExpanded] = reactExports.useState(/* @__PURE__ */ new Set());
   const [message, setMessage] = reactExports.useState("");
   const [isCommitting, setIsCommitting] = reactExports.useState(false);
   const [progressLines, setProgressLines] = reactExports.useState([]);
   const progressEndRef = reactExports.useRef(null);
-  const messageInputRef = reactExports.useRef(null);
+  const messageRef = reactExports.useRef(null);
+  const selectAllRef = reactExports.useRef(null);
   reactExports.useEffect(() => {
-    if (!gitStatus) return;
-    const list2 = [
-      ...gitStatus.changed.map((p2) => ({ path: p2, status: "changed" })),
-      ...gitStatus.untracked.map((p2) => ({ path: p2, status: "untracked" })),
-      ...gitStatus.deleted.map((p2) => ({ path: p2, status: "deleted" }))
-    ];
-    setFiles(list2);
-    setChecked(new Set(list2.map((f2) => f2.path)));
-  }, [gitStatus]);
+    window.editorApi.gitGetCommitFiles().then((result) => {
+      const files = [
+        ...result.changed.map((p2) => ({ path: p2, status: "changed" })),
+        ...result.untracked.map((p2) => ({ path: p2, status: "untracked" })),
+        ...result.deleted.map((p2) => ({ path: p2, status: "deleted" }))
+      ];
+      const t2 = buildTree(files);
+      const paths = files.map((f2) => f2.path);
+      setTree(t2);
+      setAllFilePaths(paths);
+      setChecked(new Set(paths));
+      setExpanded(new Set(collectAllDirs(t2)));
+      setTruncated(result.truncated);
+      setLoading(false);
+    });
+  }, []);
   reactExports.useEffect(() => {
     progressEndRef.current?.scrollIntoView({ behavior: "auto" });
   }, [progressLines]);
   reactExports.useEffect(() => {
-    if (!isCommitting) {
-      setTimeout(() => messageInputRef.current?.focus(), 50);
-    }
-  }, [isCommitting]);
-  const checkedFiles = files.filter((f2) => checked.has(f2.path));
-  const canCommit = checkedFiles.length > 0 && message.trim().length > 0;
-  const handleCommit = async () => {
-    if (!canCommit) return;
+    if (!loading && !isCommitting) setTimeout(() => messageRef.current?.focus(), 50);
+  }, [loading, isCommitting]);
+  const checkedCount = allFilePaths.filter((p2) => checked.has(p2)).length;
+  const allChecked = allFilePaths.length > 0 && checkedCount === allFilePaths.length;
+  const someChecked = checkedCount > 0 && !allChecked;
+  reactExports.useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someChecked;
+  }, [someChecked]);
+  const checkedFilePaths = allFilePaths.filter((p2) => checked.has(p2));
+  const canCommit = (truncated || checkedFilePaths.length > 0) && message.trim().length > 0;
+  const handleToggleCheck = (node) => {
+    const files = collectFiles(node);
+    const state = nodeCheckState(node, checked);
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (state === "checked") files.forEach((f2) => next.delete(f2));
+      else files.forEach((f2) => next.add(f2));
+      return next;
+    });
+  };
+  const handleToggleExpand = (relPath) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(relPath)) next.delete(relPath);
+      else next.add(relPath);
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    setChecked(allChecked ? /* @__PURE__ */ new Set() : new Set(allFilePaths));
+  };
+  const handleCommit = async (stageAll = false) => {
+    if (message.trim().length === 0) return;
+    if (!stageAll && checkedFilePaths.length === 0) return;
     setIsCommitting(true);
     setProgressLines([]);
-    const filePaths = checkedFiles.map((f2) => f2.path);
     const unsub = window.editorApi.onGitCommitOutput(({ line, stream }) => {
       setProgressLines((prev) => [...prev, { line, stream }]);
-      if (stream === "stderr") {
-        logManager.append("Git Errors", line, true);
-      } else {
-        logManager.append("Git", line);
-      }
+      if (stream === "stderr") logManager.append("Git Errors", line, true);
+      else logManager.append("Git", line);
     });
-    const result = await window.editorApi.gitRunCommit(filePaths, message.trim());
+    const result = await window.editorApi.gitRunCommit(
+      stageAll ? [] : checkedFilePaths,
+      message.trim(),
+      stageAll
+    );
     unsub();
     if (result.success) {
       await refresh();
@@ -8554,176 +8731,250 @@ function CommitDialog({ onClose }) {
       showToast(result.error ?? "Commit failed");
     }
   };
-  const toggleCheck = (path) => {
-    setChecked((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  };
-  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: overlayStyle, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: dialogStyle, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "div",
-      {
-        style: {
-          padding: "10px 16px",
-          borderBottom: "1px solid #3d3d3d",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexShrink: 0
-        },
-        children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontWeight: 600 }, children: isCommitting ? "Committing…" : "Commit" }),
-          !isCommitting && /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              onClick: onClose,
-              style: {
-                background: "none",
-                border: "none",
-                color: "#cccccc",
-                cursor: "pointer",
-                fontSize: 18,
-                lineHeight: 1,
-                padding: 0
-              },
-              children: "×"
-            }
-          )
-        ]
-      }
-    ),
-    isCommitting ? (
-      /* ── Progress view ─────────────────────────────────────────────────── */
-      /* @__PURE__ */ jsxRuntimeExports.jsxs(
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      style: {
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1e3
+      },
+      children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
         "div",
         {
           style: {
-            flex: 1,
-            overflow: "auto",
-            padding: 12,
-            fontSize: 12
+            background: "#252526",
+            border: "1px solid #454545",
+            borderRadius: 6,
+            width: 540,
+            maxHeight: "85vh",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            fontFamily: "Cascadia Code, Consolas, monospace",
+            fontSize: 13,
+            color: "#cccccc"
           },
           children: [
-            progressLines.map((l2, i2) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+            /* @__PURE__ */ jsxRuntimeExports.jsxs(
               "div",
               {
                 style: {
-                  color: l2.stream === "stderr" ? "#f48771" : "#cccccc",
-                  marginBottom: 2,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-all"
+                  padding: "10px 16px",
+                  borderBottom: "1px solid #3d3d3d",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  flexShrink: 0
                 },
-                children: l2.line
-              },
-              i2
-            )),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { ref: progressEndRef })
+                children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontWeight: 600 }, children: isCommitting ? "Committing…" : "Commit" }),
+                  !isCommitting && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                    "button",
+                    {
+                      onClick: onClose,
+                      style: {
+                        background: "none",
+                        border: "none",
+                        color: "#cccccc",
+                        cursor: "pointer",
+                        fontSize: 18,
+                        lineHeight: 1,
+                        padding: 0
+                      },
+                      children: "×"
+                    }
+                  )
+                ]
+              }
+            ),
+            isCommitting ? (
+              /* ── Progress view ───────────────────────────────────────────────────── */
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, overflow: "auto", padding: 12, fontSize: 12 }, children: [
+                progressLines.map((l2, i2) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "div",
+                  {
+                    style: {
+                      color: l2.stream === "stderr" ? "#f48771" : "#cccccc",
+                      marginBottom: 2,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-all"
+                    },
+                    children: l2.line
+                  },
+                  i2
+                )),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { ref: progressEndRef })
+              ] })
+            ) : loading ? (
+              /* ── Loading ─────────────────────────────────────────────────────────── */
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "div",
+                {
+                  style: {
+                    flex: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "#888"
+                  },
+                  children: "Loading…"
+                }
+              )
+            ) : (
+              /* ── Form view ───────────────────────────────────────────────────────── */
+              /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                allFilePaths.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                  "div",
+                  {
+                    style: {
+                      padding: "4px 8px 4px 6px",
+                      borderBottom: "1px solid #2d2d2d",
+                      flexShrink: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6
+                    },
+                    children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 14, flexShrink: 0 } }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx(
+                        "input",
+                        {
+                          ref: selectAllRef,
+                          type: "checkbox",
+                          checked: allChecked,
+                          onChange: toggleAll,
+                          style: { cursor: "pointer", flexShrink: 0, margin: "0 6px 0 2px" }
+                        }
+                      ),
+                      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { color: "#888", fontSize: 12 }, children: [
+                        checkedCount,
+                        " / ",
+                        allFilePaths.length,
+                        " files"
+                      ] })
+                    ]
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflow: "auto", padding: "4px 0" }, children: allFilePaths.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "8px 16px", color: "#888" }, children: "No changes" }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                  tree.map((node) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+                    TreeRow,
+                    {
+                      node,
+                      depth: 0,
+                      checked,
+                      expanded: expanded2,
+                      onToggleCheck: handleToggleCheck,
+                      onToggleExpand: handleToggleExpand
+                    },
+                    node.relPath
+                  )),
+                  truncated && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                    "div",
+                    {
+                      style: {
+                        padding: "8px 16px",
+                        color: "#e5a74a",
+                        fontSize: 12,
+                        borderTop: "1px solid #3d3d3d",
+                        marginTop: 4
+                      },
+                      children: '⚠ List truncated at 2000 files. Use "Commit all" to stage everything.'
+                    }
+                  )
+                ] }) }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "8px 16px", borderTop: "1px solid #3d3d3d", flexShrink: 0 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "textarea",
+                  {
+                    ref: messageRef,
+                    value: message,
+                    onChange: (e) => setMessage(e.target.value),
+                    onKeyDown: (e) => {
+                      if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && canCommit) handleCommit();
+                      if (e.key === "Escape") onClose();
+                    },
+                    placeholder: "Commit message (Ctrl+Enter to commit)",
+                    rows: 3,
+                    style: {
+                      width: "100%",
+                      background: "#3c3c3c",
+                      border: "1px solid #555",
+                      borderRadius: 3,
+                      color: "#cccccc",
+                      fontSize: 13,
+                      padding: "6px 8px",
+                      outline: "none",
+                      boxSizing: "border-box",
+                      fontFamily: "inherit",
+                      resize: "vertical",
+                      minHeight: 60,
+                      lineHeight: 1.5
+                    }
+                  }
+                ) }),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                  "div",
+                  {
+                    style: {
+                      padding: "8px 16px",
+                      borderTop: "1px solid #3d3d3d",
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      gap: 8,
+                      flexShrink: 0
+                    },
+                    children: [
+                      truncated && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                        "button",
+                        {
+                          onClick: () => handleCommit(true),
+                          disabled: message.trim().length === 0,
+                          title: "git add -A && git commit",
+                          style: {
+                            background: message.trim().length > 0 ? "#5a3e00" : "#2d2d2d",
+                            border: "1px solid " + (message.trim().length > 0 ? "#e5a74a" : "#444"),
+                            borderRadius: 3,
+                            color: message.trim().length > 0 ? "#e5a74a" : "#555",
+                            cursor: message.trim().length > 0 ? "pointer" : "default",
+                            fontSize: 13,
+                            padding: "6px 18px",
+                            fontFamily: "inherit"
+                          },
+                          children: "Commit all"
+                        }
+                      ),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx(
+                        "button",
+                        {
+                          onClick: () => handleCommit(false),
+                          disabled: !canCommit || truncated && checkedFilePaths.length === 0,
+                          style: {
+                            background: canCommit && (!truncated || checkedFilePaths.length > 0) ? "#0e639c" : "#2d2d2d",
+                            border: "none",
+                            borderRadius: 3,
+                            color: canCommit && (!truncated || checkedFilePaths.length > 0) ? "#fff" : "#555",
+                            cursor: canCommit && (!truncated || checkedFilePaths.length > 0) ? "pointer" : "default",
+                            fontSize: 13,
+                            padding: "6px 18px",
+                            fontFamily: "inherit"
+                          },
+                          children: "Commit selected"
+                        }
+                      )
+                    ]
+                  }
+                )
+              ] })
+            )
           ]
         }
       )
-    ) : (
-      /* ── Form view ─────────────────────────────────────────────────────── */
-      /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflow: "auto", padding: "6px 0" }, children: files.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "8px 16px", color: "#888" }, children: "No changes" }) : files.map((file) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
-          "label",
-          {
-            style: {
-              display: "flex",
-              alignItems: "baseline",
-              gap: 8,
-              padding: "3px 16px",
-              cursor: "pointer",
-              userSelect: "none"
-            },
-            children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx(
-                "input",
-                {
-                  type: "checkbox",
-                  checked: checked.has(file.path),
-                  onChange: () => toggleCheck(file.path),
-                  style: { cursor: "pointer", flexShrink: 0, marginTop: 2 }
-                }
-              ),
-              /* @__PURE__ */ jsxRuntimeExports.jsx(
-                "span",
-                {
-                  style: {
-                    color: file.status === "deleted" ? "#f48771" : file.status === "untracked" ? "#4ec9b0" : "#cccccc",
-                    textDecoration: file.status === "deleted" ? "line-through" : void 0,
-                    flex: 1,
-                    wordBreak: "break-all"
-                  },
-                  children: file.path
-                }
-              ),
-              file.status === "deleted" && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "#888", fontStyle: "italic", flexShrink: 0 }, children: "[deleted]" })
-            ]
-          },
-          file.path
-        )) }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "8px 16px", borderTop: "1px solid #3d3d3d", flexShrink: 0 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "input",
-          {
-            ref: messageInputRef,
-            type: "text",
-            value: message,
-            onChange: (e) => setMessage(e.target.value),
-            onKeyDown: (e) => {
-              if (e.key === "Enter" && canCommit) handleCommit();
-              if (e.key === "Escape") onClose();
-            },
-            placeholder: "Commit message",
-            style: {
-              width: "100%",
-              background: "#3c3c3c",
-              border: "1px solid #555",
-              borderRadius: 3,
-              color: "#cccccc",
-              fontSize: 13,
-              padding: "6px 8px",
-              outline: "none",
-              boxSizing: "border-box",
-              fontFamily: "inherit"
-            }
-          }
-        ) }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "div",
-          {
-            style: {
-              padding: "8px 16px",
-              borderTop: "1px solid #3d3d3d",
-              display: "flex",
-              justifyContent: "flex-end",
-              flexShrink: 0
-            },
-            children: /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "button",
-              {
-                onClick: handleCommit,
-                disabled: !canCommit,
-                style: {
-                  background: canCommit ? "#0e639c" : "#2d2d2d",
-                  border: "none",
-                  borderRadius: 3,
-                  color: canCommit ? "#ffffff" : "#555",
-                  cursor: canCommit ? "pointer" : "default",
-                  fontSize: 13,
-                  padding: "6px 18px",
-                  fontFamily: "inherit"
-                },
-                children: "Commit"
-              }
-            )
-          }
-        )
-      ] })
-    )
-  ] }) });
+    }
+  );
 }
 const toolbarBtnStyle = {
   background: "none",
@@ -196403,7 +196654,7 @@ const lessDefaults = new LanguageServiceDefaultsImpl$3(
   modeConfigurationDefault$2
 );
 function getMode$3() {
-  return __vitePreload(() => import("./cssMode-D77Jxk-y.js"), true ? __vite__mapDeps([0,1]) : void 0, import.meta.url);
+  return __vitePreload(() => import("./cssMode-DH3UBIOt.js"), true ? __vite__mapDeps([0,1]) : void 0, import.meta.url);
 }
 languages.onLanguage("less", () => {
   getMode$3().then((mode2) => mode2.setupMode(lessDefaults));
@@ -196508,7 +196759,7 @@ const razorLanguageService = registerHTMLLanguageService(
 );
 const razorDefaults = razorLanguageService.defaults;
 function getMode$2() {
-  return __vitePreload(() => import("./htmlMode-DyDPKC2p.js"), true ? __vite__mapDeps([2,1]) : void 0, import.meta.url);
+  return __vitePreload(() => import("./htmlMode-CKnKcdzu.js"), true ? __vite__mapDeps([2,1]) : void 0, import.meta.url);
 }
 function registerHTMLLanguageService(languageId, options = optionsDefault, modeConfiguration = getConfigurationDefault(languageId)) {
   const defaults = new LanguageServiceDefaultsImpl$2(languageId, options, modeConfiguration);
@@ -196592,7 +196843,7 @@ const jsonDefaults = new LanguageServiceDefaultsImpl$1(
 );
 const getWorker$1 = () => getMode$1().then((mode2) => mode2.getWorker());
 function getMode$1() {
-  return __vitePreload(() => import("./jsonMode-D7uMixlk.js"), true ? __vite__mapDeps([3,1]) : void 0, import.meta.url);
+  return __vitePreload(() => import("./jsonMode-BXuOxl3Y.js"), true ? __vite__mapDeps([3,1]) : void 0, import.meta.url);
 }
 languages.register({
   id: "json",
@@ -196838,7 +197089,7 @@ const getJavaScriptWorker = () => {
   return getMode().then((mode) => mode.getJavaScriptWorker());
 };
 function getMode() {
-  return __vitePreload(() => import("./tsMode-Df8IQTW6.js"), true ? [] : void 0, import.meta.url);
+  return __vitePreload(() => import("./tsMode-CP_Uor5Z.js"), true ? [] : void 0, import.meta.url);
 }
 languages.onLanguage("typescript", () => {
   return getMode().then((mode) => mode.setupTypeScript(typescriptDefaults));
@@ -197033,49 +197284,49 @@ registerLanguage({
   extensions: [".ftl", ".ftlh", ".ftlx"],
   aliases: ["FreeMarker2", "Apache FreeMarker2"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-BCkKZq1r.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationDollar);
+    return __vitePreload(() => import("./freemarker2-BmK96cOD.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationDollar);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-angle.interpolation-dollar",
   aliases: ["FreeMarker2 (Angle/Dollar)", "Apache FreeMarker2 (Angle/Dollar)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-BCkKZq1r.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAngleInterpolationDollar);
+    return __vitePreload(() => import("./freemarker2-BmK96cOD.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAngleInterpolationDollar);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-bracket.interpolation-dollar",
   aliases: ["FreeMarker2 (Bracket/Dollar)", "Apache FreeMarker2 (Bracket/Dollar)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-BCkKZq1r.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagBracketInterpolationDollar);
+    return __vitePreload(() => import("./freemarker2-BmK96cOD.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagBracketInterpolationDollar);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-angle.interpolation-bracket",
   aliases: ["FreeMarker2 (Angle/Bracket)", "Apache FreeMarker2 (Angle/Bracket)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-BCkKZq1r.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAngleInterpolationBracket);
+    return __vitePreload(() => import("./freemarker2-BmK96cOD.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAngleInterpolationBracket);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-bracket.interpolation-bracket",
   aliases: ["FreeMarker2 (Bracket/Bracket)", "Apache FreeMarker2 (Bracket/Bracket)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-BCkKZq1r.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagBracketInterpolationBracket);
+    return __vitePreload(() => import("./freemarker2-BmK96cOD.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagBracketInterpolationBracket);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-auto.interpolation-dollar",
   aliases: ["FreeMarker2 (Auto/Dollar)", "Apache FreeMarker2 (Auto/Dollar)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-BCkKZq1r.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationDollar);
+    return __vitePreload(() => import("./freemarker2-BmK96cOD.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationDollar);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-auto.interpolation-bracket",
   aliases: ["FreeMarker2 (Auto/Bracket)", "Apache FreeMarker2 (Auto/Bracket)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-BCkKZq1r.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationBracket);
+    return __vitePreload(() => import("./freemarker2-BmK96cOD.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationBracket);
   }
 });
 registerLanguage({
@@ -197096,7 +197347,7 @@ registerLanguage({
   extensions: [".handlebars", ".hbs"],
   aliases: ["Handlebars", "handlebars", "hbs"],
   mimetypes: ["text/x-handlebars-template"],
-  loader: () => __vitePreload(() => import("./handlebars-Dgfd56DP.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./handlebars-CAGl8qdV.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "hcl",
@@ -197109,7 +197360,7 @@ registerLanguage({
   extensions: [".html", ".htm", ".shtml", ".xhtml", ".mdoc", ".jsp", ".asp", ".aspx", ".jshtm"],
   aliases: ["HTML", "htm", "html", "xhtml"],
   mimetypes: ["text/html", "text/x-jshtm", "text/template", "text/ng-template"],
-  loader: () => __vitePreload(() => import("./html-C-SJXYJu.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./html-BfM_x0pE.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "ini",
@@ -197132,7 +197383,7 @@ registerLanguage({
   filenames: ["jakefile"],
   aliases: ["JavaScript", "javascript", "js"],
   mimetypes: ["text/javascript"],
-  loader: () => __vitePreload(() => import("./javascript-BWymSDFY.js"), true ? __vite__mapDeps([4,5]) : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./javascript-9mNUKz-_.js"), true ? __vite__mapDeps([4,5]) : void 0, import.meta.url)
 });
 registerLanguage({
   id: "julia",
@@ -197171,7 +197422,7 @@ registerLanguage({
   extensions: [".liquid", ".html.liquid"],
   aliases: ["Liquid", "liquid"],
   mimetypes: ["application/liquid"],
-  loader: () => __vitePreload(() => import("./liquid-DPAmLQqa.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./liquid-D4uyPtcB.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "m3",
@@ -197189,7 +197440,7 @@ registerLanguage({
   id: "mdx",
   extensions: [".mdx"],
   aliases: ["MDX", "mdx"],
-  loader: () => __vitePreload(() => import("./mdx-ChjFvIaD.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./mdx-mngy_93h.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "mips",
@@ -197288,7 +197539,7 @@ registerLanguage({
   extensions: [".py", ".rpy", ".pyw", ".cpy", ".gyp", ".gypi"],
   aliases: ["Python", "py"],
   firstLine: "^#!/.*\\bpython[0-9.-]*\\b",
-  loader: () => __vitePreload(() => import("./python-5iSyu4fv.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./python-D9wz2UU8.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "qsharp",
@@ -197307,7 +197558,7 @@ registerLanguage({
   extensions: [".cshtml"],
   aliases: ["Razor", "razor"],
   mimetypes: ["text/x-cshtml"],
-  loader: () => __vitePreload(() => import("./razor-BSuwofPR.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./razor-CF3AZN3I.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "redis",
@@ -197440,7 +197691,7 @@ registerLanguage({
   aliases: ["TypeScript", "ts", "typescript"],
   mimetypes: ["text/typescript"],
   loader: () => {
-    return __vitePreload(() => import("./typescript-DL7bJrml.js"), true ? [] : void 0, import.meta.url);
+    return __vitePreload(() => import("./typescript-gePX66DY.js"), true ? [] : void 0, import.meta.url);
   }
 });
 registerLanguage({
@@ -197485,14 +197736,14 @@ registerLanguage({
   firstLine: "(\\<\\?xml.*)|(\\<svg)|(\\<\\!doctype\\s+svg)",
   aliases: ["XML", "xml"],
   mimetypes: ["text/xml", "application/xml", "application/xaml+xml", "application/xml-dtd"],
-  loader: () => __vitePreload(() => import("./xml-Dc9FiJBh.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./xml-CLZgbqDx.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "yaml",
   extensions: [".yaml", ".yml"],
   aliases: ["YAML", "yaml", "YML", "yml"],
   mimetypes: ["application/x-yaml", "text/x-yaml"],
-  loader: () => __vitePreload(() => import("./yaml-CpdIxV2l.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./yaml-FeysJ-Fj.js"), true ? [] : void 0, import.meta.url)
 });
 var __defProp = Object.defineProperty;
 var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
@@ -201196,6 +201447,31 @@ function EditorPanel({ style }) {
     }
     closeEditor();
   };
+  reactExports.useEffect(() => {
+    window.editorApi.notifyEditorFileChanged(true);
+    return () => {
+      window.editorApi.notifyEditorFileChanged(false);
+    };
+  }, []);
+  reactExports.useEffect(() => {
+    const monacoCommandIds = {
+      undo: "undo",
+      redo: "redo",
+      cut: "editor.action.clipboardCutAction",
+      copy: "editor.action.clipboardCopyAction",
+      paste: "editor.action.clipboardPasteAction"
+    };
+    const unsub = window.editorApi.onMenuEditCommand((command) => {
+      const editor2 = editorRef.current;
+      if (!editor2) return;
+      const commandId = monacoCommandIds[command];
+      if (commandId) {
+        editor2.focus();
+        editor2.trigger("menu", commandId, null);
+      }
+    });
+    return unsub;
+  }, []);
   const handleEditorMount = (editor2, monacoInstance) => {
     editorRef.current = editor2;
     monacoRef.current = monacoInstance;

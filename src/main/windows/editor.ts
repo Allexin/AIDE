@@ -12,6 +12,7 @@ import { startProjectWatcher, stopProjectWatcher } from '../filetree/watcher'
 import { PtyManager } from '../pty/ptyManager'
 import { ptyRegistry } from '../pty/registry'
 import { getRunningCount, killAllProcesses, disposeProcessManager } from '../toolbar/processManager'
+import { rebuildMenu, removeEditorWindow } from '../menu'
 
 export function createEditorWindow(projectPath: string): BrowserWindow {
   const folderName = basename(projectPath)
@@ -74,6 +75,8 @@ export function openProjectAndTrack(
 
   ensureGitignoreEntry(projectPath, '.aide')
   addRecentProject(projectPath, getAppConfig().sessions.maxRecentProjects)
+  // Rebuild menu so Open Recent submenu reflects the newly added project
+  rebuildMenu()
 
   const editorWin = createEditorWindow(projectPath)
   openProjects.set(projectPath, editorWin)
@@ -86,6 +89,7 @@ export function openProjectAndTrack(
   editorWin.webContents.once('did-finish-load', () => {
     startProjectWatcher(projectPath, editorWin)
   })
+
 
   // Intercept close to check for running toolbar processes
   editorWin.on('close', (event) => {
@@ -118,6 +122,7 @@ export function openProjectAndTrack(
     stopProjectWatcher(projectPath)
     releaseLock(projectPath)
     openProjects.delete(projectPath)
+    removeEditorWindow(editorWin)
   })
 
   return { success: true }

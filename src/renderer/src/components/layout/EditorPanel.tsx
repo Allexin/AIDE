@@ -532,6 +532,38 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
     closeEditor()
   }
 
+  // ── Notify main process when file is open (for Edit menu enable/disable) ────
+
+  useEffect(() => {
+    window.editorApi.notifyEditorFileChanged(true)
+    return () => {
+      window.editorApi.notifyEditorFileChanged(false)
+    }
+  }, [])
+
+  // ── Handle Edit menu commands from native menu bar ────────────────────────
+
+  useEffect(() => {
+    const monacoCommandIds: Record<string, string> = {
+      undo: 'undo',
+      redo: 'redo',
+      cut: 'editor.action.clipboardCutAction',
+      copy: 'editor.action.clipboardCopyAction',
+      paste: 'editor.action.clipboardPasteAction'
+    }
+
+    const unsub = window.editorApi.onMenuEditCommand((command) => {
+      const editor = editorRef.current
+      if (!editor) return
+      const commandId = monacoCommandIds[command]
+      if (commandId) {
+        editor.focus()
+        editor.trigger('menu', commandId, null)
+      }
+    })
+    return unsub
+  }, [])
+
   // ── Monaco mount ────────────────────────────────────────────────────────────
 
   const handleEditorMount: OnMount = (editor, monacoInstance) => {

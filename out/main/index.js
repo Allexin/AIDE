@@ -43,6 +43,9 @@ const DEFAULTS$2 = {
   sessions: {
     maxSessionsInPicker: 20,
     maxRecentProjects: 20
+  },
+  git: {
+    addBatchSize: 10
   }
 };
 let config = structuredClone(DEFAULTS$2);
@@ -58,7 +61,8 @@ function initAppConfig() {
         ...parsed,
         editor: { ...DEFAULTS$2.editor, ...parsed.editor ?? {} },
         ui: { ...DEFAULTS$2.ui, ...parsed.ui ?? {} },
-        sessions: { ...DEFAULTS$2.sessions, ...parsed.sessions ?? {} }
+        sessions: { ...DEFAULTS$2.sessions, ...parsed.sessions ?? {} },
+        git: { ...DEFAULTS$2.git, ...parsed.git ?? {} }
       };
     } catch {
       config = structuredClone(DEFAULTS$2);
@@ -1100,6 +1104,208 @@ function disposeProcessManager(win) {
   killAllProcesses(win);
   windowProcesses.delete(win);
 }
+const registry = /* @__PURE__ */ new Map();
+function registerCommand(id, handler) {
+  registry.set(id, handler);
+}
+let openProjectsRef = null;
+let openProjectFn = null;
+const editorFileOpenMap = /* @__PURE__ */ new Map();
+function setEditorFileOpen(win, hasFile) {
+  editorFileOpenMap.set(win, hasFile);
+  rebuildMenu();
+}
+function removeEditorWindow(win) {
+  editorFileOpenMap.delete(win);
+}
+function getFocusedEditorWindow() {
+  if (!openProjectsRef) return null;
+  const focused = electron.BrowserWindow.getFocusedWindow();
+  if (!focused) return null;
+  for (const win of openProjectsRef.values()) {
+    if (win === focused) return win;
+  }
+  return null;
+}
+function isEditEnabled() {
+  const editorWin = getFocusedEditorWindow();
+  if (!editorWin) return false;
+  return editorFileOpenMap.get(editorWin) ?? false;
+}
+function sendEditCommand(command) {
+  const editorWin = getFocusedEditorWindow();
+  if (!editorWin) return;
+  if (!(editorFileOpenMap.get(editorWin) ?? false)) return;
+  editorWin.webContents.send("menu:edit-command", command);
+}
+async function checkRunningAndProceed(win, action) {
+  const count = getRunningCount(win);
+  if (count === 0) {
+    await action();
+    return;
+  }
+  const { response } = await electron.dialog.showMessageBox(win, {
+    type: "question",
+    title: "AIDE",
+    message: `${count} process${count !== 1 ? "es are" : " is"} still running.`,
+    detail: "Close AIDE anyway?",
+    buttons: ["Yes", "No"],
+    defaultId: 1,
+    cancelId: 1
+  });
+  if (response === 0) {
+    killAllProcesses(win);
+    await action();
+  }
+}
+function switchProject(newPath, currentWin) {
+  if (!openProjectFn || !openProjectsRef) return;
+  currentWin.once("closed", () => {
+    setImmediate(() => {
+      if (!openProjectFn || !openProjectsRef) return;
+      const result = openProjectFn(newPath);
+      if (!result.success) {
+        createPickerWindow();
+      }
+    });
+  });
+  currentWin.destroy();
+}
+async function handleOpenFolder() {
+  const focused = electron.BrowserWindow.getFocusedWindow();
+  if (!focused) return;
+  const editorWin = getFocusedEditorWindow();
+  if (editorWin) {
+    await checkRunningAndProceed(editorWin, async () => {
+      const result = await electron.dialog.showOpenDialog(editorWin, {
+        properties: ["openDirectory"]
+      });
+      if (result.canceled || !result.filePaths[0]) return;
+      switchProject(result.filePaths[0], editorWin);
+    });
+  } else {
+    const result = await electron.dialog.showOpenDialog(focused, {
+      properties: ["openDirectory"]
+    });
+    if (result.canceled || !result.filePaths[0]) return;
+    const newPath = result.filePaths[0];
+    focused.close();
+    if (openProjectFn && openProjectsRef) {
+      const openResult = openProjectFn(newPath);
+      if (!openResult.success) createPickerWindow();
+    }
+  }
+}
+async function handleOpenRecent(projectPath) {
+  if (!fs.existsSync(projectPath)) {
+    electron.dialog.showErrorBox("AIDE", `Path no longer exists:
+${projectPath}`);
+    return;
+  }
+  const focused = electron.BrowserWindow.getFocusedWindow();
+  if (!focused) return;
+  const editorWin = getFocusedEditorWindow();
+  if (editorWin) {
+    await checkRunningAndProceed(editorWin, async () => {
+      switchProject(projectPath, editorWin);
+    });
+  } else {
+    focused.close();
+    if (openProjectFn && openProjectsRef) {
+      const openResult = openProjectFn(projectPath);
+      if (!openResult.success) createPickerWindow();
+    }
+  }
+}
+function rebuildMenu() {
+  const editEnabled = isEditEnabled();
+  const state2 = getAppState();
+  const config2 = getAppConfig();
+  const recentProjects = state2.recentProjects.slice(0, config2.sessions.maxRecentProjects);
+  const recentSubmenu = recentProjects.length > 0 ? recentProjects.map((p) => ({
+    label: path.basename(p.path),
+    click: () => {
+      handleOpenRecent(p.path);
+    }
+  })) : [{ label: "No recent projects", enabled: false }];
+  const template = [
+    {
+      label: "File",
+      submenu: [
+        {
+          label: "New Window",
+          click: () => {
+            createPickerWindow();
+          }
+        },
+        {
+          label: "Open Folder...",
+          click: () => {
+            handleOpenFolder();
+          }
+        },
+        {
+          label: "Open Recent",
+          submenu: recentSubmenu
+        },
+        { type: "separator" },
+        {
+          label: "Exit",
+          click: () => {
+            electron.app.quit();
+          }
+        }
+      ]
+    },
+    {
+      label: "Edit",
+      submenu: [
+        {
+          label: "Undo",
+          enabled: editEnabled,
+          click: () => sendEditCommand("undo")
+        },
+        {
+          label: "Redo",
+          enabled: editEnabled,
+          click: () => sendEditCommand("redo")
+        },
+        { type: "separator" },
+        {
+          label: "Cut",
+          enabled: editEnabled,
+          click: () => sendEditCommand("cut")
+        },
+        {
+          label: "Copy",
+          enabled: editEnabled,
+          click: () => sendEditCommand("copy")
+        },
+        {
+          label: "Paste",
+          enabled: editEnabled,
+          click: () => sendEditCommand("paste")
+        }
+      ]
+    }
+  ];
+  electron.Menu.setApplicationMenu(electron.Menu.buildFromTemplate(template));
+}
+function setupMenu(openProjects2, openProject) {
+  openProjectsRef = openProjects2;
+  openProjectFn = openProject;
+  registerCommand("file.newWindow", () => {
+    createPickerWindow();
+  });
+  registerCommand("file.openFolder", () => handleOpenFolder());
+  registerCommand("file.exit", () => electron.app.quit());
+  registerCommand("edit.undo", () => sendEditCommand("undo"));
+  registerCommand("edit.redo", () => sendEditCommand("redo"));
+  registerCommand("edit.cut", () => sendEditCommand("cut"));
+  registerCommand("edit.copy", () => sendEditCommand("copy"));
+  registerCommand("edit.paste", () => sendEditCommand("paste"));
+  rebuildMenu();
+}
 function createEditorWindow(projectPath) {
   const folderName = path.basename(projectPath);
   const win = new electron.BrowserWindow({
@@ -1149,6 +1355,7 @@ function openProjectAndTrack(projectPath, openProjects2) {
   }
   ensureGitignoreEntry(projectPath, ".aide");
   addRecentProject(projectPath, getAppConfig().sessions.maxRecentProjects);
+  rebuildMenu();
   const editorWin = createEditorWindow(projectPath);
   openProjects2.set(projectPath, editorWin);
   const ptyMgr = new PtyManager(editorWin, projectPath);
@@ -1156,6 +1363,7 @@ function openProjectAndTrack(projectPath, openProjects2) {
   editorWin.webContents.once("did-finish-load", () => {
     startProjectWatcher(projectPath, editorWin);
   });
+  editorWin.on("focus", () => rebuildMenu());
   editorWin.on("close", (event) => {
     const count = getRunningCount(editorWin);
     if (count > 0) {
@@ -1183,6 +1391,8 @@ function openProjectAndTrack(projectPath, openProjects2) {
     stopProjectWatcher(projectPath);
     releaseLock(projectPath);
     openProjects2.delete(projectPath);
+    removeEditorWindow(editorWin);
+    rebuildMenu();
   });
   return { success: true };
 }
@@ -1511,9 +1721,59 @@ function setupIpcHandlers(openProjects2) {
       }
     }
   });
+  electron.ipcMain.handle("git:get-commit-files", async (event) => {
+    const senderWin = electron.BrowserWindow.fromWebContents(event.sender);
+    if (!senderWin)
+      return { available: false, changed: [], deleted: [], untracked: [], truncated: false };
+    let projectPath = "";
+    for (const [p, win] of openProjects2) {
+      if (win === senderWin) {
+        projectPath = p;
+        break;
+      }
+    }
+    if (!projectPath)
+      return { available: false, changed: [], deleted: [], untracked: [], truncated: false };
+    return new Promise((resolve) => {
+      const proc = child_process.spawn("git", ["status", "--porcelain", "--untracked-files=all"], {
+        cwd: projectPath,
+        windowsHide: true
+      });
+      const chunks = [];
+      proc.stdout.on("data", (d) => chunks.push(d));
+      proc.on("close", (code) => {
+        if (code !== 0) {
+          resolve({ available: false, changed: [], deleted: [], untracked: [], truncated: false });
+          return;
+        }
+        const output = Buffer.concat(chunks).toString();
+        const changed = [];
+        const deleted = [];
+        const untracked = [];
+        const MAX = 2e3;
+        const lines = output.split("\n").filter((l) => l.length >= 4);
+        for (const line of lines) {
+          if (changed.length + deleted.length + untracked.length >= MAX) break;
+          const xy = line.substring(0, 2);
+          let filePath = line.substring(3);
+          if (filePath.includes(" -> ")) filePath = filePath.split(" -> ")[1];
+          filePath = filePath.trim();
+          if (!filePath || filePath.endsWith("/")) continue;
+          if (xy === "??") untracked.push(filePath);
+          else if (xy[0] === "D" || xy[1] === "D") deleted.push(filePath);
+          else changed.push(filePath);
+        }
+        resolve({ available: true, changed, deleted, untracked, truncated: lines.length > MAX });
+      });
+      proc.on(
+        "error",
+        () => resolve({ available: false, changed: [], deleted: [], untracked: [], truncated: false })
+      );
+    });
+  });
   electron.ipcMain.handle(
     "git:run-commit",
-    async (event, { files, message }) => {
+    async (event, { files, message, stageAll }) => {
       const senderWin = electron.BrowserWindow.fromWebContents(event.sender);
       if (!senderWin) return { success: false, error: "No window" };
       let projectPath = "";
@@ -1529,12 +1789,24 @@ function setupIpcHandlers(openProjects2) {
           senderWin.webContents.send("git:commit-output", { line, stream });
         }
       };
-      sendLine(`> git add -- ${files.join(" ")}`, "stdout");
-      const addResult = await runGitSubcommand(projectPath, ["add", "--", ...files], sendLine);
-      if (!addResult.success) {
-        return { success: false, error: addResult.error };
+      if (stageAll) {
+        sendLine("> git add -A", "stdout");
+        const addResult = await runGitSubcommand(projectPath, ["add", "-A"], sendLine);
+        if (!addResult.success) return { success: false, error: addResult.error };
+      } else {
+        const batchSize = Math.max(1, getAppConfig().git.addBatchSize);
+        const totalBatches = Math.ceil(files.length / batchSize);
+        for (let i = 0; i < files.length; i += batchSize) {
+          const batch = files.slice(i, i + batchSize);
+          const batchNum = Math.floor(i / batchSize) + 1;
+          const label = totalBatches > 1 ? `> git add [batch ${batchNum}/${totalBatches}: ${batch.length} files]` : `> git add [${batch.length} file${batch.length !== 1 ? "s" : ""}]`;
+          sendLine(label, "stdout");
+          const addResult = await runGitSubcommand(projectPath, ["add", "--", ...batch], sendLine);
+          if (!addResult.success) return { success: false, error: addResult.error };
+        }
       }
-      sendLine(`> git commit -m "${message}"`, "stdout");
+      const msgPreview = message.includes("\n") ? message.split("\n")[0].trimEnd() + " …" : message;
+      sendLine(`> git commit -m "${msgPreview}"`, "stdout");
       const commitResult = await runGitSubcommand(
         projectPath,
         ["commit", "-m", message],
@@ -1543,6 +1815,10 @@ function setupIpcHandlers(openProjects2) {
       return { success: commitResult.success, error: commitResult.error };
     }
   );
+  electron.ipcMain.on("menu:editor-file-changed", (event, hasFile) => {
+    const senderWin = electron.BrowserWindow.fromWebContents(event.sender);
+    if (senderWin) setEditorFileOpen(senderWin, hasFile);
+  });
   electron.ipcMain.handle("session-picker:new-session", async (event) => {
     const pickerWin = electron.BrowserWindow.fromWebContents(event.sender);
     if (!pickerWin) return;
@@ -1572,6 +1848,7 @@ electron.app.whenReady().then(() => {
   initAppConfig();
   initAppState();
   setupIpcHandlers(openProjects);
+  setupMenu(openProjects, (path2) => openProjectAndTrack(path2, openProjects));
   const startupPath = resolveStartupProject();
   if (startupPath) {
     const result = openProjectAndTrack(startupPath, openProjects);

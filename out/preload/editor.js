@@ -1,6 +1,12 @@
 "use strict";
 const electron = require("electron");
 const editorApi = {
+  notifyEditorFileChanged: (hasFile) => electron.ipcRenderer.send("menu:editor-file-changed", hasFile),
+  onMenuEditCommand: (cb) => {
+    const handler = (_, command) => cb(command);
+    electron.ipcRenderer.on("menu:edit-command", handler);
+    return () => electron.ipcRenderer.removeListener("menu:edit-command", handler);
+  },
   getProjectPath: () => electron.ipcRenderer.invoke("editor:get-project-path"),
   getProjectSettings: () => electron.ipcRenderer.invoke("editor:get-project-settings"),
   getConfig: () => electron.ipcRenderer.invoke("config:get"),
@@ -80,7 +86,8 @@ const editorApi = {
     return () => electron.ipcRenderer.removeListener("toolbar:process-exited", handler);
   },
   // Git commit
-  gitRunCommit: (files, message) => electron.ipcRenderer.invoke("git:run-commit", { files, message }),
+  gitGetCommitFiles: () => electron.ipcRenderer.invoke("git:get-commit-files"),
+  gitRunCommit: (files, message, stageAll) => electron.ipcRenderer.invoke("git:run-commit", { files, message, stageAll }),
   onGitCommitOutput: (cb) => {
     const handler = (_, payload) => cb(payload);
     electron.ipcRenderer.on("git:commit-output", handler);

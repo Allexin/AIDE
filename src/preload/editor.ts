@@ -61,6 +61,11 @@ interface ToolbarInfo {
 }
 
 export interface EditorAPI {
+  // Menu: notify main when a file is opened/closed (enables/disables Edit menu)
+  notifyEditorFileChanged: (hasFile: boolean) => void
+  // Menu: listen for edit commands triggered from the native menu
+  onMenuEditCommand: (cb: (command: string) => void) => () => void
+
   getProjectPath: () => Promise<string | null>
   getProjectSettings: () => Promise<ProjectSettings>
   getConfig: () => Promise<{
@@ -128,6 +133,14 @@ export interface EditorAPI {
 }
 
 const editorApi: EditorAPI = {
+  notifyEditorFileChanged: (hasFile) => ipcRenderer.send('menu:editor-file-changed', hasFile),
+
+  onMenuEditCommand: (cb: (command: string) => void) => {
+    const handler = (_: unknown, command: string): void => cb(command)
+    ipcRenderer.on('menu:edit-command', handler)
+    return () => ipcRenderer.removeListener('menu:edit-command', handler)
+  },
+
   getProjectPath: () => ipcRenderer.invoke('editor:get-project-path'),
   getProjectSettings: () => ipcRenderer.invoke('editor:get-project-settings'),
   getConfig: () => ipcRenderer.invoke('config:get'),
