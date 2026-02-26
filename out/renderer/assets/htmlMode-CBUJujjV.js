@@ -1,6 +1,6 @@
-import { c as createWebWorker, l as languages } from "./index-CKl-FFOw.js";
-import { C as CompletionAdapter, H as HoverAdapter, D as DocumentHighlightAdapter, a as DefinitionAdapter, R as ReferenceAdapter, b as DocumentSymbolAdapter, c as RenameAdapter, d as DocumentColorAdapter, F as FoldingRangeAdapter, e as DiagnosticsAdapter, S as SelectionRangeAdapter, f as DocumentFormattingEditProvider, g as DocumentRangeFormattingEditProvider } from "./lspLanguageFeatures-DTclDc5p.js";
-import { h, i, j, t, k } from "./lspLanguageFeatures-DTclDc5p.js";
+import { c as createWebWorker, l as languages } from "./index-Ef_-Njz2.js";
+import { H as HoverAdapter, D as DocumentHighlightAdapter, h as DocumentLinkAdapter, F as FoldingRangeAdapter, b as DocumentSymbolAdapter, S as SelectionRangeAdapter, c as RenameAdapter, f as DocumentFormattingEditProvider, g as DocumentRangeFormattingEditProvider, C as CompletionAdapter } from "./lspLanguageFeatures-BcQNLDjW.js";
+import { a, e, d, R, i, j, t, k } from "./lspLanguageFeatures-BcQNLDjW.js";
 const STOP_WHEN_IDLE_FOR = 2 * 60 * 1e3;
 class WorkerManager {
   constructor(defaults) {
@@ -36,19 +36,19 @@ class WorkerManager {
     this._lastUsedTime = Date.now();
     if (!this._client) {
       this._worker = createWebWorker({
-        // module that exports the create() method and returns a `CSSWorker` instance
-        moduleId: "vs/language/css/cssWorker",
+        // module that exports the create() method and returns a `HTMLWorker` instance
+        moduleId: "vs/language/html/htmlWorker",
         createWorker: () => new Worker(new URL(
           /* @vite-ignore */
-          "" + new URL("css.worker-DUFKqVsF.js", import.meta.url).href,
+          "" + new URL("html.worker-RfQmf_T6.js", import.meta.url).href,
           import.meta.url
         ), { type: "module" }),
-        label: this._defaults.languageId,
         // passed in to the create() method
         createData: {
-          options: this._defaults.options,
+          languageSettings: this._defaults.options,
           languageId: this._defaults.languageId
-        }
+        },
+        label: this._defaults.languageId
       });
       this._client = this._worker.getProxy();
     }
@@ -65,6 +65,48 @@ class WorkerManager {
     }).then((_) => _client);
   }
 }
+class HTMLCompletionAdapter extends CompletionAdapter {
+  constructor(worker) {
+    super(worker, [".", ":", "<", '"', "=", "/"]);
+  }
+}
+function setupMode1(defaults) {
+  const client = new WorkerManager(defaults);
+  const worker = (...uris) => {
+    return client.getLanguageServiceWorker(...uris);
+  };
+  let languageId = defaults.languageId;
+  languages.registerCompletionItemProvider(languageId, new HTMLCompletionAdapter(worker));
+  languages.registerHoverProvider(languageId, new HoverAdapter(worker));
+  languages.registerDocumentHighlightProvider(
+    languageId,
+    new DocumentHighlightAdapter(worker)
+  );
+  languages.registerLinkProvider(languageId, new DocumentLinkAdapter(worker));
+  languages.registerFoldingRangeProvider(
+    languageId,
+    new FoldingRangeAdapter(worker)
+  );
+  languages.registerDocumentSymbolProvider(
+    languageId,
+    new DocumentSymbolAdapter(worker)
+  );
+  languages.registerSelectionRangeProvider(
+    languageId,
+    new SelectionRangeAdapter(worker)
+  );
+  languages.registerRenameProvider(languageId, new RenameAdapter(worker));
+  if (languageId === "html") {
+    languages.registerDocumentFormattingEditProvider(
+      languageId,
+      new DocumentFormattingEditProvider(worker)
+    );
+    languages.registerDocumentRangeFormattingEditProvider(
+      languageId,
+      new DocumentRangeFormattingEditProvider(worker)
+    );
+  }
+}
 function setupMode(defaults) {
   const disposables = [];
   const providers = [];
@@ -78,10 +120,7 @@ function setupMode(defaults) {
     disposeAll(providers);
     if (modeConfiguration.completionItems) {
       providers.push(
-        languages.registerCompletionItemProvider(
-          languageId,
-          new CompletionAdapter(worker, ["/", "-", ":"])
-        )
+        languages.registerCompletionItemProvider(languageId, new HTMLCompletionAdapter(worker))
       );
     }
     if (modeConfiguration.hovers) {
@@ -97,20 +136,9 @@ function setupMode(defaults) {
         )
       );
     }
-    if (modeConfiguration.definitions) {
+    if (modeConfiguration.links) {
       providers.push(
-        languages.registerDefinitionProvider(
-          languageId,
-          new DefinitionAdapter(worker)
-        )
-      );
-    }
-    if (modeConfiguration.references) {
-      providers.push(
-        languages.registerReferenceProvider(
-          languageId,
-          new ReferenceAdapter(worker)
-        )
+        languages.registerLinkProvider(languageId, new DocumentLinkAdapter(worker))
       );
     }
     if (modeConfiguration.documentSymbols) {
@@ -126,25 +154,12 @@ function setupMode(defaults) {
         languages.registerRenameProvider(languageId, new RenameAdapter(worker))
       );
     }
-    if (modeConfiguration.colors) {
-      providers.push(
-        languages.registerColorProvider(
-          languageId,
-          new DocumentColorAdapter(worker)
-        )
-      );
-    }
     if (modeConfiguration.foldingRanges) {
       providers.push(
         languages.registerFoldingRangeProvider(
           languageId,
           new FoldingRangeAdapter(worker)
         )
-      );
-    }
-    if (modeConfiguration.diagnostics) {
-      providers.push(
-        new DiagnosticsAdapter(languageId, worker, defaults.onDidChange)
       );
     }
     if (modeConfiguration.selectionRanges) {
@@ -186,23 +201,24 @@ function disposeAll(disposables) {
 }
 export {
   CompletionAdapter,
-  DefinitionAdapter,
-  DiagnosticsAdapter,
-  DocumentColorAdapter,
+  a as DefinitionAdapter,
+  e as DiagnosticsAdapter,
+  d as DocumentColorAdapter,
   DocumentFormattingEditProvider,
   DocumentHighlightAdapter,
-  h as DocumentLinkAdapter,
+  DocumentLinkAdapter,
   DocumentRangeFormattingEditProvider,
   DocumentSymbolAdapter,
   FoldingRangeAdapter,
   HoverAdapter,
-  ReferenceAdapter,
+  R as ReferenceAdapter,
   RenameAdapter,
   SelectionRangeAdapter,
   WorkerManager,
   i as fromPosition,
   j as fromRange,
   setupMode,
+  setupMode1,
   t as toRange,
   k as toTextEdit
 };

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 export interface ProjectSettings {
   activePanelRatio: number
@@ -112,6 +112,9 @@ export interface EditorAPI {
   onToolbarProcessExited: (
     cb: (payload: { buttonId: string; exitCode: number | null }) => void
   ) => () => void
+
+  // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
+  getPathForFile: (file: File) => string
 
   // Shell / FS operations
   shellShowItemInFolder: (filePath: string) => Promise<void>
@@ -250,6 +253,8 @@ const editorApi: EditorAPI = {
     ipcRenderer.on('toolbar:process-exited', handler)
     return () => ipcRenderer.removeListener('toolbar:process-exited', handler)
   },
+
+  getPathForFile: (file) => webUtils.getPathForFile(file),
 
   // Shell / FS operations
   shellShowItemInFolder: (filePath) => ipcRenderer.invoke('shell:show-item-in-folder', filePath),

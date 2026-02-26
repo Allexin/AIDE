@@ -116,3 +116,28 @@ No file caching — title is read fresh from JSONL on each `scanSessions` call.
 - `src/renderer/src/store/useSessionStore.ts` — `attention` field; `setAttention`; initial slug hardcoded
 - `src/renderer/src/components/layout/TerminalPanel.tsx` — `onTerminalTabTitle` subscription; OSC 9 handler; `TabButton` with amber blink; removed `onTitleChange`
 - `src/renderer/src/windows/SessionPickerApp.tsx` — displays `DiskSession.title`
+
+---
+
+## Batch C — Drag & Drop into Terminal ✅
+
+### C1. External drag from Windows Explorer
+
+**Done.** Dropping a file from Windows Explorer into the terminal area writes the file path to the active PTY stdin.
+
+- `onDragOver` + `onDrop` handlers added to the xterm container div in `TerminalPanel.tsx`
+- In `onDrop`: reads `event.dataTransfer.files[0].path` (Electron extension on `File`)
+- Path rule: if the file is inside `projectRoot` → writes `@relative/path ` (with trailing space); otherwise → absolute path with trailing space
+- After writing: calls `terminal.focus()` via the extended `FitFn.focus()` method
+
+### C2. Internal drag from file tree
+
+**Done.** Dragging a file node from the file tree and dropping it into the terminal area works identically.
+
+- File nodes in `FileTree.tsx` (`NodeItem`) are now `draggable={true}` (files only, not directories)
+- `onDragStart` sets `dataTransfer.setData('aide/absolute-path', node.path)`
+- `onDrop` in `TerminalPanel.tsx` checks `dataTransfer.getData('aide/absolute-path')` first — if present, uses it instead of `dataTransfer.files`. Files from the tree are always inside `projectRoot`, so always written as `@relative/path `
+
+**Files changed:**
+- `src/renderer/src/components/layout/TerminalPanel.tsx` — `useFileTreeStore` import; `FitFn.focus`; `handleDragOver`; `handleDrop`; `onDragOver`/`onDrop` on xterm container; `focus()` exposed in `onMount`
+- `src/renderer/src/components/filetree/FileTree.tsx` — `draggable` + `onDragStart` on file nodes in `NodeItem`

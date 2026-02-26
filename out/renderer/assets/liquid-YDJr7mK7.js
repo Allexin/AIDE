@@ -1,4 +1,4 @@
-import { l as languages } from "./index-CKl-FFOw.js";
+import { l as languages } from "./index-Ef_-Njz2.js";
 const EMPTY_ELEMENTS = [
   "area",
   "base",

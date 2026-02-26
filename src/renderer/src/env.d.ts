@@ -140,6 +140,9 @@ interface EditorAPI {
     cb: (payload: { buttonId: string; exitCode: number | null }) => void
   ) => () => void
 
+  // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
+  getPathForFile: (file: File) => string
+
   // Shell / FS operations
   shellShowItemInFolder: (filePath: string) => Promise<void>
   fsDeleteFile: (filePath: string) => Promise<void>

@@ -893,7 +893,6 @@ class PtyManager {
    *  Buffers partial sequences across chunks since node-pty can split them arbitrarily.
    */
   extractTitle(tabId, data) {
-    this.dbgLog(tabId, data);
     const buf = (this.titleBufs.get(tabId) ?? "") + data;
     const m = /\x1b\](?:0|2);([^\x07\x1b]*)\x07/.exec(buf) ?? /\x1b\](?:0|2);([^\x1b]*)\x1b\\/.exec(buf);
     if (m?.[1]) {

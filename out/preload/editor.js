@@ -85,6 +85,7 @@ const editorApi = {
     electron.ipcRenderer.on("toolbar:process-exited", handler);
     return () => electron.ipcRenderer.removeListener("toolbar:process-exited", handler);
   },
+  getPathForFile: (file) => electron.webUtils.getPathForFile(file),
   // Shell / FS operations
   shellShowItemInFolder: (filePath) => electron.ipcRenderer.invoke("shell:show-item-in-folder", filePath),
   fsDeleteFile: (filePath) => electron.ipcRenderer.invoke("fs:delete-file", filePath),

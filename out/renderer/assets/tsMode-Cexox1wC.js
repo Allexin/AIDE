@@ -1,4 +1,4 @@
-import { c as createWebWorker, e as editor, U as Uri, a as MarkerTag, M as MarkerSeverity, l as languages, t as typescriptDefaults, R as Range } from "./index-CKl-FFOw.js";
+import { c as createWebWorker, e as editor, U as Uri, a as MarkerTag, M as MarkerSeverity, l as languages, t as typescriptDefaults, R as Range } from "./index-Ef_-Njz2.js";
 class WorkerManager {
   constructor(_modeId, _defaults) {
     this._modeId = _modeId;

@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { usePanelStore } from '../../store/usePanelStore'
 import { useSessionStore } from '../../store/useSessionStore'
+import { useFileTreeStore } from '../../store/useFileTreeStore'
 
 // VS Dark terminal theme
 const VS_DARK_THEME = {
@@ -42,6 +43,7 @@ const headerBtnStyle: React.CSSProperties = {
 
 interface FitFn {
   fit: () => void
+  focus: () => void
 }
 
 // ── TerminalTab: one xterm.js instance per session tab ───────────────────────
@@ -96,14 +98,15 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }: Termi
       return true
     })
 
-    // Expose fit to parent
+    // Expose fit + focus to parent
     onMount(tabId, {
       fit: () => {
         try {
           fitAddon.fit()
           window.editorApi.terminalResize(tabId, terminal.cols, terminal.rows)
         } catch {}
-      }
+      },
+      focus: () => { terminal.focus() }
     })
 
     // Forward keypresses to PTY
@@ -288,7 +291,9 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   const { tabs, activeTabId, initialized, initWithTab, addTab, setActiveTab, updateSlug, updateSessionId, markExited, setAttention } =
     useSessionStore()
 
-  // Map of tabId → fit function (populated by TerminalTab on mount)
+  const projectPath = useFileTreeStore((s) => s.projectPath)
+
+  // Map of tabId → fit+focus functions (populated by TerminalTab on mount)
   const fitFunctions = useRef<Map<string, FitFn>>(new Map())
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -303,6 +308,42 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   const handleAttention = useCallback((tabId: string) => {
     setAttention(tabId, true)
   }, [setAttention])
+
+  // C1/C2: drag & drop files into terminal
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    if (!activeTabId) return
+
+    let absPath: string | null = null
+
+    // C2: internal drag from file tree (check first)
+    const internal = e.dataTransfer.getData('aide/absolute-path')
+    if (internal) {
+      absPath = internal
+    } else if (e.dataTransfer.files.length > 0) {
+      // C1: external drag from Windows Explorer
+      const p = window.editorApi.getPathForFile(e.dataTransfer.files[0])
+      absPath = p || null
+    }
+
+    if (!absPath) return
+
+    let text: string
+    if (projectPath && (absPath.startsWith(projectPath + '\\') || absPath.startsWith(projectPath + '/'))) {
+      const rel = absPath.slice(projectPath.length + 1).replace(/\\/g, '/')
+      text = `@${rel} `
+    } else {
+      text = `${absPath} `
+    }
+
+    window.editorApi.terminalWrite(activeTabId, text)
+    fitFunctions.current.get(activeTabId)?.focus()
+  }, [activeTabId, projectPath])
 
   // Initialize on first mount: create initial PTY tab
   useEffect(() => {
@@ -445,6 +486,8 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
       <div
         ref={containerRef}
         style={{ flex: 1, position: 'relative', overflow: 'hidden' }}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
       >
         {tabs.map((tab) => (
           <TerminalTab

@@ -1,4 +1,4 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["./cssMode-dRUQLLUJ.js","./lspLanguageFeatures-DTclDc5p.js","./htmlMode-Djxf2Jax.js","./jsonMode-DY4UnNml.js","./javascript-BSXs7Mf7.js","./typescript-ChFIM-Os.js"])))=>i.map(i=>d[i]);
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["./cssMode-B27WOR7e.js","./lspLanguageFeatures-BcQNLDjW.js","./htmlMode-CBUJujjV.js","./jsonMode-CpQIjAQI.js","./javascript-CUY1_480.js","./typescript-uLRXhlP-.js"])))=>i.map(i=>d[i]);
 function getDefaultExportFromCjs(x2) {
   return x2 && x2.__esModule && Object.prototype.hasOwnProperty.call(x2, "default") ? x2["default"] : x2;
 }
@@ -8675,6 +8675,11 @@ function NodeItem({
           color: "#cccccc",
           overflow: "hidden"
         },
+        draggable: !isDir,
+        onDragStart: !isDir ? (e) => {
+          e.dataTransfer.setData("aide/absolute-path", node.path);
+          e.dataTransfer.effectAllowed = "copy";
+        } : void 0,
         onClick: handleClick,
         onContextMenu: handleContextMenu,
         onMouseEnter: () => setHovered(true),
@@ -197024,7 +197029,7 @@ const lessDefaults = new LanguageServiceDefaultsImpl$3(
   modeConfigurationDefault$2
 );
 function getMode$3() {
-  return __vitePreload(() => import("./cssMode-dRUQLLUJ.js"), true ? __vite__mapDeps([0,1]) : void 0, import.meta.url);
+  return __vitePreload(() => import("./cssMode-B27WOR7e.js"), true ? __vite__mapDeps([0,1]) : void 0, import.meta.url);
 }
 languages.onLanguage("less", () => {
   getMode$3().then((mode2) => mode2.setupMode(lessDefaults));
@@ -197129,7 +197134,7 @@ const razorLanguageService = registerHTMLLanguageService(
 );
 const razorDefaults = razorLanguageService.defaults;
 function getMode$2() {
-  return __vitePreload(() => import("./htmlMode-Djxf2Jax.js"), true ? __vite__mapDeps([2,1]) : void 0, import.meta.url);
+  return __vitePreload(() => import("./htmlMode-CBUJujjV.js"), true ? __vite__mapDeps([2,1]) : void 0, import.meta.url);
 }
 function registerHTMLLanguageService(languageId, options = optionsDefault, modeConfiguration = getConfigurationDefault(languageId)) {
   const defaults = new LanguageServiceDefaultsImpl$2(languageId, options, modeConfiguration);
@@ -197213,7 +197218,7 @@ const jsonDefaults = new LanguageServiceDefaultsImpl$1(
 );
 const getWorker$1 = () => getMode$1().then((mode2) => mode2.getWorker());
 function getMode$1() {
-  return __vitePreload(() => import("./jsonMode-DY4UnNml.js"), true ? __vite__mapDeps([3,1]) : void 0, import.meta.url);
+  return __vitePreload(() => import("./jsonMode-CpQIjAQI.js"), true ? __vite__mapDeps([3,1]) : void 0, import.meta.url);
 }
 languages.register({
   id: "json",
@@ -197459,7 +197464,7 @@ const getJavaScriptWorker = () => {
   return getMode().then((mode) => mode.getJavaScriptWorker());
 };
 function getMode() {
-  return __vitePreload(() => import("./tsMode-KBoFgK--.js"), true ? [] : void 0, import.meta.url);
+  return __vitePreload(() => import("./tsMode-Cexox1wC.js"), true ? [] : void 0, import.meta.url);
 }
 languages.onLanguage("typescript", () => {
   return getMode().then((mode) => mode.setupTypeScript(typescriptDefaults));
@@ -197654,49 +197659,49 @@ registerLanguage({
   extensions: [".ftl", ".ftlh", ".ftlx"],
   aliases: ["FreeMarker2", "Apache FreeMarker2"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-Bj9itNKC.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationDollar);
+    return __vitePreload(() => import("./freemarker2-noTYNNPz.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationDollar);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-angle.interpolation-dollar",
   aliases: ["FreeMarker2 (Angle/Dollar)", "Apache FreeMarker2 (Angle/Dollar)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-Bj9itNKC.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAngleInterpolationDollar);
+    return __vitePreload(() => import("./freemarker2-noTYNNPz.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAngleInterpolationDollar);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-bracket.interpolation-dollar",
   aliases: ["FreeMarker2 (Bracket/Dollar)", "Apache FreeMarker2 (Bracket/Dollar)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-Bj9itNKC.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagBracketInterpolationDollar);
+    return __vitePreload(() => import("./freemarker2-noTYNNPz.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagBracketInterpolationDollar);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-angle.interpolation-bracket",
   aliases: ["FreeMarker2 (Angle/Bracket)", "Apache FreeMarker2 (Angle/Bracket)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-Bj9itNKC.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAngleInterpolationBracket);
+    return __vitePreload(() => import("./freemarker2-noTYNNPz.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAngleInterpolationBracket);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-bracket.interpolation-bracket",
   aliases: ["FreeMarker2 (Bracket/Bracket)", "Apache FreeMarker2 (Bracket/Bracket)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-Bj9itNKC.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagBracketInterpolationBracket);
+    return __vitePreload(() => import("./freemarker2-noTYNNPz.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagBracketInterpolationBracket);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-auto.interpolation-dollar",
   aliases: ["FreeMarker2 (Auto/Dollar)", "Apache FreeMarker2 (Auto/Dollar)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-Bj9itNKC.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationDollar);
+    return __vitePreload(() => import("./freemarker2-noTYNNPz.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationDollar);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-auto.interpolation-bracket",
   aliases: ["FreeMarker2 (Auto/Bracket)", "Apache FreeMarker2 (Auto/Bracket)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-Bj9itNKC.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationBracket);
+    return __vitePreload(() => import("./freemarker2-noTYNNPz.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationBracket);
   }
 });
 registerLanguage({
@@ -197717,7 +197722,7 @@ registerLanguage({
   extensions: [".handlebars", ".hbs"],
   aliases: ["Handlebars", "handlebars", "hbs"],
   mimetypes: ["text/x-handlebars-template"],
-  loader: () => __vitePreload(() => import("./handlebars-GsSrcL6T.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./handlebars-k1I8QgwN.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "hcl",
@@ -197730,7 +197735,7 @@ registerLanguage({
   extensions: [".html", ".htm", ".shtml", ".xhtml", ".mdoc", ".jsp", ".asp", ".aspx", ".jshtm"],
   aliases: ["HTML", "htm", "html", "xhtml"],
   mimetypes: ["text/html", "text/x-jshtm", "text/template", "text/ng-template"],
-  loader: () => __vitePreload(() => import("./html-DnsflX0j.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./html-DKIlBxm2.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "ini",
@@ -197753,7 +197758,7 @@ registerLanguage({
   filenames: ["jakefile"],
   aliases: ["JavaScript", "javascript", "js"],
   mimetypes: ["text/javascript"],
-  loader: () => __vitePreload(() => import("./javascript-BSXs7Mf7.js"), true ? __vite__mapDeps([4,5]) : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./javascript-CUY1_480.js"), true ? __vite__mapDeps([4,5]) : void 0, import.meta.url)
 });
 registerLanguage({
   id: "julia",
@@ -197792,7 +197797,7 @@ registerLanguage({
   extensions: [".liquid", ".html.liquid"],
   aliases: ["Liquid", "liquid"],
   mimetypes: ["application/liquid"],
-  loader: () => __vitePreload(() => import("./liquid-BYj1H5i_.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./liquid-YDJr7mK7.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "m3",
@@ -197810,7 +197815,7 @@ registerLanguage({
   id: "mdx",
   extensions: [".mdx"],
   aliases: ["MDX", "mdx"],
-  loader: () => __vitePreload(() => import("./mdx-fg9kGzJh.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./mdx-CXZ1rUyh.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "mips",
@@ -197909,7 +197914,7 @@ registerLanguage({
   extensions: [".py", ".rpy", ".pyw", ".cpy", ".gyp", ".gypi"],
   aliases: ["Python", "py"],
   firstLine: "^#!/.*\\bpython[0-9.-]*\\b",
-  loader: () => __vitePreload(() => import("./python-BJm25j_7.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./python-VUNMYIXq.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "qsharp",
@@ -197928,7 +197933,7 @@ registerLanguage({
   extensions: [".cshtml"],
   aliases: ["Razor", "razor"],
   mimetypes: ["text/x-cshtml"],
-  loader: () => __vitePreload(() => import("./razor-BO6Gibzc.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./razor-BskGloZ0.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "redis",
@@ -198061,7 +198066,7 @@ registerLanguage({
   aliases: ["TypeScript", "ts", "typescript"],
   mimetypes: ["text/typescript"],
   loader: () => {
-    return __vitePreload(() => import("./typescript-ChFIM-Os.js"), true ? [] : void 0, import.meta.url);
+    return __vitePreload(() => import("./typescript-uLRXhlP-.js"), true ? [] : void 0, import.meta.url);
   }
 });
 registerLanguage({
@@ -198106,14 +198111,14 @@ registerLanguage({
   firstLine: "(\\<\\?xml.*)|(\\<svg)|(\\<\\!doctype\\s+svg)",
   aliases: ["XML", "xml"],
   mimetypes: ["text/xml", "application/xml", "application/xaml+xml", "application/xml-dtd"],
-  loader: () => __vitePreload(() => import("./xml-DM9dCk8Z.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./xml-CsD0noq8.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "yaml",
   extensions: [".yaml", ".yml"],
   aliases: ["YAML", "yaml", "YML", "yml"],
   mimetypes: ["application/x-yaml", "text/x-yaml"],
-  loader: () => __vitePreload(() => import("./yaml-oI4NjWz-.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./yaml-DI5HIWis.js"), true ? [] : void 0, import.meta.url)
 });
 var __defProp = Object.defineProperty;
 var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
@@ -210579,6 +210584,9 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }) {
           window.editorApi.terminalResize(tabId, terminal.cols, terminal.rows);
         } catch {
         }
+      },
+      focus: () => {
+        terminal.focus();
       }
     });
     terminal.onData((data) => {
@@ -210733,6 +210741,7 @@ function TerminalContextMenu({ x: x2, y: y2, hasSel, onCopy, onPaste, onClose })
 function TerminalPanel({ style }) {
   const { terminalCollapsed, collapsedWidthPx, toggleTerminalCollapse, focusTerminal } = usePanelStore();
   const { tabs, activeTabId, initialized, initWithTab, addTab, setActiveTab, updateSlug, updateSessionId, markExited, setAttention } = useSessionStore();
+  const projectPath = useFileTreeStore((s15) => s15.projectPath);
   const fitFunctions = reactExports.useRef(/* @__PURE__ */ new Map());
   const containerRef = reactExports.useRef(null);
   const handleMount = reactExports.useCallback((tabId, fitFn) => {
@@ -210744,6 +210753,32 @@ function TerminalPanel({ style }) {
   const handleAttention = reactExports.useCallback((tabId) => {
     setAttention(tabId, true);
   }, [setAttention]);
+  const handleDragOver = reactExports.useCallback((e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }, []);
+  const handleDrop = reactExports.useCallback((e) => {
+    e.preventDefault();
+    if (!activeTabId) return;
+    let absPath = null;
+    const internal = e.dataTransfer.getData("aide/absolute-path");
+    if (internal) {
+      absPath = internal;
+    } else if (e.dataTransfer.files.length > 0) {
+      const p2 = window.editorApi.getPathForFile(e.dataTransfer.files[0]);
+      absPath = p2 || null;
+    }
+    if (!absPath) return;
+    let text2;
+    if (projectPath && (absPath.startsWith(projectPath + "\\") || absPath.startsWith(projectPath + "/"))) {
+      const rel = absPath.slice(projectPath.length + 1).replace(/\\/g, "/");
+      text2 = `@${rel} `;
+    } else {
+      text2 = `${absPath} `;
+    }
+    window.editorApi.terminalWrite(activeTabId, text2);
+    fitFunctions.current.get(activeTabId)?.focus();
+  }, [activeTabId, projectPath]);
   reactExports.useEffect(() => {
     if (initialized) return;
     window.editorApi.terminalCreateInitial().then((tab) => {
@@ -210883,6 +210918,8 @@ function TerminalPanel({ style }) {
           {
             ref: containerRef,
             style: { flex: 1, position: "relative", overflow: "hidden" },
+            onDragOver: handleDragOver,
+            onDrop: handleDrop,
             children: [
               tabs.map((tab) => /* @__PURE__ */ jsxRuntimeExports.jsx(
                 TerminalTab,

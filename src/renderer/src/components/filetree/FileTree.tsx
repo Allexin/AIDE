@@ -529,6 +529,11 @@ function NodeItem({
           color: '#cccccc',
           overflow: 'hidden'
         }}
+        draggable={!isDir}
+        onDragStart={!isDir ? (e: React.DragEvent<HTMLDivElement>) => {
+          e.dataTransfer.setData('aide/absolute-path', node.path)
+          e.dataTransfer.effectAllowed = 'copy'
+        } : undefined}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
         onMouseEnter={() => setHovered(true)}
