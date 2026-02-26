@@ -143,6 +143,7 @@ function createPickerWindow() {
     minHeight: 300,
     resizable: true,
     title: "AIDE — Open Project",
+    icon: path.join(__dirname, "../../app_icon.ico"),
     backgroundColor: "#1e1e1e",
     webPreferences: {
       preload: path.join(__dirname, "../preload/picker.js"),
@@ -1174,12 +1175,21 @@ async function handleOpenFolder() {
     await checkRunningAndProceed(editorWin, async () => {
       const result = await electron.dialog.showOpenDialog(editorWin, { properties: ["openDirectory"] });
       if (result.canceled || !result.filePaths[0]) return;
-      switchProject(result.filePaths[0], editorWin);
+      const newPath = result.filePaths[0];
+      if (openProjectsRef?.has(newPath)) {
+        openProjectsRef.get(newPath).focus();
+        return;
+      }
+      switchProject(newPath, editorWin);
     });
   } else {
     const result = await electron.dialog.showOpenDialog(focused, { properties: ["openDirectory"] });
     if (result.canceled || !result.filePaths[0]) return;
     const newPath = result.filePaths[0];
+    if (openProjectsRef?.has(newPath)) {
+      openProjectsRef.get(newPath).focus();
+      return;
+    }
     focused.close();
     if (openProjectFn && openProjectsRef) {
       const openResult = openProjectFn(newPath);
@@ -1191,6 +1201,10 @@ async function handleOpenRecent(projectPath) {
   if (!fs.existsSync(projectPath)) {
     electron.dialog.showErrorBox("AIDE", `Path no longer exists:
 ${projectPath}`);
+    return;
+  }
+  if (openProjectsRef?.has(projectPath)) {
+    openProjectsRef.get(projectPath).focus();
     return;
   }
   const focused = electron.BrowserWindow.getFocusedWindow();
@@ -1291,6 +1305,7 @@ function createEditorWindow(projectPath) {
     minHeight: 600,
     resizable: true,
     title: `AIDE — ${folderName}`,
+    icon: path.join(__dirname, "../../app_icon.ico"),
     backgroundColor: "#1e1e1e",
     webPreferences: {
       preload: path.join(__dirname, "../preload/editor.js"),
@@ -1376,6 +1391,7 @@ function createSessionPickerWindow(editorWin) {
     height: 400,
     resizable: true,
     title: "Sessions",
+    icon: path.join(__dirname, "../../app_icon.ico"),
     backgroundColor: "#1e1e1e",
     parent: editorWin,
     modal: false,

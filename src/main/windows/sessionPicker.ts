@@ -9,6 +9,7 @@ export function createSessionPickerWindow(editorWin: BrowserWindow): BrowserWind
     height: 400,
     resizable: true,
     title: 'Sessions',
+    icon: join(__dirname, '../../app_icon.ico'),
     backgroundColor: '#1e1e1e',
     parent: editorWin,
     modal: false,

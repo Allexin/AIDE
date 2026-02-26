@@ -160,6 +160,8 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount }: TerminalTabProps):
       terminalRef.current?.paste(text)
     } catch {}
     setCtxMenu(null)
+    // A2: restore focus after context menu closes
+    setTimeout(() => terminalRef.current?.focus(), 0)
   }
 
   return (

@@ -24,6 +24,7 @@ export function createEditorWindow(projectPath: string): BrowserWindow {
     minHeight: 600,
     resizable: true,
     title: `AIDE — ${folderName}`,
+    icon: join(__dirname, '../../app_icon.ico'),
     backgroundColor: '#1e1e1e',
     webPreferences: {
       preload: join(__dirname, '../preload/editor.js'),

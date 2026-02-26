@@ -1,5 +1,5 @@
-import { conf as conf$1, language as language$1 } from "./typescript-gePX66DY.js";
-import "./index-BAkB4JZt.js";
+import { conf as conf$1, language as language$1 } from "./typescript-B24KbYo6.js";
+import "./index-sZCFUCWL.js";
 const conf = conf$1;
 const language = {
   // Set defaultToken to invalid to see what you do not tokenize yet

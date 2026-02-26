@@ -1,0 +1,9 @@
+appId: com.aide.editor
+productName: AIDE
+
+win:
+  icon: app_icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64

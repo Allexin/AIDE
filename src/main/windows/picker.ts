@@ -10,6 +10,7 @@ export function createPickerWindow(): BrowserWindow {
     minHeight: 300,
     resizable: true,
     title: 'AIDE — Open Project',
+    icon: join(__dirname, '../../app_icon.ico'),
     backgroundColor: '#1e1e1e',
     webPreferences: {
       preload: join(__dirname, '../preload/picker.js'),

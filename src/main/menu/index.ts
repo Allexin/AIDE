@@ -92,12 +92,23 @@ async function handleOpenFolder(): Promise<void> {
     await checkRunningAndProceed(editorWin, async () => {
       const result = await dialog.showOpenDialog(editorWin, { properties: ['openDirectory'] })
       if (result.canceled || !result.filePaths[0]) return
-      switchProject(result.filePaths[0], editorWin)
+      const newPath = result.filePaths[0]
+      // A1: already open → just focus, no switch
+      if (openProjectsRef?.has(newPath)) {
+        openProjectsRef.get(newPath)!.focus()
+        return
+      }
+      switchProject(newPath, editorWin)
     })
   } else {
     const result = await dialog.showOpenDialog(focused, { properties: ['openDirectory'] })
     if (result.canceled || !result.filePaths[0]) return
     const newPath = result.filePaths[0]
+    // A1: already open → just focus, no switch
+    if (openProjectsRef?.has(newPath)) {
+      openProjectsRef.get(newPath)!.focus()
+      return
+    }
     focused.close()
     if (openProjectFn && openProjectsRef) {
       const openResult = openProjectFn(newPath)
@@ -109,6 +120,12 @@ async function handleOpenFolder(): Promise<void> {
 async function handleOpenRecent(projectPath: string): Promise<void> {
   if (!existsSync(projectPath)) {
     dialog.showErrorBox('AIDE', `Path no longer exists:\n${projectPath}`)
+    return
+  }
+
+  // A1: already open → just focus, no switch
+  if (openProjectsRef?.has(projectPath)) {
+    openProjectsRef.get(projectPath)!.focus()
     return
   }
 
