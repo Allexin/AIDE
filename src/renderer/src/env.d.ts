@@ -141,6 +141,13 @@ interface EditorAPI {
     cb: (payload: { buttonId: string; exitCode: number | null }) => void
   ) => () => void
 
+  // Shell / FS operations
+  shellShowItemInFolder: (filePath: string) => Promise<void>
+  fsDeleteFile: (filePath: string) => Promise<void>
+  fsTrashFile: (filePath: string) => Promise<void>
+  fsRenameFile: (oldPath: string, newPath: string) => Promise<void>
+  fsCopyFile: (src: string, dest: string) => Promise<void>
+
   // Git commit
   gitGetCommitFiles: () => Promise<{
     available: boolean

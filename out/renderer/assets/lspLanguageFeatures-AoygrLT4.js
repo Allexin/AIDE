@@ -1,4 +1,4 @@
-import { R as Range$1, l as languages, e as editor, U as Uri, M as MarkerSeverity } from "./index-sZCFUCWL.js";
+import { R as Range$1, l as languages, e as editor, U as Uri, M as MarkerSeverity } from "./index-DSigxUUh.js";
 var DocumentUri;
 (function(DocumentUri2) {
   function is(value) {

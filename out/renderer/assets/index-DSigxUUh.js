@@ -1,4 +1,4 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["./cssMode-X4qkzJcf.js","./lspLanguageFeatures-CLBftSNY.js","./htmlMode-D_ta8HY2.js","./jsonMode-fXKLYMHQ.js","./javascript-B_BJRQ0N.js","./typescript-B24KbYo6.js"])))=>i.map(i=>d[i]);
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["./cssMode-Dp6aVoP1.js","./lspLanguageFeatures-AoygrLT4.js","./htmlMode-DT_k5o0u.js","./jsonMode-uGZAyZsP.js","./javascript-sWDnMIWk.js","./typescript-1ucR6DI7.js"])))=>i.map(i=>d[i]);
 function getDefaultExportFromCjs(x2) {
   return x2 && x2.__esModule && Object.prototype.hasOwnProperty.call(x2, "default") ? x2["default"] : x2;
 }
@@ -7555,7 +7555,7 @@ function Spinner() {
     }
   );
 }
-function DialogButton({
+function DialogButton$1({
   label,
   onClick,
   primary,
@@ -7689,9 +7689,9 @@ function RunningDialog({
           " is already running."
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 8, justifyContent: "flex-end" }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton, { onClick: onKill, label: "Kill", danger: true }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton, { onClick: onKillRestart, label: "Kill & Restart", primary: true }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton, { onClick: onCancel, label: "Cancel" })
+          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton$1, { onClick: onKill, label: "Kill", danger: true }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton$1, { onClick: onKillRestart, label: "Kill & Restart", primary: true }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton$1, { onClick: onCancel, label: "Cancel" })
         ] })
       ]
     }
@@ -7857,8 +7857,8 @@ function AutoDetectDialog({
               children: "Configure manually…"
             }
           ),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton, { onClick: handleAdd, label: "Add Selected", primary: true }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton, { onClick: onSkip, label: "Skip (don't ask again)" })
+          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton$1, { onClick: handleAdd, label: "Add Selected", primary: true }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton$1, { onClick: onSkip, label: "Skip (don't ask again)" })
         ] })
       ]
     }
@@ -7980,8 +7980,8 @@ function PresetDialog({
           ] }, group.type))
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton, { onClick: handleSave, label: "Save", primary: true }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton, { onClick: onCancel, label: "Cancel" })
+          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton$1, { onClick: handleSave, label: "Save", primary: true }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton$1, { onClick: onCancel, label: "Cancel" })
         ] })
       ]
     }
@@ -8218,6 +8218,31 @@ function AddButton({ onClick }) {
     }
   );
 }
+const useSessionStore = create$3((set) => ({
+  tabs: [],
+  activeTabId: null,
+  initialized: false,
+  initWithTab: (tab) => set({
+    tabs: [{ ...tab, exited: false }],
+    activeTabId: tab.tabId,
+    initialized: true
+  }),
+  addTab: (tab) => set((state) => ({
+    tabs: [...state.tabs, { ...tab, exited: false }],
+    activeTabId: tab.tabId
+    // switch to new tab
+  })),
+  setActiveTab: (tabId) => set({ activeTabId: tabId }),
+  updateSlug: (tabId, slug) => set((state) => ({
+    tabs: state.tabs.map((t2) => t2.tabId === tabId ? { ...t2, slug } : t2)
+  })),
+  updateSessionId: (tabId, sessionId) => set((state) => ({
+    tabs: state.tabs.map((t2) => t2.tabId === tabId ? { ...t2, sessionId } : t2)
+  })),
+  markExited: (tabId) => set((state) => ({
+    tabs: state.tabs.map((t2) => t2.tabId === tabId ? { ...t2, exited: true } : t2)
+  }))
+}));
 function buildModifiedTree(changedPaths, projectPath) {
   const root2 = { subs: /* @__PURE__ */ new Map(), files: [], relPath: "" };
   for (const rel of changedPaths) {
@@ -8258,55 +8283,21 @@ function buildModifiedTree(changedPaths, projectPath) {
   }
   return vdirToNodes(root2, projectPath);
 }
-function ContextMenu({
-  x: x2,
-  y: y2,
-  filePath,
-  relativePath: relativePath2,
-  onClose
-}) {
-  const { viewDiff } = useEditorStore();
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
-      "div",
-      {
-        style: { position: "fixed", inset: 0, zIndex: 999 },
-        onClick: onClose,
-        onContextMenu: (e) => {
-          e.preventDefault();
-          onClose();
-        }
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
-      "div",
-      {
-        style: {
-          position: "fixed",
-          left: x2,
-          top: y2,
-          zIndex: 1e3,
-          background: "#252526",
-          border: "1px solid #454545",
-          borderRadius: 3,
-          padding: "4px 0",
-          minWidth: 140,
-          boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
-          fontSize: 13
-        },
-        children: /* @__PURE__ */ jsxRuntimeExports.jsx(
-          ContextMenuItem,
-          {
-            label: "View Diff",
-            onClick: () => {
-              viewDiff(filePath, relativePath2);
-              onClose();
-            }
-          }
-        )
-      }
-    )
-  ] });
+function getBasename(filePath) {
+  const idx = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  return idx >= 0 ? filePath.slice(idx + 1) : filePath;
+}
+function getDirname(filePath) {
+  const idx = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  return idx >= 0 ? filePath.slice(0, idx) : "";
+}
+function makeCopyName(filename) {
+  const dotIdx = filename.lastIndexOf(".");
+  if (dotIdx > 0) return filename.slice(0, dotIdx) + "_Copy" + filename.slice(dotIdx);
+  return filename + "_Copy";
+}
+function ContextMenuSeparator() {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 1, background: "#3d3d3d", margin: "3px 0" } });
 }
 function ContextMenuItem({
   label,
@@ -8328,6 +8319,289 @@ function ContextMenuItem({
       children: label
     }
   );
+}
+function ContextMenu({
+  x: x2,
+  y: y2,
+  filePath,
+  relativePath: relativePath2,
+  onClose,
+  onDeleteRequest,
+  onRenameRequest,
+  onDuplicateRequest
+}) {
+  const { viewDiff } = useEditorStore();
+  const activeTabId = useSessionStore((s15) => s15.activeTabId);
+  const handleAddToContext = () => {
+    if (activeTabId) {
+      window.editorApi.terminalWrite(activeTabId, `@${relativePath2} `);
+    }
+    onClose();
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "div",
+      {
+        style: { position: "fixed", inset: 0, zIndex: 999 },
+        onClick: onClose,
+        onContextMenu: (e) => {
+          e.preventDefault();
+          onClose();
+        }
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "div",
+      {
+        style: {
+          position: "fixed",
+          left: x2,
+          top: y2,
+          zIndex: 1e3,
+          background: "#252526",
+          border: "1px solid #454545",
+          borderRadius: 3,
+          padding: "4px 0",
+          minWidth: 160,
+          boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
+          fontSize: 13
+        },
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            ContextMenuItem,
+            {
+              label: "Open in Explorer",
+              onClick: () => {
+                window.editorApi.shellShowItemInFolder(filePath);
+                onClose();
+              }
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(ContextMenuItem, { label: "Add to Claude context", onClick: handleAddToContext }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(ContextMenuSeparator, {}),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            ContextMenuItem,
+            {
+              label: "View Diff",
+              onClick: () => {
+                viewDiff(filePath, relativePath2);
+                onClose();
+              }
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(ContextMenuSeparator, {}),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            ContextMenuItem,
+            {
+              label: "Rename",
+              onClick: () => {
+                onRenameRequest();
+                onClose();
+              }
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            ContextMenuItem,
+            {
+              label: "Duplicate",
+              onClick: () => {
+                onDuplicateRequest();
+                onClose();
+              }
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            ContextMenuItem,
+            {
+              label: "Delete",
+              onClick: () => {
+                onDeleteRequest();
+                onClose();
+              }
+            }
+          )
+        ]
+      }
+    )
+  ] });
+}
+function ModalBackdrop({ children }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      style: {
+        position: "fixed",
+        inset: 0,
+        zIndex: 2e3,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+      },
+      children
+    }
+  );
+}
+function ModalBox({ children }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      style: {
+        background: "#252526",
+        border: "1px solid #454545",
+        borderRadius: 4,
+        padding: "20px 24px",
+        minWidth: 320,
+        boxShadow: "0 4px 16px rgba(0,0,0,0.6)",
+        fontSize: 13
+      },
+      children
+    }
+  );
+}
+function DialogActions({ children }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }, children });
+}
+function DialogButton({
+  label,
+  onClick,
+  primary
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "button",
+    {
+      onClick,
+      style: {
+        padding: "5px 14px",
+        fontSize: 13,
+        cursor: "pointer",
+        borderRadius: 3,
+        border: primary ? "none" : "1px solid #555",
+        background: primary ? "#0e639c" : "transparent",
+        color: "#cccccc"
+      },
+      children: label
+    }
+  );
+}
+function DeleteConfirmDialog({
+  filePath,
+  onConfirm,
+  onCancel
+}) {
+  const filename = getBasename(filePath);
+  reactExports.useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "Escape") onCancel();
+      else if (e.key === "Enter") onConfirm();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onConfirm, onCancel]);
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(ModalBackdrop, { children: /* @__PURE__ */ jsxRuntimeExports.jsxs(ModalBox, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { color: "#cccccc", marginBottom: 4 }, children: [
+      "Delete ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: filename }),
+      "?"
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "#888", fontSize: 12 }, children: "This action cannot be undone." }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(DialogActions, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton, { label: "Cancel", onClick: onCancel }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton, { label: "Delete", onClick: onConfirm, primary: true })
+    ] })
+  ] }) });
+}
+function RenameDialog({
+  filePath,
+  onConfirm,
+  onCancel
+}) {
+  const [value, setValue] = reactExports.useState(getBasename(filePath));
+  const inputRef = reactExports.useRef(null);
+  reactExports.useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+  const handleConfirm = () => {
+    const trimmed = value.trim();
+    if (trimmed) onConfirm(trimmed);
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(ModalBackdrop, { children: /* @__PURE__ */ jsxRuntimeExports.jsxs(ModalBox, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "#cccccc", marginBottom: 10 }, children: "Rename file" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "input",
+      {
+        ref: inputRef,
+        value,
+        onChange: (e) => setValue(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Enter") handleConfirm();
+          else if (e.key === "Escape") onCancel();
+        },
+        style: {
+          width: "100%",
+          boxSizing: "border-box",
+          background: "#3c3c3c",
+          border: "1px solid #007fd4",
+          borderRadius: 3,
+          color: "#cccccc",
+          fontSize: 13,
+          padding: "5px 8px",
+          outline: "none"
+        }
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(DialogActions, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton, { label: "Cancel", onClick: onCancel }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton, { label: "Rename", onClick: handleConfirm, primary: true })
+    ] })
+  ] }) });
+}
+function DuplicateDialog({
+  filePath,
+  onConfirm,
+  onCancel
+}) {
+  const [value, setValue] = reactExports.useState(makeCopyName(getBasename(filePath)));
+  const inputRef = reactExports.useRef(null);
+  reactExports.useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+  const handleConfirm = () => {
+    const trimmed = value.trim();
+    if (trimmed) onConfirm(trimmed);
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(ModalBackdrop, { children: /* @__PURE__ */ jsxRuntimeExports.jsxs(ModalBox, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "#cccccc", marginBottom: 10 }, children: "Duplicate file" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "input",
+      {
+        ref: inputRef,
+        value,
+        onChange: (e) => setValue(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Enter") handleConfirm();
+          else if (e.key === "Escape") onCancel();
+        },
+        style: {
+          width: "100%",
+          boxSizing: "border-box",
+          background: "#3c3c3c",
+          border: "1px solid #007fd4",
+          borderRadius: 3,
+          color: "#cccccc",
+          fontSize: 13,
+          padding: "5px 8px",
+          outline: "none"
+        }
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(DialogActions, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton, { label: "Cancel", onClick: onCancel }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(DialogButton, { label: "Duplicate", onClick: handleConfirm, primary: true })
+    ] })
+  ] }) });
 }
 function NodeItem({
   node,
@@ -8440,34 +8714,71 @@ const msgStyle = {
 };
 function FileTree() {
   const { projectPath, dirContents, gitStatus, modifiedOnly, contextMenu, loading, setContextMenu } = useFileTreeStore();
+  const [dialogState, setDialogState] = reactExports.useState(null);
+  const closeDialog = () => setDialogState(null);
+  const handleDelete = async () => {
+    if (!dialogState || dialogState.type !== "delete") return;
+    try {
+      await window.editorApi.fsDeleteFile(dialogState.filePath);
+    } catch (err) {
+      useToastStore.getState().show(`Failed to delete: ${String(err)}`);
+    }
+    closeDialog();
+  };
+  const handleRename = async (newName) => {
+    if (!dialogState || dialogState.type !== "rename") return;
+    const dir = getDirname(dialogState.filePath);
+    const sep2 = dir.length > 0 ? dialogState.filePath[dir.length] : "";
+    const newPath = dir ? dir + sep2 + newName : newName;
+    try {
+      await window.editorApi.fsRenameFile(dialogState.filePath, newPath);
+    } catch (err) {
+      useToastStore.getState().show(`Failed to rename: ${String(err)}`);
+    }
+    closeDialog();
+  };
+  const handleDuplicate = async (newName) => {
+    if (!dialogState || dialogState.type !== "duplicate") return;
+    const dir = getDirname(dialogState.filePath);
+    const sep2 = dir.length > 0 ? dialogState.filePath[dir.length] : dialogState.filePath.includes("\\") ? "\\" : "/";
+    const newPath = dir ? dir + sep2 + newName : newName;
+    try {
+      await window.editorApi.fsCopyFile(dialogState.filePath, newPath);
+    } catch (err) {
+      useToastStore.getState().show(`Failed to duplicate: ${String(err)}`);
+    }
+    closeDialog();
+  };
   if (loading || !projectPath) {
     return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: centerStyle, children: /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: msgStyle, children: "Loading…" }) });
   }
+  let treeContent;
   if (modifiedOnly) {
     if (!gitStatus) {
-      return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: centerStyle, children: /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: msgStyle, children: "Loading…" }) });
+      treeContent = /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: centerStyle, children: /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: msgStyle, children: "Loading…" }) });
+    } else if (!gitStatus.available) {
+      treeContent = /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: centerStyle, children: /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: msgStyle, children: "Git is not available" }) });
+    } else if (gitStatus.changed.length === 0 && gitStatus.untracked.length === 0) {
+      treeContent = /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: centerStyle, children: /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: msgStyle, children: "No changes in project" }) });
+    } else {
+      const virtualTree = buildModifiedTree([...gitStatus.changed, ...gitStatus.untracked], projectPath);
+      treeContent = /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { overflowY: "auto", flex: 1 }, children: virtualTree.map((vnode) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+        NodeItem,
+        {
+          node: vnode,
+          depth: 0,
+          preloadedChildren: vnode.children ?? [],
+          isModifiedOnly: true
+        },
+        vnode.path
+      )) });
     }
-    if (!gitStatus.available) {
-      return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: centerStyle, children: /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: msgStyle, children: "Git is not available" }) });
-    }
-    if (gitStatus.changed.length === 0 && gitStatus.untracked.length === 0) {
-      return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: centerStyle, children: /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: msgStyle, children: "No changes in project" }) });
-    }
-    const virtualTree = buildModifiedTree([...gitStatus.changed, ...gitStatus.untracked], projectPath);
-    return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { overflowY: "auto", flex: 1 }, children: virtualTree.map((vnode) => /* @__PURE__ */ jsxRuntimeExports.jsx(
-      NodeItem,
-      {
-        node: vnode,
-        depth: 0,
-        preloadedChildren: vnode.children ?? [],
-        isModifiedOnly: true
-      },
-      vnode.path
-    )) });
+  } else {
+    const rootNodes = dirContents.get(projectPath) ?? [];
+    treeContent = /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { overflowY: "auto", flex: 1 }, children: rootNodes.map((node) => /* @__PURE__ */ jsxRuntimeExports.jsx(NodeItem, { node, depth: 0 }, node.path)) });
   }
-  const rootNodes = dirContents.get(projectPath) ?? [];
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { overflowY: "auto", flex: 1 }, children: [
-    rootNodes.map((node) => /* @__PURE__ */ jsxRuntimeExports.jsx(NodeItem, { node, depth: 0 }, node.path)),
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    treeContent,
     contextMenu && /* @__PURE__ */ jsxRuntimeExports.jsx(
       ContextMenu,
       {
@@ -8475,7 +8786,34 @@ function FileTree() {
         y: contextMenu.y,
         filePath: contextMenu.filePath,
         relativePath: contextMenu.relativePath,
-        onClose: () => setContextMenu(null)
+        onClose: () => setContextMenu(null),
+        onDeleteRequest: () => setDialogState({ type: "delete", filePath: contextMenu.filePath }),
+        onRenameRequest: () => setDialogState({ type: "rename", filePath: contextMenu.filePath }),
+        onDuplicateRequest: () => setDialogState({ type: "duplicate", filePath: contextMenu.filePath })
+      }
+    ),
+    dialogState?.type === "delete" && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      DeleteConfirmDialog,
+      {
+        filePath: dialogState.filePath,
+        onConfirm: handleDelete,
+        onCancel: closeDialog
+      }
+    ),
+    dialogState?.type === "rename" && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      RenameDialog,
+      {
+        filePath: dialogState.filePath,
+        onConfirm: handleRename,
+        onCancel: closeDialog
+      }
+    ),
+    dialogState?.type === "duplicate" && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      DuplicateDialog,
+      {
+        filePath: dialogState.filePath,
+        onConfirm: handleDuplicate,
+        onCancel: closeDialog
       }
     )
   ] });
@@ -196654,7 +196992,7 @@ const lessDefaults = new LanguageServiceDefaultsImpl$3(
   modeConfigurationDefault$2
 );
 function getMode$3() {
-  return __vitePreload(() => import("./cssMode-X4qkzJcf.js"), true ? __vite__mapDeps([0,1]) : void 0, import.meta.url);
+  return __vitePreload(() => import("./cssMode-Dp6aVoP1.js"), true ? __vite__mapDeps([0,1]) : void 0, import.meta.url);
 }
 languages.onLanguage("less", () => {
   getMode$3().then((mode2) => mode2.setupMode(lessDefaults));
@@ -196759,7 +197097,7 @@ const razorLanguageService = registerHTMLLanguageService(
 );
 const razorDefaults = razorLanguageService.defaults;
 function getMode$2() {
-  return __vitePreload(() => import("./htmlMode-D_ta8HY2.js"), true ? __vite__mapDeps([2,1]) : void 0, import.meta.url);
+  return __vitePreload(() => import("./htmlMode-DT_k5o0u.js"), true ? __vite__mapDeps([2,1]) : void 0, import.meta.url);
 }
 function registerHTMLLanguageService(languageId, options = optionsDefault, modeConfiguration = getConfigurationDefault(languageId)) {
   const defaults = new LanguageServiceDefaultsImpl$2(languageId, options, modeConfiguration);
@@ -196843,7 +197181,7 @@ const jsonDefaults = new LanguageServiceDefaultsImpl$1(
 );
 const getWorker$1 = () => getMode$1().then((mode2) => mode2.getWorker());
 function getMode$1() {
-  return __vitePreload(() => import("./jsonMode-fXKLYMHQ.js"), true ? __vite__mapDeps([3,1]) : void 0, import.meta.url);
+  return __vitePreload(() => import("./jsonMode-uGZAyZsP.js"), true ? __vite__mapDeps([3,1]) : void 0, import.meta.url);
 }
 languages.register({
   id: "json",
@@ -197089,7 +197427,7 @@ const getJavaScriptWorker = () => {
   return getMode().then((mode) => mode.getJavaScriptWorker());
 };
 function getMode() {
-  return __vitePreload(() => import("./tsMode-BVHSqQS4.js"), true ? [] : void 0, import.meta.url);
+  return __vitePreload(() => import("./tsMode-7gbmvjUU.js"), true ? [] : void 0, import.meta.url);
 }
 languages.onLanguage("typescript", () => {
   return getMode().then((mode) => mode.setupTypeScript(typescriptDefaults));
@@ -197284,49 +197622,49 @@ registerLanguage({
   extensions: [".ftl", ".ftlh", ".ftlx"],
   aliases: ["FreeMarker2", "Apache FreeMarker2"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-CD00NW2S.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationDollar);
+    return __vitePreload(() => import("./freemarker2-C5aXzZEo.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationDollar);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-angle.interpolation-dollar",
   aliases: ["FreeMarker2 (Angle/Dollar)", "Apache FreeMarker2 (Angle/Dollar)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-CD00NW2S.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAngleInterpolationDollar);
+    return __vitePreload(() => import("./freemarker2-C5aXzZEo.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAngleInterpolationDollar);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-bracket.interpolation-dollar",
   aliases: ["FreeMarker2 (Bracket/Dollar)", "Apache FreeMarker2 (Bracket/Dollar)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-CD00NW2S.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagBracketInterpolationDollar);
+    return __vitePreload(() => import("./freemarker2-C5aXzZEo.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagBracketInterpolationDollar);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-angle.interpolation-bracket",
   aliases: ["FreeMarker2 (Angle/Bracket)", "Apache FreeMarker2 (Angle/Bracket)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-CD00NW2S.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAngleInterpolationBracket);
+    return __vitePreload(() => import("./freemarker2-C5aXzZEo.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAngleInterpolationBracket);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-bracket.interpolation-bracket",
   aliases: ["FreeMarker2 (Bracket/Bracket)", "Apache FreeMarker2 (Bracket/Bracket)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-CD00NW2S.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagBracketInterpolationBracket);
+    return __vitePreload(() => import("./freemarker2-C5aXzZEo.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagBracketInterpolationBracket);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-auto.interpolation-dollar",
   aliases: ["FreeMarker2 (Auto/Dollar)", "Apache FreeMarker2 (Auto/Dollar)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-CD00NW2S.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationDollar);
+    return __vitePreload(() => import("./freemarker2-C5aXzZEo.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationDollar);
   }
 });
 registerLanguage({
   id: "freemarker2.tag-auto.interpolation-bracket",
   aliases: ["FreeMarker2 (Auto/Bracket)", "Apache FreeMarker2 (Auto/Bracket)"],
   loader: () => {
-    return __vitePreload(() => import("./freemarker2-CD00NW2S.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationBracket);
+    return __vitePreload(() => import("./freemarker2-C5aXzZEo.js"), true ? [] : void 0, import.meta.url).then((m2) => m2.TagAutoInterpolationBracket);
   }
 });
 registerLanguage({
@@ -197347,7 +197685,7 @@ registerLanguage({
   extensions: [".handlebars", ".hbs"],
   aliases: ["Handlebars", "handlebars", "hbs"],
   mimetypes: ["text/x-handlebars-template"],
-  loader: () => __vitePreload(() => import("./handlebars-CyS5uG51.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./handlebars-gnlktwaS.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "hcl",
@@ -197360,7 +197698,7 @@ registerLanguage({
   extensions: [".html", ".htm", ".shtml", ".xhtml", ".mdoc", ".jsp", ".asp", ".aspx", ".jshtm"],
   aliases: ["HTML", "htm", "html", "xhtml"],
   mimetypes: ["text/html", "text/x-jshtm", "text/template", "text/ng-template"],
-  loader: () => __vitePreload(() => import("./html-jy7zlm6U.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./html-BKCPT9X-.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "ini",
@@ -197383,7 +197721,7 @@ registerLanguage({
   filenames: ["jakefile"],
   aliases: ["JavaScript", "javascript", "js"],
   mimetypes: ["text/javascript"],
-  loader: () => __vitePreload(() => import("./javascript-B_BJRQ0N.js"), true ? __vite__mapDeps([4,5]) : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./javascript-sWDnMIWk.js"), true ? __vite__mapDeps([4,5]) : void 0, import.meta.url)
 });
 registerLanguage({
   id: "julia",
@@ -197422,7 +197760,7 @@ registerLanguage({
   extensions: [".liquid", ".html.liquid"],
   aliases: ["Liquid", "liquid"],
   mimetypes: ["application/liquid"],
-  loader: () => __vitePreload(() => import("./liquid-Q9QW5t7-.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./liquid-BvaIfsI_.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "m3",
@@ -197440,7 +197778,7 @@ registerLanguage({
   id: "mdx",
   extensions: [".mdx"],
   aliases: ["MDX", "mdx"],
-  loader: () => __vitePreload(() => import("./mdx-B7mHmk6d.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./mdx-BOnhIupJ.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "mips",
@@ -197539,7 +197877,7 @@ registerLanguage({
   extensions: [".py", ".rpy", ".pyw", ".cpy", ".gyp", ".gypi"],
   aliases: ["Python", "py"],
   firstLine: "^#!/.*\\bpython[0-9.-]*\\b",
-  loader: () => __vitePreload(() => import("./python-2kJylLk5.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./python-B-lioKIT.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "qsharp",
@@ -197558,7 +197896,7 @@ registerLanguage({
   extensions: [".cshtml"],
   aliases: ["Razor", "razor"],
   mimetypes: ["text/x-cshtml"],
-  loader: () => __vitePreload(() => import("./razor-Ge054ZwN.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./razor-Ba96M1z0.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "redis",
@@ -197691,7 +198029,7 @@ registerLanguage({
   aliases: ["TypeScript", "ts", "typescript"],
   mimetypes: ["text/typescript"],
   loader: () => {
-    return __vitePreload(() => import("./typescript-B24KbYo6.js"), true ? [] : void 0, import.meta.url);
+    return __vitePreload(() => import("./typescript-1ucR6DI7.js"), true ? [] : void 0, import.meta.url);
   }
 });
 registerLanguage({
@@ -197736,14 +198074,14 @@ registerLanguage({
   firstLine: "(\\<\\?xml.*)|(\\<svg)|(\\<\\!doctype\\s+svg)",
   aliases: ["XML", "xml"],
   mimetypes: ["text/xml", "application/xml", "application/xaml+xml", "application/xml-dtd"],
-  loader: () => __vitePreload(() => import("./xml-DFQRoC6l.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./xml-DUaZa9tv.js"), true ? [] : void 0, import.meta.url)
 });
 registerLanguage({
   id: "yaml",
   extensions: [".yaml", ".yml"],
   aliases: ["YAML", "yaml", "YML", "yml"],
   mimetypes: ["application/x-yaml", "text/x-yaml"],
-  loader: () => __vitePreload(() => import("./yaml-BbRvTu1w.js"), true ? [] : void 0, import.meta.url)
+  loader: () => __vitePreload(() => import("./yaml-WmcBK0mE.js"), true ? [] : void 0, import.meta.url)
 });
 var __defProp = Object.defineProperty;
 var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
@@ -210135,31 +210473,6 @@ var h = 2, _ = 1, o = class {
     return { cols: Math.max(h, Math.floor(p2 / t2.css.cell.width)), rows: Math.max(_, Math.floor(c / t2.css.cell.height)) };
   }
 };
-const useSessionStore = create$3((set) => ({
-  tabs: [],
-  activeTabId: null,
-  initialized: false,
-  initWithTab: (tab) => set({
-    tabs: [{ ...tab, exited: false }],
-    activeTabId: tab.tabId,
-    initialized: true
-  }),
-  addTab: (tab) => set((state) => ({
-    tabs: [...state.tabs, { ...tab, exited: false }],
-    activeTabId: tab.tabId
-    // switch to new tab
-  })),
-  setActiveTab: (tabId) => set({ activeTabId: tabId }),
-  updateSlug: (tabId, slug) => set((state) => ({
-    tabs: state.tabs.map((t2) => t2.tabId === tabId ? { ...t2, slug } : t2)
-  })),
-  updateSessionId: (tabId, sessionId) => set((state) => ({
-    tabs: state.tabs.map((t2) => t2.tabId === tabId ? { ...t2, sessionId } : t2)
-  })),
-  markExited: (tabId) => set((state) => ({
-    tabs: state.tabs.map((t2) => t2.tabId === tabId ? { ...t2, exited: true } : t2)
-  }))
-}));
 const VS_DARK_THEME = {
   background: "#1e1e1e",
   foreground: "#d4d4d4",

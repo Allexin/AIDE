@@ -1805,6 +1805,18 @@ function setupIpcHandlers(openProjects2) {
       return { success: commitResult.success, error: commitResult.error };
     }
   );
+  electron.ipcMain.handle("shell:show-item-in-folder", (_event, filePath) => {
+    electron.shell.showItemInFolder(filePath);
+  });
+  electron.ipcMain.handle("fs:delete-file", async (_event, filePath) => {
+    await fs.promises.unlink(filePath);
+  });
+  electron.ipcMain.handle("fs:rename-file", async (_event, oldPath, newPath) => {
+    await fs.promises.rename(oldPath, newPath);
+  });
+  electron.ipcMain.handle("fs:copy-file", async (_event, src, dest) => {
+    await fs.promises.copyFile(src, dest);
+  });
   electron.ipcMain.on("menu:editor-file-changed", (event, hasFile) => {
     const senderWin = electron.BrowserWindow.fromWebContents(event.sender);
     if (senderWin) setEditorFileOpen(senderWin, hasFile);

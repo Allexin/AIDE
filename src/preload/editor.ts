@@ -114,6 +114,13 @@ export interface EditorAPI {
     cb: (payload: { buttonId: string; exitCode: number | null }) => void
   ) => () => void
 
+  // Shell / FS operations
+  shellShowItemInFolder: (filePath: string) => Promise<void>
+  fsDeleteFile: (filePath: string) => Promise<void>
+  fsTrashFile: (filePath: string) => Promise<void>
+  fsRenameFile: (oldPath: string, newPath: string) => Promise<void>
+  fsCopyFile: (src: string, dest: string) => Promise<void>
+
   // Git commit
   gitGetCommitFiles: () => Promise<{
     available: boolean
@@ -244,6 +251,13 @@ const editorApi: EditorAPI = {
     ipcRenderer.on('toolbar:process-exited', handler)
     return () => ipcRenderer.removeListener('toolbar:process-exited', handler)
   },
+
+  // Shell / FS operations
+  shellShowItemInFolder: (filePath) => ipcRenderer.invoke('shell:show-item-in-folder', filePath),
+  fsDeleteFile: (filePath) => ipcRenderer.invoke('fs:delete-file', filePath),
+  fsTrashFile: (filePath) => ipcRenderer.invoke('fs:trash-file', filePath),
+  fsRenameFile: (oldPath, newPath) => ipcRenderer.invoke('fs:rename-file', oldPath, newPath),
+  fsCopyFile: (src, dest) => ipcRenderer.invoke('fs:copy-file', src, dest),
 
   // Git commit
   gitGetCommitFiles: () => ipcRenderer.invoke('git:get-commit-files'),

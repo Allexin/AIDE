@@ -1,6 +1,6 @@
-import { c as createWebWorker, l as languages } from "./index-sZCFUCWL.js";
-import { C as CompletionAdapter, H as HoverAdapter, D as DocumentHighlightAdapter, a as DefinitionAdapter, R as ReferenceAdapter, b as DocumentSymbolAdapter, c as RenameAdapter, d as DocumentColorAdapter, F as FoldingRangeAdapter, e as DiagnosticsAdapter, S as SelectionRangeAdapter, f as DocumentFormattingEditProvider, g as DocumentRangeFormattingEditProvider } from "./lspLanguageFeatures-CLBftSNY.js";
-import { h, i, j, t, k } from "./lspLanguageFeatures-CLBftSNY.js";
+import { c as createWebWorker, l as languages } from "./index-DSigxUUh.js";
+import { C as CompletionAdapter, H as HoverAdapter, D as DocumentHighlightAdapter, a as DefinitionAdapter, R as ReferenceAdapter, b as DocumentSymbolAdapter, c as RenameAdapter, d as DocumentColorAdapter, F as FoldingRangeAdapter, e as DiagnosticsAdapter, S as SelectionRangeAdapter, f as DocumentFormattingEditProvider, g as DocumentRangeFormattingEditProvider } from "./lspLanguageFeatures-AoygrLT4.js";
+import { h, i, j, t, k } from "./lspLanguageFeatures-AoygrLT4.js";
 const STOP_WHEN_IDLE_FOR = 2 * 60 * 1e3;
 class WorkerManager {
   constructor(defaults) {

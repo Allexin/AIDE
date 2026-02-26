@@ -1,4 +1,4 @@
-import { l as languages } from "./index-sZCFUCWL.js";
+import { l as languages } from "./index-DSigxUUh.js";
 const conf = {
   wordPattern: /(-?\d*\.\d\w*)|([^\`\~\!\@\#\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
   comments: {

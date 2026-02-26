@@ -85,6 +85,11 @@ const editorApi = {
     electron.ipcRenderer.on("toolbar:process-exited", handler);
     return () => electron.ipcRenderer.removeListener("toolbar:process-exited", handler);
   },
+  // Shell / FS operations
+  shellShowItemInFolder: (filePath) => electron.ipcRenderer.invoke("shell:show-item-in-folder", filePath),
+  fsDeleteFile: (filePath) => electron.ipcRenderer.invoke("fs:delete-file", filePath),
+  fsRenameFile: (oldPath, newPath) => electron.ipcRenderer.invoke("fs:rename-file", oldPath, newPath),
+  fsCopyFile: (src, dest) => electron.ipcRenderer.invoke("fs:copy-file", src, dest),
   // Git commit
   gitGetCommitFiles: () => electron.ipcRenderer.invoke("git:get-commit-files"),
   gitRunCommit: (files, message, stageAll) => electron.ipcRenderer.invoke("git:run-commit", { files, message, stageAll }),

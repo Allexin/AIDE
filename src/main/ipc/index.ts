@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow } from 'electron'
+import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { existsSync, readdirSync, promises as fsAsync } from 'fs'
 import { join } from 'path'
 import { spawn } from 'child_process'
@@ -545,6 +545,31 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
       return { success: commitResult.success, error: commitResult.error }
     }
   )
+
+  // ── Shell: reveal file in Explorer ────────────────────────────────────────────
+  ipcMain.handle('shell:show-item-in-folder', (_event, filePath: string) => {
+    shell.showItemInFolder(filePath)
+  })
+
+  // ── FS: delete file permanently ───────────────────────────────────────────────
+  ipcMain.handle('fs:delete-file', async (_event, filePath: string) => {
+    await fsAsync.unlink(filePath)
+  })
+
+  // ── FS: move file to trash ────────────────────────────────────────────────────
+  ipcMain.handle('fs:trash-file', async (_event, filePath: string) => {
+    await shell.trashItem(filePath)
+  })
+
+  // ── FS: rename file ───────────────────────────────────────────────────────────
+  ipcMain.handle('fs:rename-file', async (_event, oldPath: string, newPath: string) => {
+    await fsAsync.rename(oldPath, newPath)
+  })
+
+  // ── FS: copy file ─────────────────────────────────────────────────────────────
+  ipcMain.handle('fs:copy-file', async (_event, src: string, dest: string) => {
+    await fsAsync.copyFile(src, dest)
+  })
 
   // ── Menu: editor file open state ──────────────────────────────────────────────
   // Renderer notifies when a file is opened/closed so Edit menu can be enabled/disabled
