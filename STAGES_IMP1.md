@@ -141,3 +141,46 @@ No file caching — title is read fresh from JSONL on each `scanSessions` call.
 **Files changed:**
 - `src/renderer/src/components/layout/TerminalPanel.tsx` — `useFileTreeStore` import; `FitFn.focus`; `handleDragOver`; `handleDrop`; `onDragOver`/`onDrop` on xterm container; `focus()` exposed in `onMount`
 - `src/renderer/src/components/filetree/FileTree.tsx` — `draggable` + `onDragStart` on file nodes in `NodeItem`
+
+---
+
+## Batch E — CLI Tool Abstraction ✅
+
+### E1. Decouple PtyManager from Claude Code
+
+**Done.** PTY core is now tool-agnostic. All Claude-specific logic lives in a dedicated module. Adding a new tool (Aider, OpenCoder, etc.) = implement one interface + pass it to `PtyManager`.
+
+**New files:**
+
+`src/main/pty/cliTools/types.ts` — `CliSession` and `CliTool` interfaces:
+- `scanSessions(projectPath)` — find sessions on disk, sorted newest first
+- `resumeCommand(sessionId)` — command string to resume a session
+- `newSessionCommand()` — command string to start a new session
+- `watchForNewSessions(projectPath, onNew)` — watch for new sessions, returns unsubscribe fn
+- `watchSessionLabel?(...)` — optional live label watch
+- `prepareProject?(projectPath)` — optional one-time setup before first session
+
+`src/main/pty/cliTools/claudeCode.ts` — `claudeCodeTool` implementation:
+- `prepareProject(projectPath)` — writes `hasTrustDialogAccepted: true` into `~/.claude.json` under `projects[normalizedPath]` before first launch; no-op if already trusted. Path key uses forward slashes (matching Claude's own format).
+- `scanSessions` ← wraps `scanSessions` from `sessionScanner.ts` with field mapping
+- `resumeCommand(id)` → `'claude --resume <id>'`
+- `newSessionCommand()` → `'claude'`
+- `watchForNewSessions` ← wraps `watchSessionsDir` from `sessionScanner.ts`
+
+**Refactored `src/main/pty/ptyManager.ts`:**
+- Constructor: `(win, projectPath, tool: CliTool = claudeCodeTool)`
+- Removed: `this.sessionsDir`, direct imports of `scanSessions`/`getSessionsDir`/`watchSessionsDir`
+- `createInitialTab`, `createNewSessionTab`, `resumeSessionTab` — call `await tool.prepareProject?.()` before spawning
+- `'claude\r'` → `tool.newSessionCommand() + '\r'`
+- `'claude --resume <id>\r'` → `tool.resumeCommand(id) + '\r'`
+- `scanSessions(...)` → `tool.scanSessions(...)`
+- `watchSessionsDir(...)` → `tool.watchForNewSessions(...)`
+
+`src/main/pty/sessionScanner.ts` — unchanged; used internally by `claudeCode.ts`.
+
+**New files:**
+- `src/main/pty/cliTools/types.ts`
+- `src/main/pty/cliTools/claudeCode.ts`
+
+**Files changed:**
+- `src/main/pty/ptyManager.ts`

@@ -1,15 +1,12 @@
 import * as nodePty from 'node-pty'
 import { BrowserWindow } from 'electron'
-import {
-  scanSessions,
-  getSessionsDir,
-  watchSessionsDir
-} from './sessionScanner'
+import type { CliTool } from './cliTools/types'
+import { claudeCodeTool } from './cliTools/claudeCode'
 
 
 export interface SessionTabInfo {
   tabId: string
-  sessionId: string | null // null until first .jsonl appears (new sessions)
+  sessionId: string | null // null until first session file appears (new sessions)
 }
 
 interface PtyTab extends SessionTabInfo {
@@ -26,33 +23,36 @@ export class PtyManager {
   private tabs = new Map<string, PtyTab>()
   private readonly win: BrowserWindow
   private readonly projectPath: string
-  private readonly sessionsDir: string
+  private readonly tool: CliTool
 
   // Per-tab buffer for incomplete OSC sequences split across PTY data chunks
   private titleBufs = new Map<string, string>()
 
-  constructor(win: BrowserWindow, projectPath: string) {
+  constructor(win: BrowserWindow, projectPath: string, tool: CliTool = claudeCodeTool) {
     this.win = win
     this.projectPath = projectPath
-    this.sessionsDir = getSessionsDir(projectPath)
+    this.tool = tool
   }
 
   /** Called on project open: resume most recent session or start fresh. */
   async createInitialTab(): Promise<SessionTabInfo> {
-    const sessions = await scanSessions(this.projectPath)
+    await this.tool.prepareProject?.(this.projectPath)
+    const sessions = await this.tool.scanSessions(this.projectPath)
     if (sessions.length > 0) {
       return this.spawnResumeTab(sessions[0].sessionId)
     }
     return this.spawnNewSessionTab()
   }
 
-  /** Open a brand-new claude session tab. */
+  /** Open a brand-new session tab. */
   async createNewSessionTab(): Promise<SessionTabInfo> {
+    await this.tool.prepareProject?.(this.projectPath)
     return this.spawnNewSessionTab()
   }
 
   /** Resume an existing session by ID. */
   async resumeSessionTab(sessionId: string): Promise<SessionTabInfo> {
+    await this.tool.prepareProject?.(this.projectPath)
     return this.spawnResumeTab(sessionId)
   }
 
@@ -99,17 +99,17 @@ export class PtyManager {
 
     setTimeout(() => {
       if (!this.tabs.has(tabId)) return
-      pty.write('claude\r')
+      pty.write(`${this.tool.newSessionCommand()}\r`)
 
-      // Watch for the new .jsonl file (gives us the session ID)
-      tab.stopDirWatch = watchSessionsDir(this.sessionsDir, (newSessionId) => {
+      // Watch for the new session file (gives us the session ID)
+      tab.stopDirWatch = this.tool.watchForNewSessions(this.projectPath, (session) => {
         const t = this.tabs.get(tabId)
         if (!t || t.sessionId) return // already registered
 
-        t.sessionId = newSessionId
-        this.send('terminal:tab-session-id', { tabId, sessionId: newSessionId })
+        t.sessionId = session.sessionId
+        this.send('terminal:tab-session-id', { tabId, sessionId: session.sessionId })
 
-        // Stop watching the directory — we got our session
+        // Stop watching — we got our session
         t.stopDirWatch?.()
         t.stopDirWatch = undefined
       })
@@ -126,7 +126,7 @@ export class PtyManager {
 
     setTimeout(() => {
       if (!this.tabs.has(tabId)) return
-      pty.write(`claude --resume ${sessionId}\r`)
+      pty.write(`${this.tool.resumeCommand(sessionId)}\r`)
     }, 500)
 
     return { tabId, sessionId }
