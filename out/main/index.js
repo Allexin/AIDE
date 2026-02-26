@@ -1111,32 +1111,27 @@ function registerCommand(id, handler) {
 let openProjectsRef = null;
 let openProjectFn = null;
 const editorFileOpenMap = /* @__PURE__ */ new Map();
-function setEditorFileOpen(win, hasFile) {
-  editorFileOpenMap.set(win, hasFile);
-  rebuildMenu();
+let switchingProject = false;
+function isSwitchingProject() {
+  return switchingProject;
 }
-function removeEditorWindow(win) {
-  editorFileOpenMap.delete(win);
-}
-function getFocusedEditorWindow() {
+const editMenuItems = [];
+function getEditorWindow() {
   if (!openProjectsRef) return null;
-  const focused = electron.BrowserWindow.getFocusedWindow();
-  if (!focused) return null;
-  for (const win of openProjectsRef.values()) {
-    if (win === focused) return win;
-  }
-  return null;
+  return openProjectsRef.values().next().value ?? null;
 }
-function isEditEnabled() {
-  const editorWin = getFocusedEditorWindow();
-  if (!editorWin) return false;
-  return editorFileOpenMap.get(editorWin) ?? false;
+function updateEditEnabled() {
+  const win = getEditorWindow();
+  const enabled = win ? editorFileOpenMap.get(win) ?? false : false;
+  for (const item of editMenuItems) {
+    item.enabled = enabled;
+  }
 }
 function sendEditCommand(command) {
-  const editorWin = getFocusedEditorWindow();
-  if (!editorWin) return;
-  if (!(editorFileOpenMap.get(editorWin) ?? false)) return;
-  editorWin.webContents.send("menu:edit-command", command);
+  const win = getEditorWindow();
+  if (!win) return;
+  if (!(editorFileOpenMap.get(win) ?? false)) return;
+  win.webContents.send("menu:edit-command", command);
 }
 async function checkRunningAndProceed(win, action) {
   const count = getRunningCount(win);
@@ -1160,13 +1155,13 @@ async function checkRunningAndProceed(win, action) {
 }
 function switchProject(newPath, currentWin) {
   if (!openProjectFn || !openProjectsRef) return;
+  switchingProject = true;
   currentWin.once("closed", () => {
     setImmediate(() => {
+      switchingProject = false;
       if (!openProjectFn || !openProjectsRef) return;
       const result = openProjectFn(newPath);
-      if (!result.success) {
-        createPickerWindow();
-      }
+      if (!result.success) createPickerWindow();
     });
   });
   currentWin.destroy();
@@ -1174,19 +1169,15 @@ function switchProject(newPath, currentWin) {
 async function handleOpenFolder() {
   const focused = electron.BrowserWindow.getFocusedWindow();
   if (!focused) return;
-  const editorWin = getFocusedEditorWindow();
+  const editorWin = getEditorWindow();
   if (editorWin) {
     await checkRunningAndProceed(editorWin, async () => {
-      const result = await electron.dialog.showOpenDialog(editorWin, {
-        properties: ["openDirectory"]
-      });
+      const result = await electron.dialog.showOpenDialog(editorWin, { properties: ["openDirectory"] });
       if (result.canceled || !result.filePaths[0]) return;
       switchProject(result.filePaths[0], editorWin);
     });
   } else {
-    const result = await electron.dialog.showOpenDialog(focused, {
-      properties: ["openDirectory"]
-    });
+    const result = await electron.dialog.showOpenDialog(focused, { properties: ["openDirectory"] });
     if (result.canceled || !result.filePaths[0]) return;
     const newPath = result.filePaths[0];
     focused.close();
@@ -1204,7 +1195,7 @@ ${projectPath}`);
   }
   const focused = electron.BrowserWindow.getFocusedWindow();
   if (!focused) return;
-  const editorWin = getFocusedEditorWindow();
+  const editorWin = getEditorWindow();
   if (editorWin) {
     await checkRunningAndProceed(editorWin, async () => {
       switchProject(projectPath, editorWin);
@@ -1218,7 +1209,7 @@ ${projectPath}`);
   }
 }
 function rebuildMenu() {
-  const editEnabled = isEditEnabled();
+  editMenuItems.length = 0;
   const state2 = getAppState();
   const config2 = getAppConfig();
   const recentProjects = state2.recentProjects.slice(0, config2.sessions.maxRecentProjects);
@@ -1228,68 +1219,53 @@ function rebuildMenu() {
       handleOpenRecent(p.path);
     }
   })) : [{ label: "No recent projects", enabled: false }];
+  const win = getEditorWindow();
+  const editEnabled = win ? editorFileOpenMap.get(win) ?? false : false;
   const template = [
     {
       label: "File",
       submenu: [
-        {
-          label: "New Window",
-          click: () => {
-            createPickerWindow();
-          }
-        },
-        {
-          label: "Open Folder...",
-          click: () => {
-            handleOpenFolder();
-          }
-        },
-        {
-          label: "Open Recent",
-          submenu: recentSubmenu
-        },
+        { label: "New Window", click: () => {
+          createPickerWindow();
+        } },
+        { label: "Open Folder...", click: () => {
+          handleOpenFolder();
+        } },
+        { label: "Open Recent", submenu: recentSubmenu },
         { type: "separator" },
-        {
-          label: "Exit",
-          click: () => {
-            electron.app.quit();
-          }
-        }
+        { label: "Exit", click: () => {
+          electron.app.quit();
+        } }
       ]
     },
     {
       label: "Edit",
       submenu: [
-        {
-          label: "Undo",
-          enabled: editEnabled,
-          click: () => sendEditCommand("undo")
-        },
-        {
-          label: "Redo",
-          enabled: editEnabled,
-          click: () => sendEditCommand("redo")
-        },
+        { label: "Undo", enabled: editEnabled, click: () => sendEditCommand("undo") },
+        { label: "Redo", enabled: editEnabled, click: () => sendEditCommand("redo") },
         { type: "separator" },
-        {
-          label: "Cut",
-          enabled: editEnabled,
-          click: () => sendEditCommand("cut")
-        },
-        {
-          label: "Copy",
-          enabled: editEnabled,
-          click: () => sendEditCommand("copy")
-        },
-        {
-          label: "Paste",
-          enabled: editEnabled,
-          click: () => sendEditCommand("paste")
-        }
+        { label: "Cut", enabled: editEnabled, click: () => sendEditCommand("cut") },
+        { label: "Copy", enabled: editEnabled, click: () => sendEditCommand("copy") },
+        { label: "Paste", enabled: editEnabled, click: () => sendEditCommand("paste") }
       ]
     }
   ];
-  electron.Menu.setApplicationMenu(electron.Menu.buildFromTemplate(template));
+  const appMenu = electron.Menu.buildFromTemplate(template);
+  const editMenu = appMenu.items.find((i) => i.label === "Edit");
+  if (editMenu?.submenu) {
+    for (const item of editMenu.submenu.items) {
+      if (item.type !== "separator") editMenuItems.push(item);
+    }
+  }
+  electron.Menu.setApplicationMenu(appMenu);
+}
+function setEditorFileOpen(win, hasFile) {
+  editorFileOpenMap.set(win, hasFile);
+  updateEditEnabled();
+}
+function removeEditorWindow(win) {
+  editorFileOpenMap.delete(win);
+  updateEditEnabled();
 }
 function setupMenu(openProjects2, openProject) {
   openProjectsRef = openProjects2;
@@ -1363,7 +1339,6 @@ function openProjectAndTrack(projectPath, openProjects2) {
   editorWin.webContents.once("did-finish-load", () => {
     startProjectWatcher(projectPath, editorWin);
   });
-  editorWin.on("focus", () => rebuildMenu());
   editorWin.on("close", (event) => {
     const count = getRunningCount(editorWin);
     if (count > 0) {
@@ -1392,7 +1367,6 @@ function openProjectAndTrack(projectPath, openProjects2) {
     releaseLock(projectPath);
     openProjects2.delete(projectPath);
     removeEditorWindow(editorWin);
-    rebuildMenu();
   });
   return { success: true };
 }
@@ -1865,7 +1839,7 @@ electron.app.whenReady().then(() => {
   });
 });
 electron.app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
+  if (process.platform !== "darwin" && !isSwitchingProject()) {
     electron.app.quit();
   }
 });

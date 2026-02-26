@@ -15,6 +15,10 @@ let openProjectFn: OpenProjectFn | null = null
 // Per-window: does this editor have a file open?
 const editorFileOpenMap = new Map<BrowserWindow, boolean>()
 
+// True while switching projects — suppresses window-all-closed → app.quit()
+let switchingProject = false
+export function isSwitchingProject(): boolean { return switchingProject }
+
 // Stored refs to Edit submenu items for direct .enabled updates (no full rebuild)
 const editMenuItems: MenuItem[] = []
 
@@ -67,8 +71,10 @@ async function checkRunningAndProceed(
 
 function switchProject(newPath: string, currentWin: BrowserWindow): void {
   if (!openProjectFn || !openProjectsRef) return
+  switchingProject = true
   currentWin.once('closed', () => {
     setImmediate(() => {
+      switchingProject = false
       if (!openProjectFn || !openProjectsRef) return
       const result = openProjectFn(newPath)
       if (!result.success) createPickerWindow()

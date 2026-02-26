@@ -7,7 +7,7 @@ import { releaseLock } from './lock'
 import { createPickerWindow } from './windows/picker'
 import { openProjectAndTrack } from './windows/editor'
 import { setupIpcHandlers } from './ipc'
-import { setupMenu } from './menu'
+import { setupMenu, isSwitchingProject } from './menu'
 
 // Map of projectPath → editor BrowserWindow
 const openProjects = new Map<string, BrowserWindow>()
@@ -58,7 +58,7 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  if (process.platform !== 'darwin' && !isSwitchingProject()) {
     app.quit()
   }
 })
