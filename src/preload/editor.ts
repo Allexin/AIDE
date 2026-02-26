@@ -23,7 +23,6 @@ interface GitStatusResult {
 interface SessionTabInfo {
   tabId: string
   sessionId: string | null
-  slug: string
 }
 
 export interface EditorConfig {
@@ -92,6 +91,7 @@ export interface EditorAPI {
   terminalResize: (tabId: string, cols: number, rows: number) => void
   terminalOpenSessionPicker: () => void
   onTerminalData: (cb: (tabId: string, data: string) => void) => () => void
+  onTerminalTabTitle: (cb: (tabId: string, title: string) => void) => () => void
   onTerminalTabSessionId: (cb: (tabId: string, sessionId: string) => void) => () => void
   onTerminalTabExited: (cb: (tabId: string) => void) => () => void
   onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void
@@ -183,6 +183,13 @@ const editorApi: EditorAPI = {
       cb(payload.tabId, payload.data)
     ipcRenderer.on('terminal:data', handler)
     return () => ipcRenderer.removeListener('terminal:data', handler)
+  },
+
+  onTerminalTabTitle: (cb: (tabId: string, title: string) => void) => {
+    const handler = (_: unknown, payload: { tabId: string; title: string }): void =>
+      cb(payload.tabId, payload.title)
+    ipcRenderer.on('terminal:tab-title', handler)
+    return () => ipcRenderer.removeListener('terminal:tab-title', handler)
   },
 
   onTerminalTabSessionId: (cb: (tabId: string, sessionId: string) => void) => {

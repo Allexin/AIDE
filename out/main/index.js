@@ -688,21 +688,31 @@ function encodeProjectPath(projectPath) {
 function getSessionsDir(projectPath) {
   return path.join(os.homedir(), ".claude", "projects", encodeProjectPath(projectPath));
 }
-function readSlugFromJsonl(jsonlPath) {
+function readLastUserMessage(sessionsDir, sessionId) {
+  const filePath = path.join(sessionsDir, `${sessionId}.jsonl`);
   try {
-    const content = fs.readFileSync(jsonlPath, "utf-8");
-    for (const line of content.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
+    const lines = fs.readFileSync(filePath, "utf-8").split("\n").filter((l) => l.trim());
+    for (let i = lines.length - 1; i >= 0; i--) {
       try {
-        const obj = JSON.parse(trimmed);
-        if (obj && typeof obj.slug === "string" && obj.slug) return obj.slug;
+        const obj = JSON.parse(lines[i]);
+        if (obj.type !== "user" || obj.isMeta) continue;
+        const raw = obj?.message?.content;
+        let text = "";
+        if (typeof raw === "string") {
+          text = raw;
+        } else if (Array.isArray(raw)) {
+          text = raw.filter((b) => typeof b === "object" && b !== null && b.type === "text").map((b) => b.text).join(" ");
+        }
+        text = text.trim();
+        if (text && !text.startsWith("<command") && !text.startsWith("<local-command") && !text.startsWith("<tool")) {
+          return text.slice(0, 80);
+        }
       } catch {
       }
     }
   } catch {
   }
-  return null;
+  return "";
 }
 async function scanSessions(projectPath) {
   const sessionsDir = getSessionsDir(projectPath);
@@ -718,7 +728,8 @@ async function scanSessions(projectPath) {
         mtime = fs.statSync(fullPath).mtimeMs;
       } catch {
       }
-      return { sessionId, slug: readSlugFromJsonl(fullPath), mtime };
+      const msg = readLastUserMessage(sessionsDir, sessionId);
+      return { sessionId, title: msg || "Claude Code", mtime };
     });
     sessions.sort((a, b) => b.mtime - a.mtime);
     return sessions;
@@ -739,9 +750,8 @@ function watchSessionsDir(sessionsDir, onNewFile) {
         if (!knownFiles.has(filename)) {
           knownFiles.add(filename);
           const sessionId = filename.slice(0, -6);
-          const fullPath = path.join(sessionsDir, filename);
           setTimeout(() => {
-            if (!stopped) onNewFile(sessionId, readSlugFromJsonl(fullPath));
+            if (!stopped) onNewFile(sessionId);
           }, 300);
         }
       });
@@ -771,50 +781,6 @@ function watchSessionsDir(sessionsDir, onNewFile) {
     watcher?.close();
   };
 }
-function watchJsonlFile(jsonlPath, onSlugFound) {
-  let stopped = false;
-  let watcher = null;
-  const check = () => {
-    const slug = readSlugFromJsonl(jsonlPath);
-    if (slug) {
-      onSlugFound(slug);
-      return true;
-    }
-    return false;
-  };
-  if (check()) return () => {
-  };
-  if (!fs.existsSync(jsonlPath)) {
-    const interval = setInterval(() => {
-      if (stopped) {
-        clearInterval(interval);
-        return;
-      }
-      if (fs.existsSync(jsonlPath) && check()) {
-        stopped = true;
-        clearInterval(interval);
-      }
-    }, 1e3);
-    return () => {
-      stopped = true;
-      clearInterval(interval);
-    };
-  }
-  try {
-    watcher = fs.watch(jsonlPath, () => {
-      if (stopped) return;
-      if (check()) {
-        stopped = true;
-        watcher?.close();
-      }
-    });
-  } catch {
-  }
-  return () => {
-    stopped = true;
-    watcher?.close();
-  };
-}
 let tabIdCounter = 0;
 function nextTabId() {
   return `tab-${++tabIdCounter}`;
@@ -824,6 +790,8 @@ class PtyManager {
   win;
   projectPath;
   sessionsDir;
+  // Per-tab buffer for incomplete OSC sequences split across PTY data chunks
+  titleBufs = /* @__PURE__ */ new Map();
   constructor(win, projectPath) {
     this.win = win;
     this.projectPath = projectPath;
@@ -833,8 +801,7 @@ class PtyManager {
   async createInitialTab() {
     const sessions = await scanSessions(this.projectPath);
     if (sessions.length > 0) {
-      const newest = sessions[0];
-      return this.spawnResumeTab(newest.sessionId, newest.slug);
+      return this.spawnResumeTab(sessions[0].sessionId);
     }
     return this.spawnNewSessionTab();
   }
@@ -844,16 +811,13 @@ class PtyManager {
   }
   /** Resume an existing session by ID. */
   async resumeSessionTab(sessionId) {
-    const sessions = await scanSessions(this.projectPath);
-    const existing = sessions.find((s) => s.sessionId === sessionId);
-    return this.spawnResumeTab(sessionId, existing?.slug || null);
+    return this.spawnResumeTab(sessionId);
   }
   /** Get snapshot of all open tabs (safe to serialize). */
   getTabs() {
     return Array.from(this.tabs.values()).map((t) => ({
       tabId: t.tabId,
-      sessionId: t.sessionId,
-      slug: t.slug
+      sessionId: t.sessionId
     }));
   }
   write(tabId, data) {
@@ -873,7 +837,7 @@ class PtyManager {
   disposeAll() {
     for (const tab of this.tabs.values()) {
       tab.stopDirWatch?.();
-      tab.stopJsonlWatch?.();
+      this.titleBufs.delete(tab.tabId);
       try {
         tab.pty.kill();
       } catch {
@@ -885,59 +849,67 @@ class PtyManager {
   spawnNewSessionTab() {
     const tabId = nextTabId();
     const pty = this.spawnPty(tabId);
-    const tab = { tabId, sessionId: null, slug: "Claude Code", pty };
+    const tab = { tabId, sessionId: null, pty };
     this.tabs.set(tabId, tab);
     setTimeout(() => {
       if (!this.tabs.has(tabId)) return;
       pty.write("claude\r");
-      tab.stopDirWatch = watchSessionsDir(this.sessionsDir, (newSessionId, slugFromDir) => {
+      tab.stopDirWatch = watchSessionsDir(this.sessionsDir, (newSessionId) => {
         const t = this.tabs.get(tabId);
         if (!t || t.sessionId) return;
         t.sessionId = newSessionId;
         this.send("terminal:tab-session-id", { tabId, sessionId: newSessionId });
-        const resolvedSlug = slugFromDir || readSlugFromJsonl(path.join(this.sessionsDir, `${newSessionId}.jsonl`));
-        if (resolvedSlug) {
-          t.slug = resolvedSlug;
-          this.send("terminal:tab-slug-updated", { tabId, slug: resolvedSlug });
-        } else {
-          t.stopJsonlWatch = watchJsonlFile(
-            path.join(this.sessionsDir, `${newSessionId}.jsonl`),
-            (slug) => {
-              const tt = this.tabs.get(tabId);
-              if (!tt) return;
-              tt.slug = slug;
-              this.send("terminal:tab-slug-updated", { tabId, slug });
-            }
-          );
-        }
         t.stopDirWatch?.();
         t.stopDirWatch = void 0;
       });
     }, 500);
-    return { tabId, sessionId: null, slug: "Claude Code" };
+    return { tabId, sessionId: null };
   }
-  spawnResumeTab(sessionId, slug) {
+  spawnResumeTab(sessionId) {
     const tabId = nextTabId();
     const pty = this.spawnPty(tabId);
-    const resolvedSlug = slug || "Claude Code";
-    const tab = { tabId, sessionId, slug: resolvedSlug, pty };
+    const tab = { tabId, sessionId, pty };
     this.tabs.set(tabId, tab);
     setTimeout(() => {
       if (!this.tabs.has(tabId)) return;
       pty.write(`claude --resume ${sessionId}\r`);
-      if (!slug) {
-        tab.stopJsonlWatch = watchJsonlFile(
-          path.join(this.sessionsDir, `${sessionId}.jsonl`),
-          (foundSlug) => {
-            const t = this.tabs.get(tabId);
-            if (!t) return;
-            t.slug = foundSlug;
-            this.send("terminal:tab-slug-updated", { tabId, slug: foundSlug });
-          }
-        );
-      }
     }, 500);
-    return { tabId, sessionId, slug: resolvedSlug };
+    return { tabId, sessionId };
+  }
+  /** DEBUG ONLY — sends PTY escape sequences to the log panel (PTY ESC channel). */
+  dbgLog(tabId, data) {
+    if (!data.includes("\x1B")) return;
+    const safe = [...data].map((c) => {
+      const code = c.codePointAt(0);
+      return code < 32 || code === 127 ? `<${code.toString(16).padStart(2, "0")}>` : c;
+    }).join("");
+    this.send("toolbar:output", {
+      channelName: "PTY ESC",
+      line: `[${tabId}] ${safe.slice(0, 300)}`,
+      attention: false
+    });
+  }
+  /** Parse OSC 0/2 title sequences from raw PTY data; save to disk and notify renderer.
+   *  Buffers partial sequences across chunks since node-pty can split them arbitrarily.
+   */
+  extractTitle(tabId, data) {
+    this.dbgLog(tabId, data);
+    const buf = (this.titleBufs.get(tabId) ?? "") + data;
+    const m = /\x1b\](?:0|2);([^\x07\x1b]*)\x07/.exec(buf) ?? /\x1b\](?:0|2);([^\x1b]*)\x1b\\/.exec(buf);
+    if (m?.[1]) {
+      const title = m[1].trim();
+      if (title) {
+        this.send("terminal:tab-title", { tabId, title });
+      }
+      this.titleBufs.delete(tabId);
+    } else {
+      const oscStart = buf.lastIndexOf("\x1B]");
+      if (oscStart !== -1 && buf.length - oscStart < 512) {
+        this.titleBufs.set(tabId, buf.slice(oscStart));
+      } else {
+        this.titleBufs.delete(tabId);
+      }
+    }
   }
   spawnPty(tabId) {
     const pty = nodePty__namespace.spawn("powershell.exe", [], {
@@ -947,7 +919,10 @@ class PtyManager {
       cwd: this.projectPath,
       env: process.env
     });
-    pty.onData((data) => this.send("terminal:data", { tabId, data }));
+    pty.onData((data) => {
+      this.extractTitle(tabId, data);
+      this.send("terminal:data", { tabId, data });
+    });
     pty.onExit(() => this.send("terminal:tab-exited", { tabId }));
     return pty;
   }

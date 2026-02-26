@@ -51,24 +51,21 @@ interface TerminalTabProps {
   isActive: boolean
   onMount: (tabId: string, fit: FitFn) => void
   onUnmount: (tabId: string) => void
-  onTitle: (tabId: string, title: string) => void
   onAttention: (tabId: string) => void
 }
 
 interface CtxMenuState { x: number; y: number; hasSel: boolean }
 
-function TerminalTab({ tabId, isActive, onMount, onUnmount, onTitle, onAttention }: TerminalTabProps): React.ReactElement {
+function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }: TerminalTabProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null)
   // Ref so OSC handler can read current isActive without stale closure
   const isActiveRef = useRef(isActive)
-  const onTitleRef = useRef(onTitle)
   const onAttentionRef = useRef(onAttention)
 
   useEffect(() => { isActiveRef.current = isActive }, [isActive])
-  useEffect(() => { onTitleRef.current = onTitle }, [onTitle])
   useEffect(() => { onAttentionRef.current = onAttention }, [onAttention])
 
   useEffect(() => {
@@ -90,11 +87,6 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount, onTitle, onAttention
 
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
-
-    // D1: update tab label from VT title escape (OSC 0/2)
-    const titleDisposable = terminal.onTitleChange((title) => {
-      if (title) onTitleRef.current(tabId, title)
-    })
 
     // D1: flash tab when Claude Code signals it's waiting (OSC 9)
     const oscDisposable = terminal.parser.registerOscHandler(9, (_data) => {
@@ -137,7 +129,6 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount, onTitle, onAttention
     }
 
     return () => {
-      titleDisposable.dispose()
       oscDisposable.dispose()
       removeData()
       onUnmount(tabId)
@@ -309,10 +300,6 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
     fitFunctions.current.delete(tabId)
   }, [])
 
-  const handleTitle = useCallback((tabId: string, title: string) => {
-    updateSlug(tabId, title)
-  }, [updateSlug])
-
   const handleAttention = useCallback((tabId: string) => {
     setAttention(tabId, true)
   }, [setAttention])
@@ -327,6 +314,7 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 
   // Listen for push events from main process
   useEffect(() => {
+    const removeTitle = window.editorApi.onTerminalTabTitle((tabId, title) => updateSlug(tabId, title))
     const removeSessionId = window.editorApi.onTerminalTabSessionId((tabId, sessionId) =>
       updateSessionId(tabId, sessionId)
     )
@@ -335,12 +323,13 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
     const removeNewTab = window.editorApi.onTerminalNewTab((tab) => addTab(tab))
 
     return () => {
+      removeTitle()
       removeSessionId()
       removeExited()
       removeSwitch()
       removeNewTab()
     }
-  }, [updateSessionId, markExited, setActiveTab, addTab])
+  }, [updateSessionId, markExited, setActiveTab, addTab, updateSlug])
 
   // Resize all terminal on panel container resize
   useEffect(() => {
@@ -464,7 +453,6 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
             isActive={tab.tabId === activeTabId}
             onMount={handleMount}
             onUnmount={handleUnmount}
-            onTitle={handleTitle}
             onAttention={handleAttention}
           />
         ))}

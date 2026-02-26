@@ -4,7 +4,7 @@ import { homedir } from 'os'
 
 export interface DiskSession {
   sessionId: string
-  slug: string | null
+  title: string // last real user message from JSONL, or 'Claude Code' fallback
   mtime: number // ms since epoch
 }
 
@@ -22,24 +22,41 @@ export function getSessionsDir(projectPath: string): string {
   return join(homedir(), '.claude', 'projects', encodeProjectPath(projectPath))
 }
 
-/** Read the slug from a JSONL file by scanning for the first line with a "slug" field. */
-export function readSlugFromJsonl(jsonlPath: string): string | null {
+/** Read the last real user message from a session's JSONL file.
+ *  Skips meta entries, slash-commands, and tool-result wrappers.
+ *  Returns truncated text or empty string if none found.
+ */
+function readLastUserMessage(sessionsDir: string, sessionId: string): string {
+  const filePath = join(sessionsDir, `${sessionId}.jsonl`)
   try {
-    const content = readFileSync(jsonlPath, 'utf-8')
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
+    const lines = readFileSync(filePath, 'utf-8').split('\n').filter((l) => l.trim())
+    for (let i = lines.length - 1; i >= 0; i--) {
       try {
-        const obj = JSON.parse(trimmed)
-        if (obj && typeof obj.slug === 'string' && obj.slug) return obj.slug
-      } catch {
-        // Skip malformed lines
-      }
+        const obj = JSON.parse(lines[i])
+        if (obj.type !== 'user' || obj.isMeta) continue
+        const raw = obj?.message?.content
+        let text = ''
+        if (typeof raw === 'string') {
+          text = raw
+        } else if (Array.isArray(raw)) {
+          text = raw
+            .filter((b: unknown) => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'text')
+            .map((b: unknown) => (b as { text: string }).text)
+            .join(' ')
+        }
+        text = text.trim()
+        if (
+          text &&
+          !text.startsWith('<command') &&
+          !text.startsWith('<local-command') &&
+          !text.startsWith('<tool')
+        ) {
+          return text.slice(0, 80)
+        }
+      } catch {}
     }
-  } catch {
-    // File not readable
-  }
-  return null
+  } catch {}
+  return ''
 }
 
 /** Scan ~/.claude/projects/<encoded>/ for session JSONL files, sorted by mtime (newest first). */
@@ -58,7 +75,8 @@ export async function scanSessions(projectPath: string): Promise<DiskSession[]> 
       try {
         mtime = statSync(fullPath).mtimeMs
       } catch {}
-      return { sessionId, slug: readSlugFromJsonl(fullPath), mtime }
+      const msg = readLastUserMessage(sessionsDir, sessionId)
+      return { sessionId, title: msg || 'Claude Code', mtime }
     })
 
     sessions.sort((a, b) => b.mtime - a.mtime)
@@ -69,12 +87,12 @@ export async function scanSessions(projectPath: string): Promise<DiskSession[]> 
 }
 
 /** Watch a directory for new .jsonl files.
- *  Calls onNewFile(sessionId, slug | null) when a new .jsonl appears.
+ *  Calls onNewFile(sessionId) when a new .jsonl appears.
  *  Returns a cleanup function.
  */
 export function watchSessionsDir(
   sessionsDir: string,
-  onNewFile: (sessionId: string, slug: string | null) => void
+  onNewFile: (sessionId: string) => void
 ): () => void {
   let stopped = false
   let watcher: FSWatcher | null = null
@@ -93,10 +111,9 @@ export function watchSessionsDir(
         if (!knownFiles.has(filename)) {
           knownFiles.add(filename)
           const sessionId = filename.slice(0, -6) // remove .jsonl (6 chars)
-          const fullPath = join(sessionsDir, filename)
           // Small delay to let claude write the initial data
           setTimeout(() => {
-            if (!stopped) onNewFile(sessionId, readSlugFromJsonl(fullPath))
+            if (!stopped) onNewFile(sessionId)
           }, 300)
         }
       })
@@ -127,63 +144,6 @@ export function watchSessionsDir(
   return () => {
     stopped = true
     clearInterval(interval)
-    watcher?.close()
-  }
-}
-
-/** Watch a specific .jsonl file for changes and call onSlugFound when a slug appears.
- *  Stops watching automatically once slug is found.
- *  Returns a cleanup function.
- */
-export function watchJsonlFile(
-  jsonlPath: string,
-  onSlugFound: (slug: string) => void
-): () => void {
-  let stopped = false
-  let watcher: FSWatcher | null = null
-
-  const check = (): boolean => {
-    const slug = readSlugFromJsonl(jsonlPath)
-    if (slug) {
-      onSlugFound(slug)
-      return true
-    }
-    return false
-  }
-
-  // Check immediately
-  if (check()) return () => {}
-
-  if (!existsSync(jsonlPath)) {
-    // File doesn't exist yet — poll until it does
-    const interval = setInterval(() => {
-      if (stopped) {
-        clearInterval(interval)
-        return
-      }
-      if (existsSync(jsonlPath) && check()) {
-        stopped = true
-        clearInterval(interval)
-      }
-    }, 1000)
-    return () => {
-      stopped = true
-      clearInterval(interval)
-    }
-  }
-
-  try {
-    watcher = watch(jsonlPath, () => {
-      if (stopped) return
-      if (check()) {
-        stopped = true
-        watcher?.close()
-      }
-    })
-  } catch {}
-
-  return () => {
-    stopped = true
     watcher?.close()
   }
 }

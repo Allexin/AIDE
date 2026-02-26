@@ -6,6 +6,7 @@ import {
   watchSessionsDir
 } from './sessionScanner'
 
+
 export interface SessionTabInfo {
   tabId: string
   sessionId: string | null // null until first .jsonl appears (new sessions)
@@ -26,6 +27,9 @@ export class PtyManager {
   private readonly win: BrowserWindow
   private readonly projectPath: string
   private readonly sessionsDir: string
+
+  // Per-tab buffer for incomplete OSC sequences split across PTY data chunks
+  private titleBufs = new Map<string, string>()
 
   constructor(win: BrowserWindow, projectPath: string) {
     this.win = win
@@ -77,6 +81,7 @@ export class PtyManager {
   disposeAll(): void {
     for (const tab of this.tabs.values()) {
       tab.stopDirWatch?.()
+      this.titleBufs.delete(tab.tabId)
       try {
         tab.pty.kill()
       } catch {}
@@ -127,6 +132,50 @@ export class PtyManager {
     return { tabId, sessionId }
   }
 
+  /** DEBUG ONLY — sends PTY escape sequences to the log panel (PTY ESC channel). */
+  private dbgLog(tabId: string, data: string): void {
+    if (!data.includes('\x1b')) return
+    const safe = [...data].map(c => {
+      const code = c.codePointAt(0)!
+      return code < 0x20 || code === 0x7f ? `<${code.toString(16).padStart(2,'0')}>` : c
+    }).join('')
+    this.send('toolbar:output', {
+      channelName: 'PTY ESC',
+      line: `[${tabId}] ${safe.slice(0, 300)}`,
+      attention: false
+    })
+  }
+
+  /** Parse OSC 0/2 title sequences from raw PTY data; save to disk and notify renderer.
+   *  Buffers partial sequences across chunks since node-pty can split them arbitrarily.
+   */
+  private extractTitle(tabId: string, data: string): void {
+    this.dbgLog(tabId, data)
+    // Prepend any buffered partial sequence from the previous chunk
+    const buf = (this.titleBufs.get(tabId) ?? '') + data
+
+    // Match OSC 0 or 2 with BEL (\x07) or ST (\x1b\) terminator
+    const m = /\x1b\](?:0|2);([^\x07\x1b]*)\x07/.exec(buf)
+           ?? /\x1b\](?:0|2);([^\x1b]*)\x1b\\/.exec(buf)
+
+    if (m?.[1]) {
+      const title = m[1].trim()
+      if (title) {
+        this.send('terminal:tab-title', { tabId, title })
+      }
+      this.titleBufs.delete(tabId)
+    } else {
+      // No complete sequence yet — check if there's a partial OSC at the end
+      const oscStart = buf.lastIndexOf('\x1b]')
+      if (oscStart !== -1 && buf.length - oscStart < 512) {
+        // Buffer the partial sequence (512-char limit to avoid memory bloat)
+        this.titleBufs.set(tabId, buf.slice(oscStart))
+      } else {
+        this.titleBufs.delete(tabId)
+      }
+    }
+  }
+
   private spawnPty(tabId: string): nodePty.IPty {
     const pty = nodePty.spawn('powershell.exe', [], {
       name: 'xterm-256color',
@@ -136,7 +185,10 @@ export class PtyManager {
       env: process.env as Record<string, string>
     })
 
-    pty.onData((data) => this.send('terminal:data', { tabId, data }))
+    pty.onData((data) => {
+      this.extractTitle(tabId, data)
+      this.send('terminal:data', { tabId, data })
+    })
     pty.onExit(() => this.send('terminal:tab-exited', { tabId }))
 
     return pty

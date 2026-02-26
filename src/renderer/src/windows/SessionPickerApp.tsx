@@ -2,19 +2,19 @@ import React, { useEffect, useState } from 'react'
 
 interface DiskSession {
   sessionId: string
-  slug: string | null
+  title: string
   mtime: number
 }
 
 interface SessionTabInfo {
   tabId: string
   sessionId: string | null
-  slug: string
+  title?: string
 }
 
 interface SessionEntry {
   sessionId: string
-  slug: string | null
+  slug: string
   mtime: number
   openTabId: string | null // non-null if already open as a tab
 }
@@ -50,7 +50,7 @@ export default function SessionPickerApp(): React.ReactElement {
         )
         return {
           sessionId: ds.sessionId,
-          slug: ds.slug,
+          slug: ds.title,
           mtime: ds.mtime,
           openTabId: openTab ? openTab.tabId : null
         }
@@ -212,7 +212,7 @@ function SessionRow({ entry, onSelect, disabled }: SessionRowProps): React.React
           color: entry.openTabId ? '#d4d4d4' : '#9d9d9d'
         }}
       >
-        {entry.slug || entry.sessionId.slice(0, 8)}
+        {entry.slug}
       </span>
 
       {/* Relative time */}

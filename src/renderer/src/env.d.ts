@@ -38,7 +38,7 @@ interface GitStatusResult {
 // A Claude Code session as stored on disk.
 interface DiskSession {
   sessionId: string
-  slug: string | null
+  title: string // from .aide/Titles/{id}.txt, defaults to 'Claude Code'
   mtime: number // ms since epoch
 }
 
@@ -46,7 +46,6 @@ interface DiskSession {
 interface SessionTabInfo {
   tabId: string
   sessionId: string | null // null until .jsonl appears (new sessions)
-  slug: string // 'Claude Code' until slug is read from JSONL
 }
 
 interface EditorConfig {
@@ -119,6 +118,7 @@ interface EditorAPI {
   terminalResize: (tabId: string, cols: number, rows: number) => void
   terminalOpenSessionPicker: () => void
   onTerminalData: (cb: (tabId: string, data: string) => void) => () => void
+  onTerminalTabTitle: (cb: (tabId: string, title: string) => void) => () => void
   onTerminalTabSessionId: (cb: (tabId: string, sessionId: string) => void) => () => void
   onTerminalTabExited: (cb: (tabId: string) => void) => () => void
   onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void

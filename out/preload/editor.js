@@ -37,10 +37,10 @@ const editorApi = {
     electron.ipcRenderer.on("terminal:data", handler);
     return () => electron.ipcRenderer.removeListener("terminal:data", handler);
   },
-  onTerminalTabSlugUpdated: (cb) => {
-    const handler = (_, payload) => cb(payload.tabId, payload.slug);
-    electron.ipcRenderer.on("terminal:tab-slug-updated", handler);
-    return () => electron.ipcRenderer.removeListener("terminal:tab-slug-updated", handler);
+  onTerminalTabTitle: (cb) => {
+    const handler = (_, payload) => cb(payload.tabId, payload.title);
+    electron.ipcRenderer.on("terminal:tab-title", handler);
+    return () => electron.ipcRenderer.removeListener("terminal:tab-title", handler);
   },
   onTerminalTabSessionId: (cb) => {
     const handler = (_, payload) => cb(payload.tabId, payload.sessionId);

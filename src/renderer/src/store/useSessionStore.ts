@@ -1,5 +1,10 @@
 import { create } from 'zustand'
 
+interface SessionTabInfo {
+  tabId: string
+  sessionId: string | null
+}
+
 export interface SessionTab {
   tabId: string
   sessionId: string | null
