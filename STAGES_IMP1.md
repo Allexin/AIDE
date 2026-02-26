@@ -54,3 +54,35 @@ Context menu and dialogs now render in both normal and modified-only tree modes.
 - `src/preload/editor.ts` (4 new methods)
 - `src/renderer/src/env.d.ts` (4 new method types)
 - `src/renderer/src/components/filetree/FileTree.tsx` (expanded ContextMenu, added dialogs, restructured render)
+
+---
+
+## Batch D — Terminal Tab Naming & Attention ✅
+
+### D1. xterm.js `onTitleChange` for tab labels + OSC 9 attention blink
+
+**Done.** Two improvements to terminal tabs:
+
+**Tab label from VT title (D1 original):**
+- `terminal.onTitleChange(title => updateSlug(tabId, title))` registered on every xterm instance
+- When Claude Code sets the terminal title via `ESC]0;title\007`, the tab label updates automatically
+- JSONL slug remains as the initial label until the first title event arrives
+
+**Attention blink (added to D1):**
+- `terminal.parser.registerOscHandler(9, ...)` intercepts Claude Code's "waiting for input" notification
+- If the tab is not currently active → `setAttention(tabId, true)` in store
+- Clicking the tab clears attention (`setActiveTab` now also clears `attention: false`)
+- Tab color animates amber (`#f0a500`) ↔ dark (`#555`) at 500ms — identical to the log panel behavior
+
+**JSONL slug removed from tab lifecycle:**
+- `slug` removed from `SessionTabInfo` (main → renderer contract) — JSONL slug was internal noise
+- `ptyManager.ts` no longer watches JSONL files for slug or sends `terminal:tab-slug-updated`; tabs always start as "Claude Code"
+- `onTerminalTabSlugUpdated` removed from preload, `env.d.ts`, and `TerminalPanel.tsx`
+- `scanSessions` (session picker) still reads slugs for the picker UI — unaffected
+
+**Files changed:**
+- `src/renderer/src/store/useSessionStore.ts` — `attention: boolean` + `setAttention`; `setActiveTab` clears attention; `initWithTab`/`addTab` hardcode "Claude Code" as initial slug
+- `src/renderer/src/components/layout/TerminalPanel.tsx` — `TerminalTab` registers `onTitleChange` + OSC 9; extracted `TabButton` with amber blink; removed `onTerminalTabSlugUpdated` listener
+- `src/main/pty/ptyManager.ts` — removed `watchJsonlFile`/`readSlugFromJsonl` imports; removed `slug` from `SessionTabInfo` and `PtyTab`; removed JSONL slug watching from tab lifecycle
+- `src/preload/editor.ts` — removed `onTerminalTabSlugUpdated`
+- `src/renderer/src/env.d.ts` — removed `onTerminalTabSlugUpdated`

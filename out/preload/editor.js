@@ -88,6 +88,7 @@ const editorApi = {
   // Shell / FS operations
   shellShowItemInFolder: (filePath) => electron.ipcRenderer.invoke("shell:show-item-in-folder", filePath),
   fsDeleteFile: (filePath) => electron.ipcRenderer.invoke("fs:delete-file", filePath),
+  fsTrashFile: (filePath) => electron.ipcRenderer.invoke("fs:trash-file", filePath),
   fsRenameFile: (oldPath, newPath) => electron.ipcRenderer.invoke("fs:rename-file", oldPath, newPath),
   fsCopyFile: (src, dest) => electron.ipcRenderer.invoke("fs:copy-file", src, dest),
   // Git commit

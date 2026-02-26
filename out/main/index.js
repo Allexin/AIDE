@@ -1811,6 +1811,9 @@ function setupIpcHandlers(openProjects2) {
   electron.ipcMain.handle("fs:delete-file", async (_event, filePath) => {
     await fs.promises.unlink(filePath);
   });
+  electron.ipcMain.handle("fs:trash-file", async (_event, filePath) => {
+    await electron.shell.trashItem(filePath);
+  });
   electron.ipcMain.handle("fs:rename-file", async (_event, oldPath, newPath) => {
     await fs.promises.rename(oldPath, newPath);
   });

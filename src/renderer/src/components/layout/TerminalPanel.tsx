@@ -51,15 +51,25 @@ interface TerminalTabProps {
   isActive: boolean
   onMount: (tabId: string, fit: FitFn) => void
   onUnmount: (tabId: string) => void
+  onTitle: (tabId: string, title: string) => void
+  onAttention: (tabId: string) => void
 }
 
 interface CtxMenuState { x: number; y: number; hasSel: boolean }
 
-function TerminalTab({ tabId, isActive, onMount, onUnmount }: TerminalTabProps): React.ReactElement {
+function TerminalTab({ tabId, isActive, onMount, onUnmount, onTitle, onAttention }: TerminalTabProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null)
+  // Ref so OSC handler can read current isActive without stale closure
+  const isActiveRef = useRef(isActive)
+  const onTitleRef = useRef(onTitle)
+  const onAttentionRef = useRef(onAttention)
+
+  useEffect(() => { isActiveRef.current = isActive }, [isActive])
+  useEffect(() => { onTitleRef.current = onTitle }, [onTitle])
+  useEffect(() => { onAttentionRef.current = onAttention }, [onAttention])
 
   useEffect(() => {
     const container = containerRef.current
@@ -80,6 +90,19 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount }: TerminalTabProps):
 
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
+
+    // D1: update tab label from VT title escape (OSC 0/2)
+    const titleDisposable = terminal.onTitleChange((title) => {
+      if (title) onTitleRef.current(tabId, title)
+    })
+
+    // D1: flash tab when Claude Code signals it's waiting (OSC 9)
+    const oscDisposable = terminal.parser.registerOscHandler(9, (_data) => {
+      if (!isActiveRef.current) {
+        onAttentionRef.current(tabId)
+      }
+      return true
+    })
 
     // Expose fit to parent
     onMount(tabId, {
@@ -114,6 +137,8 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount }: TerminalTabProps):
     }
 
     return () => {
+      titleDisposable.dispose()
+      oscDisposable.dispose()
       removeData()
       onUnmount(tabId)
       terminal.dispose()
@@ -269,7 +294,7 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   const { terminalCollapsed, collapsedWidthPx, toggleTerminalCollapse, focusTerminal } =
     usePanelStore()
 
-  const { tabs, activeTabId, initialized, initWithTab, addTab, setActiveTab, updateSlug, updateSessionId, markExited } =
+  const { tabs, activeTabId, initialized, initWithTab, addTab, setActiveTab, updateSlug, updateSessionId, markExited, setAttention } =
     useSessionStore()
 
   // Map of tabId → fit function (populated by TerminalTab on mount)
@@ -284,6 +309,14 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
     fitFunctions.current.delete(tabId)
   }, [])
 
+  const handleTitle = useCallback((tabId: string, title: string) => {
+    updateSlug(tabId, title)
+  }, [updateSlug])
+
+  const handleAttention = useCallback((tabId: string) => {
+    setAttention(tabId, true)
+  }, [setAttention])
+
   // Initialize on first mount: create initial PTY tab
   useEffect(() => {
     if (initialized) return
@@ -294,9 +327,6 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 
   // Listen for push events from main process
   useEffect(() => {
-    const removeSlug = window.editorApi.onTerminalTabSlugUpdated((tabId, slug) =>
-      updateSlug(tabId, slug)
-    )
     const removeSessionId = window.editorApi.onTerminalTabSessionId((tabId, sessionId) =>
       updateSessionId(tabId, sessionId)
     )
@@ -305,13 +335,12 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
     const removeNewTab = window.editorApi.onTerminalNewTab((tab) => addTab(tab))
 
     return () => {
-      removeSlug()
       removeSessionId()
       removeExited()
       removeSwitch()
       removeNewTab()
     }
-  }, [updateSlug, updateSessionId, markExited, setActiveTab, addTab])
+  }, [updateSessionId, markExited, setActiveTab, addTab])
 
   // Resize all terminal on panel container resize
   useEffect(() => {
@@ -435,6 +464,8 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
             isActive={tab.tabId === activeTabId}
             onMount={handleMount}
             onUnmount={handleUnmount}
+            onTitle={handleTitle}
+            onAttention={handleAttention}
           />
         ))}
         {!initialized && (
@@ -457,10 +488,65 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   )
 }
 
+// ── TabButton ─────────────────────────────────────────────────────────────────
+
+interface TabButtonProps {
+  tab: { tabId: string; slug: string; exited: boolean; attention: boolean }
+  isActive: boolean
+  onSelect: () => void
+}
+
+function TabButton({ tab, isActive, onSelect }: TabButtonProps): React.ReactElement {
+  const [dim, setDim] = useState(false)
+
+  useEffect(() => {
+    if (!tab.attention) {
+      setDim(false)
+      return
+    }
+    const id = setInterval(() => setDim((d) => !d), 500)
+    return () => clearInterval(id)
+  }, [tab.attention])
+
+  const color = tab.attention
+    ? dim ? '#555' : '#f0a500'  // amber blink — same as log panel
+    : tab.exited
+      ? '#555'
+      : isActive
+        ? '#d4d4d4'
+        : '#858585'
+
+  return (
+    <div
+      onClick={onSelect}
+      title={tab.slug}
+      style={{
+        background: isActive ? '#1e1e1e' : '#2d2d2d',
+        color,
+        fontSize: 12,
+        padding: '4px 10px',
+        borderRadius: '3px 3px 0 0',
+        cursor: 'pointer',
+        border: '1px solid #3d3d3d',
+        borderBottom: isActive ? '1px solid #1e1e1e' : 'none',
+        whiteSpace: 'nowrap',
+        lineHeight: 1.5,
+        flexShrink: 0,
+        maxWidth: 180,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        userSelect: 'none'
+      }}
+    >
+      {tab.slug}
+    </div>
+  )
+}
+
 // ── TabStrip ─────────────────────────────────────────────────────────────────
 
 interface TabStripProps {
-  tabs: Array<{ tabId: string; slug: string; exited: boolean }>
+  tabs: Array<{ tabId: string; slug: string; exited: boolean; attention: boolean }>
   activeTabId: string | null
   onSelectTab: (tabId: string) => void
 }
@@ -506,35 +592,14 @@ function TabStrip({ tabs, activeTabId, onSelectTab }: TabStripProps): React.Reac
           scrollbarWidth: 'none'
         }}
       >
-        {tabs.map((tab) => {
-          const isActive = tab.tabId === activeTabId
-          return (
-            <div
-              key={tab.tabId}
-              onClick={() => onSelectTab(tab.tabId)}
-              title={tab.slug}
-              style={{
-                background: isActive ? '#1e1e1e' : '#2d2d2d',
-                color: tab.exited ? '#555' : isActive ? '#d4d4d4' : '#858585',
-                fontSize: 12,
-                padding: '4px 10px',
-                borderRadius: '3px 3px 0 0',
-                cursor: 'pointer',
-                border: '1px solid #3d3d3d',
-                borderBottom: isActive ? '1px solid #1e1e1e' : 'none',
-                whiteSpace: 'nowrap',
-                lineHeight: 1.5,
-                flexShrink: 0,
-                maxWidth: 180,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                userSelect: 'none'
-              }}
-            >
-              {tab.slug}
-            </div>
-          )
-        })}
+        {tabs.map((tab) => (
+          <TabButton
+            key={tab.tabId}
+            tab={tab}
+            isActive={tab.tabId === activeTabId}
+            onSelect={() => onSelectTab(tab.tabId)}
+          />
+        ))}
       </div>
       {canScrollRight && (
         <button style={headerBtnStyle} onClick={() => scroll('right')} title="Scroll tabs right">

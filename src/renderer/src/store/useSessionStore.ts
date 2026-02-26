@@ -5,6 +5,7 @@ export interface SessionTab {
   sessionId: string | null
   slug: string
   exited: boolean
+  attention: boolean  // true → blink tab (Claude is waiting for input)
 }
 
 interface SessionState {
@@ -19,6 +20,7 @@ interface SessionState {
   updateSlug: (tabId: string, slug: string) => void
   updateSessionId: (tabId: string, sessionId: string) => void
   markExited: (tabId: string) => void
+  setAttention: (tabId: string, attention: boolean) => void
 }
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -28,18 +30,23 @@ export const useSessionStore = create<SessionState>((set) => ({
 
   initWithTab: (tab: SessionTabInfo) =>
     set({
-      tabs: [{ ...tab, exited: false }],
+      tabs: [{ tabId: tab.tabId, sessionId: tab.sessionId, slug: 'Claude Code', exited: false, attention: false }],
       activeTabId: tab.tabId,
       initialized: true
     }),
 
   addTab: (tab: SessionTabInfo) =>
     set((state) => ({
-      tabs: [...state.tabs, { ...tab, exited: false }],
+      tabs: [...state.tabs, { tabId: tab.tabId, sessionId: tab.sessionId, slug: 'Claude Code', exited: false, attention: false }],
       activeTabId: tab.tabId // switch to new tab
     })),
 
-  setActiveTab: (tabId: string) => set({ activeTabId: tabId }),
+  setActiveTab: (tabId: string) =>
+    set((state) => ({
+      activeTabId: tabId,
+      // Clear attention when user switches to this tab
+      tabs: state.tabs.map((t) => (t.tabId === tabId ? { ...t, attention: false } : t))
+    })),
 
   updateSlug: (tabId: string, slug: string) =>
     set((state) => ({
@@ -54,5 +61,10 @@ export const useSessionStore = create<SessionState>((set) => ({
   markExited: (tabId: string) =>
     set((state) => ({
       tabs: state.tabs.map((t) => (t.tabId === tabId ? { ...t, exited: true } : t))
+    })),
+
+  setAttention: (tabId: string, attention: boolean) =>
+    set((state) => ({
+      tabs: state.tabs.map((t) => (t.tabId === tabId ? { ...t, attention } : t))
     }))
 }))

@@ -119,7 +119,6 @@ interface EditorAPI {
   terminalResize: (tabId: string, cols: number, rows: number) => void
   terminalOpenSessionPicker: () => void
   onTerminalData: (cb: (tabId: string, data: string) => void) => () => void
-  onTerminalTabSlugUpdated: (cb: (tabId: string, slug: string) => void) => () => void
   onTerminalTabSessionId: (cb: (tabId: string, sessionId: string) => void) => () => void
   onTerminalTabExited: (cb: (tabId: string) => void) => () => void
   onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void

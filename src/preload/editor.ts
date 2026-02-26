@@ -92,7 +92,6 @@ export interface EditorAPI {
   terminalResize: (tabId: string, cols: number, rows: number) => void
   terminalOpenSessionPicker: () => void
   onTerminalData: (cb: (tabId: string, data: string) => void) => () => void
-  onTerminalTabSlugUpdated: (cb: (tabId: string, slug: string) => void) => () => void
   onTerminalTabSessionId: (cb: (tabId: string, sessionId: string) => void) => () => void
   onTerminalTabExited: (cb: (tabId: string) => void) => () => void
   onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void
@@ -184,13 +183,6 @@ const editorApi: EditorAPI = {
       cb(payload.tabId, payload.data)
     ipcRenderer.on('terminal:data', handler)
     return () => ipcRenderer.removeListener('terminal:data', handler)
-  },
-
-  onTerminalTabSlugUpdated: (cb: (tabId: string, slug: string) => void) => {
-    const handler = (_: unknown, payload: { tabId: string; slug: string }): void =>
-      cb(payload.tabId, payload.slug)
-    ipcRenderer.on('terminal:tab-slug-updated', handler)
-    return () => ipcRenderer.removeListener('terminal:tab-slug-updated', handler)
   },
 
   onTerminalTabSessionId: (cb: (tabId: string, sessionId: string) => void) => {
