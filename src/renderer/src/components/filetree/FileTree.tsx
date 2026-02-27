@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useFileTreeStore } from '../../store/useFileTreeStore'
 import { useEditorStore } from '../../store/useEditorStore'
 import { useSessionStore } from '../../store/useSessionStore'
+import { usePanelStore } from '../../store/usePanelStore'
 import { useToastStore } from '../../store/useToastStore'
 
 // ── Virtual tree for "Modified only" mode ────────────────────────────────────
@@ -145,6 +146,8 @@ function ContextMenu({
   const handleAddToContext = (): void => {
     if (activeTabId) {
       window.editorApi.terminalWrite(activeTabId, `@${relativePath} `)
+      // H2: Focus the terminal after adding to context
+      usePanelStore.getState().focusTerminal()
     }
     onClose()
   }

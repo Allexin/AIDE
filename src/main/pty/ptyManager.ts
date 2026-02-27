@@ -92,6 +92,18 @@ export class PtyManager {
     } catch {}
   }
 
+  /** Close a single tab: kill PTY, clean up watchers. */
+  closeTab(tabId: string): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    tab.stopDirWatch?.()
+    this.titleBufs.delete(tabId)
+    try {
+      tab.pty.kill()
+    } catch {}
+    this.tabs.delete(tabId)
+  }
+
   disposeAll(): void {
     for (const tab of this.tabs.values()) {
       tab.stopDirWatch?.()

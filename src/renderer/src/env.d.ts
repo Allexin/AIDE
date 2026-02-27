@@ -118,6 +118,7 @@ interface EditorAPI {
   terminalResumeSession: (sessionId: string) => Promise<SessionTabInfo | null>
   terminalWrite: (tabId: string, data: string) => void
   terminalResize: (tabId: string, cols: number, rows: number) => void
+  terminalCloseTab: (tabId: string) => void
   terminalOpenSessionPicker: () => void
   onTerminalData: (cb: (tabId: string, data: string) => void) => () => void
   onTerminalTabTitle: (cb: (tabId: string, title: string) => void) => () => void

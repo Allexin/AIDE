@@ -217,6 +217,13 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     ptyRegistry.get(senderWin)?.resize(tabId, cols, rows)
   })
 
+  // ── Terminal: close a single tab (kill PTY) ──────────────────────────────────
+  ipcMain.on('terminal:close-tab', (event, tabId: string) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return
+    ptyRegistry.get(senderWin)?.closeTab(tabId)
+  })
+
   // ── Terminal: get current tabs ────────────────────────────────────────────────
   ipcMain.handle('terminal:get-tabs', (event) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender)

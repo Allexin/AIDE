@@ -89,6 +89,7 @@ export interface EditorAPI {
   terminalResumeSession: (sessionId: string) => Promise<SessionTabInfo | null>
   terminalWrite: (tabId: string, data: string) => void
   terminalResize: (tabId: string, cols: number, rows: number) => void
+  terminalCloseTab: (tabId: string) => void
   terminalOpenSessionPicker: () => void
   onTerminalData: (cb: (tabId: string, data: string) => void) => () => void
   onTerminalTabTitle: (cb: (tabId: string, title: string) => void) => () => void
@@ -186,6 +187,7 @@ const editorApi: EditorAPI = {
   terminalResumeSession: (sessionId) => ipcRenderer.invoke('terminal:resume-session', sessionId),
   terminalWrite: (tabId, data) => ipcRenderer.send('terminal:write', tabId, data),
   terminalResize: (tabId, cols, rows) => ipcRenderer.send('terminal:resize', tabId, cols, rows),
+  terminalCloseTab: (tabId) => ipcRenderer.send('terminal:close-tab', tabId),
   terminalOpenSessionPicker: () => ipcRenderer.send('terminal:open-session-picker'),
 
   onTerminalData: (cb: (tabId: string, data: string) => void) => {

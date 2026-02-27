@@ -56,13 +56,10 @@ interface TerminalTabProps {
   onAttention: (tabId: string) => void
 }
 
-interface CtxMenuState { x: number; y: number; hasSel: boolean }
-
 function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }: TerminalTabProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
-  const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null)
   // Ref so OSC handler can read current isActive without stale closure
   const isActiveRef = useRef(isActive)
   const onAttentionRef = useRef(onAttention)
@@ -158,29 +155,19 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }: Termi
     return undefined
   }, [isActive, tabId])
 
+  // H1: Right-click = copy selection or paste (no context menu)
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault()
-    setCtxMenu({
-      x: e.clientX,
-      y: e.clientY,
-      hasSel: !!(terminalRef.current?.getSelection())
-    })
-  }
-
-  const handleCopy = () => {
-    const sel = terminalRef.current?.getSelection()
-    if (sel) navigator.clipboard.writeText(sel).catch(() => {})
-    setCtxMenu(null)
-  }
-
-  const handlePaste = async () => {
-    try {
-      const text = await navigator.clipboard.readText()
-      terminalRef.current?.paste(text)
-    } catch {}
-    setCtxMenu(null)
-    // A2: restore focus after context menu closes
-    setTimeout(() => terminalRef.current?.focus(), 0)
+    const terminal = terminalRef.current
+    if (!terminal) return
+    if (terminal.hasSelection()) {
+      navigator.clipboard.writeText(terminal.getSelection()).catch(() => {})
+      terminal.clearSelection()
+    } else {
+      navigator.clipboard.readText().then((text) => {
+        if (text) terminal.paste(text)
+      }).catch(() => {})
+    }
   }
 
   return (
@@ -193,88 +180,7 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }: Termi
         display: isActive ? 'block' : 'none',
         overflow: 'hidden'
       }}
-    >
-      {ctxMenu && (
-        <TerminalContextMenu
-          x={ctxMenu.x}
-          y={ctxMenu.y}
-          hasSel={ctxMenu.hasSel}
-          onCopy={handleCopy}
-          onPaste={handlePaste}
-          onClose={() => setCtxMenu(null)}
-        />
-      )}
-    </div>
-  )
-}
-
-// ── TerminalContextMenu ───────────────────────────────────────────────────────
-
-interface TerminalContextMenuProps {
-  x: number
-  y: number
-  hasSel: boolean
-  onCopy: () => void
-  onPaste: () => void
-  onClose: () => void
-}
-
-function TerminalContextMenu({ x, y, hasSel, onCopy, onPaste, onClose }: TerminalContextMenuProps): React.ReactElement {
-  // Close on any click outside
-  useEffect(() => {
-    const handle = () => onClose()
-    window.addEventListener('mousedown', handle)
-    return () => window.removeEventListener('mousedown', handle)
-  }, [onClose])
-
-  // Keep menu within viewport
-  const menuW = 140
-  const menuH = 64
-  const left = x + menuW > window.innerWidth ? x - menuW : x
-  const top = y + menuH > window.innerHeight ? y - menuH : y
-
-  const itemStyle = (enabled: boolean): React.CSSProperties => ({
-    padding: '5px 12px',
-    cursor: enabled ? 'pointer' : 'default',
-    color: enabled ? '#d4d4d4' : '#555',
-    fontSize: 12,
-    userSelect: 'none',
-    background: 'none',
-    border: 'none',
-    width: '100%',
-    textAlign: 'left'
-  })
-
-  return (
-    <div
-      onMouseDown={(e) => e.stopPropagation()} // prevent outside-click handler from firing
-      style={{
-        position: 'fixed',
-        left,
-        top,
-        width: menuW,
-        background: '#252526',
-        border: '1px solid #454545',
-        borderRadius: 4,
-        boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-        zIndex: 9999,
-        paddingBlock: 4
-      }}
-    >
-      <button
-        style={itemStyle(hasSel)}
-        disabled={!hasSel}
-        onMouseDown={hasSel ? onCopy : undefined}
-      >
-        Copy
-      </button>
-      <button
-        style={itemStyle(true)}
-        onMouseDown={onPaste}
-      >
-        Paste
-      </button>
-    </div>
+    />
   )
 }
 
@@ -288,7 +194,7 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   const { terminalCollapsed, collapsedWidthPx, toggleTerminalCollapse, focusTerminal } =
     usePanelStore()
 
-  const { tabs, activeTabId, initialized, initWithTab, addTab, setActiveTab, updateSlug, updateSessionId, markExited, setAttention } =
+  const { tabs, activeTabId, initialized, initWithTab, addTab, setActiveTab, closeTab, updateSlug, updateSessionId, markExited, setAttention } =
     useSessionStore()
 
   const projectPath = useFileTreeStore((s) => s.projectPath)
@@ -308,6 +214,19 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   const handleAttention = useCallback((tabId: string) => {
     setAttention(tabId, true)
   }, [setAttention])
+
+  // H2: Focus xterm when clicking a tab (including the already-active one)
+  const handleSelectTab = useCallback((tabId: string) => {
+    setActiveTab(tabId)
+    setTimeout(() => fitFunctions.current.get(tabId)?.focus(), 50)
+  }, [setActiveTab])
+
+  // H3: Close tab — kill PTY, remove from store
+  const handleCloseTab = useCallback((tabId: string) => {
+    if (tabs.length <= 1) return // can't close the last tab
+    window.editorApi.terminalCloseTab(tabId)
+    closeTab(tabId)
+  }, [tabs.length, closeTab])
 
   // C1/C2: drag & drop files into terminal
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
@@ -454,7 +373,8 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
         <TabStrip
           tabs={tabs}
           activeTabId={activeTabId}
-          onSelectTab={setActiveTab}
+          onSelectTab={handleSelectTab}
+          onCloseTab={handleCloseTab}
         />
 
         {/* [ + ] open session picker */}
@@ -524,11 +444,14 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 interface TabButtonProps {
   tab: { tabId: string; slug: string; exited: boolean; attention: boolean }
   isActive: boolean
+  canClose: boolean
   onSelect: () => void
+  onClose: () => void
 }
 
-function TabButton({ tab, isActive, onSelect }: TabButtonProps): React.ReactElement {
+function TabButton({ tab, isActive, canClose, onSelect, onClose }: TabButtonProps): React.ReactElement {
   const [dim, setDim] = useState(false)
+  const [hovered, setHovered] = useState(false)
 
   useEffect(() => {
     if (!tab.attention) {
@@ -550,12 +473,14 @@ function TabButton({ tab, isActive, onSelect }: TabButtonProps): React.ReactElem
   return (
     <div
       onClick={onSelect}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       title={tab.slug}
       style={{
         background: isActive ? '#1e1e1e' : '#2d2d2d',
         color,
         fontSize: 12,
-        padding: '4px 10px',
+        padding: '4px 6px 4px 10px',
         borderRadius: '3px 3px 0 0',
         cursor: 'pointer',
         border: '1px solid #3d3d3d',
@@ -563,13 +488,35 @@ function TabButton({ tab, isActive, onSelect }: TabButtonProps): React.ReactElem
         whiteSpace: 'nowrap',
         lineHeight: 1.5,
         flexShrink: 0,
-        maxWidth: 180,
+        maxWidth: 200,
         overflow: 'hidden',
         textOverflow: 'ellipsis',
-        userSelect: 'none'
+        userSelect: 'none',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4
       }}
     >
-      {tab.slug}
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{tab.slug}</span>
+      {canClose && (hovered || isActive) && (
+        <span
+          onClick={(e) => { e.stopPropagation(); onClose() }}
+          title="Close tab"
+          style={{
+            fontSize: 14,
+            lineHeight: 1,
+            color: '#858585',
+            cursor: 'pointer',
+            flexShrink: 0,
+            padding: '0 2px',
+            borderRadius: 3
+          }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#d4d4d4'; (e.currentTarget as HTMLElement).style.background = '#3d3d3d' }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#858585'; (e.currentTarget as HTMLElement).style.background = 'none' }}
+        >
+          ×
+        </span>
+      )}
     </div>
   )
 }
@@ -580,9 +527,10 @@ interface TabStripProps {
   tabs: Array<{ tabId: string; slug: string; exited: boolean; attention: boolean }>
   activeTabId: string | null
   onSelectTab: (tabId: string) => void
+  onCloseTab: (tabId: string) => void
 }
 
-function TabStrip({ tabs, activeTabId, onSelectTab }: TabStripProps): React.ReactElement {
+function TabStrip({ tabs, activeTabId, onSelectTab, onCloseTab }: TabStripProps): React.ReactElement {
   const stripRef = useRef<HTMLDivElement>(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
   const [canScrollRight, setCanScrollRight] = useState(false)
@@ -628,7 +576,9 @@ function TabStrip({ tabs, activeTabId, onSelectTab }: TabStripProps): React.Reac
             key={tab.tabId}
             tab={tab}
             isActive={tab.tabId === activeTabId}
+            canClose={tabs.length > 1}
             onSelect={() => onSelectTab(tab.tabId)}
+            onClose={() => onCloseTab(tab.tabId)}
           />
         ))}
       </div>
