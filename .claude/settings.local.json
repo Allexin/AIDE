@@ -3,7 +3,8 @@
     "allow": [
       "Bash(tail:*)",
       "Bash(cd /e/Projects/AIDE/AIDE && npx tsc --noEmit -p tsconfig.node.json 2>&1 && npx tsc --noEmit -p tsconfig.web.json 2>&1)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(node:*)"
     ]
   }
 }

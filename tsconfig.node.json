@@ -9,6 +9,7 @@
     "sourceMap": true,
     "declaration": false,
     "skipLibCheck": true,
+    "resolveJsonModule": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "types": ["node"]

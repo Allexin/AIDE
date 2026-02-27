@@ -108,6 +108,9 @@ export default function StatusBar(): React.ReactElement {
             UTF-8
           </span>
         )}
+        <span style={{ ...sensorStyle, opacity: 0.7 }} title="App version">
+          v{__APP_VERSION__}
+        </span>
       </div>
     </div>
   )
