@@ -95,6 +95,8 @@ export interface EditorAPI {
   onTerminalTabTitle: (cb: (tabId: string, title: string) => void) => () => void
   onTerminalTabSessionId: (cb: (tabId: string, sessionId: string) => void) => () => void
   onTerminalTabExited: (cb: (tabId: string) => void) => () => void
+  onTerminalTabReady: (cb: (tabId: string) => void) => () => void
+  onTerminalDeadSession: (cb: (tabId: string, sessionId: string | null) => void) => () => void
   onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void
   onTerminalNewTab: (cb: (tab: SessionTabInfo) => void) => () => void
 
@@ -215,6 +217,19 @@ const editorApi: EditorAPI = {
     const handler = (_: unknown, payload: { tabId: string }): void => cb(payload.tabId)
     ipcRenderer.on('terminal:tab-exited', handler)
     return () => ipcRenderer.removeListener('terminal:tab-exited', handler)
+  },
+
+  onTerminalTabReady: (cb: (tabId: string) => void) => {
+    const handler = (_: unknown, payload: { tabId: string }): void => cb(payload.tabId)
+    ipcRenderer.on('terminal:tab-ready', handler)
+    return () => ipcRenderer.removeListener('terminal:tab-ready', handler)
+  },
+
+  onTerminalDeadSession: (cb: (tabId: string, sessionId: string | null) => void) => {
+    const handler = (_: unknown, payload: { tabId: string; sessionId: string | null }): void =>
+      cb(payload.tabId, payload.sessionId)
+    ipcRenderer.on('terminal:dead-session', handler)
+    return () => ipcRenderer.removeListener('terminal:dead-session', handler)
   },
 
   onTerminalSwitchTab: (cb: (tabId: string) => void) => {

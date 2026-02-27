@@ -72,6 +72,13 @@ export const claudeCodeTool: CliTool = {
     return 'claude'
   },
 
+  checkStartupHealth(accumulated: string, elapsedMs: number): 'ok' | 'dead' | 'pending' {
+    if (accumulated.includes('No conversation found with session ID')) return 'dead'
+    if (accumulated.includes('? for shortcuts')) return 'ok'
+    if (elapsedMs > 15000) return 'ok' // assume ok after 15s
+    return 'pending'
+  },
+
   watchForNewSessions(projectPath: string, onNew: (session: CliSession) => void): () => void {
     const sessionsDir = getSessionsDir(projectPath)
     return watchSessionsDir(sessionsDir, (sessionId: string) => {

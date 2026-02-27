@@ -124,6 +124,8 @@ interface EditorAPI {
   onTerminalTabTitle: (cb: (tabId: string, title: string) => void) => () => void
   onTerminalTabSessionId: (cb: (tabId: string, sessionId: string) => void) => () => void
   onTerminalTabExited: (cb: (tabId: string) => void) => () => void
+  onTerminalTabReady: (cb: (tabId: string) => void) => () => void
+  onTerminalDeadSession: (cb: (tabId: string, sessionId: string | null) => void) => () => void
   onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void
   onTerminalNewTab: (cb: (tab: SessionTabInfo) => void) => () => void
 

@@ -39,4 +39,12 @@ export interface CliTool {
    *  (e.g. writing trust config so the tool doesn't prompt the user).
    */
   prepareProject?(projectPath: string): Promise<void>
+
+  /** Check whether the CLI has finished starting up by inspecting accumulated output.
+   *  Returns 'ok' when ready, 'dead' if the session is invalid, 'pending' otherwise.
+   */
+  checkStartupHealth?(
+    accumulated: string,
+    elapsedMs: number
+  ): 'ok' | 'dead' | 'pending'
 }

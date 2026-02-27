@@ -14,6 +14,13 @@ interface PtyTab extends SessionTabInfo {
   stopDirWatch?: () => void
 }
 
+interface HealthCheck {
+  buf: string
+  startTime: number
+  resolved: boolean
+  onResult: ((result: 'ok' | 'dead') => void) | null
+}
+
 let tabIdCounter = 0
 function nextTabId(): string {
   return `tab-${++tabIdCounter}`
@@ -27,6 +34,7 @@ export class PtyManager {
 
   // Per-tab buffer for incomplete OSC sequences split across PTY data chunks
   private titleBufs = new Map<string, string>()
+  private healthChecks = new Map<string, HealthCheck>()
 
   constructor(win: BrowserWindow, projectPath: string, tool: CliTool = claudeCodeTool) {
     this.win = win
@@ -60,12 +68,12 @@ export class PtyManager {
   async createNewSessionWithPrompt(prompt: string): Promise<SessionTabInfo> {
     await this.tool.prepareProject?.(this.projectPath)
     const tabInfo = this.spawnNewSessionTab()
+    this.startHealthCheck(tabInfo.tabId)
 
-    // Write prompt after the tool has had time to start (1.5s after the 0.5s newSessionCommand delay)
-    setTimeout(() => {
-      if (!this.tabs.has(tabInfo.tabId)) return
+    const result = await this.waitForReady(tabInfo.tabId)
+    if (result === 'ok' && this.tabs.has(tabInfo.tabId)) {
       this.write(tabInfo.tabId, prompt + '\r')
-    }, 2000)
+    }
 
     return tabInfo
   }
@@ -98,6 +106,7 @@ export class PtyManager {
     if (!tab) return
     tab.stopDirWatch?.()
     this.titleBufs.delete(tabId)
+    this.healthChecks.delete(tabId)
     try {
       tab.pty.kill()
     } catch {}
@@ -108,6 +117,7 @@ export class PtyManager {
     for (const tab of this.tabs.values()) {
       tab.stopDirWatch?.()
       this.titleBufs.delete(tab.tabId)
+      this.healthChecks.delete(tab.tabId)
       try {
         tab.pty.kill()
       } catch {}
@@ -141,6 +151,8 @@ export class PtyManager {
       })
     }, 500)
 
+    this.startHealthCheck(tabId)
+
     return { tabId, sessionId: null }
   }
 
@@ -154,6 +166,8 @@ export class PtyManager {
       if (!this.tabs.has(tabId)) return
       pty.write(`${this.tool.resumeCommand(sessionId)}\r`)
     }, 500)
+
+    this.startHealthCheck(tabId)
 
     return { tabId, sessionId }
   }
@@ -197,12 +211,65 @@ export class PtyManager {
     })
 
     pty.onData((data) => {
+      this.feedHealthCheck(tabId, data)
       this.extractTitle(tabId, data)
       this.send('terminal:data', { tabId, data })
     })
     pty.onExit(() => this.send('terminal:tab-exited', { tabId }))
 
     return pty
+  }
+
+  private startHealthCheck(tabId: string): void {
+    if (!this.tool.checkStartupHealth) return
+    this.healthChecks.set(tabId, {
+      buf: '',
+      startTime: Date.now(),
+      resolved: false,
+      onResult: null
+    })
+  }
+
+  private feedHealthCheck(tabId: string, data: string): void {
+    const hc = this.healthChecks.get(tabId)
+    if (!hc || hc.resolved || !this.tool.checkStartupHealth) return
+
+    hc.buf += data
+    const elapsed = Date.now() - hc.startTime
+    const result = this.tool.checkStartupHealth(hc.buf, elapsed)
+
+    if (result === 'pending') return
+
+    hc.resolved = true
+    if (result === 'ok') {
+      this.send('terminal:tab-ready', { tabId })
+    } else {
+      const tab = this.tabs.get(tabId)
+      this.send('terminal:dead-session', { tabId, sessionId: tab?.sessionId ?? null })
+    }
+    hc.onResult?.(result)
+    this.healthChecks.delete(tabId)
+  }
+
+  private waitForReady(tabId: string): Promise<'ok' | 'dead'> {
+    const hc = this.healthChecks.get(tabId)
+    if (!hc) return Promise.resolve('ok') // no health check → assume ok
+
+    if (hc.resolved) return Promise.resolve('ok')
+
+    return new Promise((resolve) => {
+      hc.onResult = resolve
+
+      // Hard timeout — assume ok
+      setTimeout(() => {
+        if (!hc.resolved) {
+          hc.resolved = true
+          this.send('terminal:tab-ready', { tabId })
+          resolve('ok')
+          this.healthChecks.delete(tabId)
+        }
+      }, 15000)
+    })
   }
 
   private send(channel: string, data: unknown): void {

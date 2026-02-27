@@ -199,6 +199,8 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 
   const projectPath = useFileTreeStore((s) => s.projectPath)
 
+  const [deadSessionDialog, setDeadSessionDialog] = useState(false)
+
   // Map of tabId → fit+focus functions (populated by TerminalTab on mount)
   const fitFunctions = useRef<Map<string, FitFn>>(new Map())
   const containerRef = useRef<HTMLDivElement>(null)
@@ -281,6 +283,14 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
     const removeExited = window.editorApi.onTerminalTabExited((tabId) => markExited(tabId))
     const removeSwitch = window.editorApi.onTerminalSwitchTab((tabId) => setActiveTab(tabId))
     const removeNewTab = window.editorApi.onTerminalNewTab((tab) => addTab(tab))
+    const removeDeadSession = window.editorApi.onTerminalDeadSession((tabId, _sessionId) => {
+      // Close the dead tab (unless it's the last one)
+      if (tabs.length > 1) {
+        window.editorApi.terminalCloseTab(tabId)
+        closeTab(tabId)
+      }
+      setDeadSessionDialog(true)
+    })
 
     return () => {
       removeTitle()
@@ -288,8 +298,9 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
       removeExited()
       removeSwitch()
       removeNewTab()
+      removeDeadSession()
     }
-  }, [updateSessionId, markExited, setActiveTab, addTab, updateSlug])
+  }, [updateSessionId, markExited, setActiveTab, addTab, updateSlug, tabs.length, closeTab])
 
   // Resize all terminal on panel container resize
   useEffect(() => {
@@ -435,6 +446,69 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
           </div>
         )}
       </div>
+
+      {/* Dead session notification dialog */}
+      {deadSessionDialog && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0,0,0,0.5)',
+            zIndex: 100
+          }}
+        >
+          <div style={{
+            background: '#252526',
+            border: '1px solid #3d3d3d',
+            borderRadius: 6,
+            padding: '20px 24px',
+            maxWidth: 360,
+            textAlign: 'center'
+          }}>
+            <div style={{ color: '#d4d4d4', fontSize: 13, marginBottom: 16 }}>
+              Session not found. The tab has been closed.
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+              <button
+                onClick={() => setDeadSessionDialog(false)}
+                style={{
+                  background: '#3d3d3d',
+                  color: '#d4d4d4',
+                  border: 'none',
+                  borderRadius: 4,
+                  padding: '6px 16px',
+                  cursor: 'pointer',
+                  fontSize: 12
+                }}
+              >
+                OK
+              </button>
+              <button
+                onClick={() => {
+                  setDeadSessionDialog(false)
+                  window.editorApi.terminalCreateNew().then((tab) => {
+                    if (tab) addTab(tab)
+                  })
+                }}
+                style={{
+                  background: '#0e639c',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 4,
+                  padding: '6px 16px',
+                  cursor: 'pointer',
+                  fontSize: 12
+                }}
+              >
+                Start New Session
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
