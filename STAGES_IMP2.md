@@ -83,3 +83,53 @@ Emits IPC events: `terminal:tab-ready { tabId }` on ok, `terminal:dead-session {
 - `src/preload/editor.ts` — `onTerminalTabReady`, `onTerminalDeadSession` listeners + types
 - `src/renderer/src/env.d.ts` — `onTerminalTabReady`, `onTerminalDeadSession` types
 - `src/renderer/src/components/layout/TerminalPanel.tsx` — dead session handler + dialog UI
+
+---
+
+## Batch J — Restore All Open Sessions on Startup ✅
+
+### J1. Session persistence in aide-state.json
+
+**Done.** Extended `AppState` with `openSessions` map (keyed by project path). Each entry stores:
+- `tabs` — array of `{ sessionId, title }` for each open tab
+- `activeSessionId` — which tab was active
+
+New helpers: `saveOpenSessions(projectPath, data)` and `loadOpenSessions(projectPath)`.
+
+### J2. PtyManager: `createInitialTabs` (replaces `createInitialTab`)
+
+**Done.** New method accepts optional `SavedSessionEntry[]` from persisted state:
+- If saved sessions exist: spawns a resume PTY for each, returns all tab infos with saved titles
+- If no saved sessions: falls back to previous behavior (resume latest or start fresh)
+- `SessionTabInfo` now includes optional `title` field for restore
+
+### J3. Silent dead session handling during restore
+
+**Done.** Health checks during restore use `silent: true` flag:
+- `startHealthCheck(tabId, silent)` — marks health check as silent
+- `feedHealthCheck` — skips `terminal:dead-session` IPC for silent checks (no dialog shown)
+- `handleRestoreDeadSessions(tabIds)` — waits for all health checks, silently closes dead tabs via `terminal:tab-closed` IPC, spawns new session via `terminal:new-tab` if all tabs were dead
+
+### J4. Renderer: multi-tab init + debounced persistence
+
+**Done.**
+- `useSessionStore`: new `initWithTabs(tabs[], activeTabId)` action, uses saved `title` as initial slug
+- `TerminalPanel` init effect: calls `terminalCreateInitial()` which now returns `{ tabs[], activeSessionId }`, uses `initWithTabs` for multiple tabs
+- New `onTerminalTabClosed` listener for silent tab removal during restore
+- Debounced persistence effect (500ms): saves current open tabs + active session to `aide-state.json` on every tab/activeTab change
+
+### J5. IPC changes
+
+**Done.**
+- `terminal:create-initial` — now returns `{ tabs: SessionTabInfo[], activeSessionId: string | null }` (was single `SessionTabInfo`)
+- `state:save-open-sessions` — new fire-and-forget IPC, saves open sessions per project
+- `terminal:tab-closed` — new push event from main→renderer for silent tab removal during restore
+
+**Files changed:**
+- `src/main/config/appState.ts` — `SavedSessionEntry`, `ProjectOpenSessions`, `openSessions` in AppState, save/load helpers
+- `src/main/pty/ptyManager.ts` — `createInitialTabs`, `handleRestoreDeadSessions`, `silent` flag on HealthCheck, `title` on SessionTabInfo
+- `src/main/ipc/index.ts` — updated `terminal:create-initial`, added `state:save-open-sessions`
+- `src/preload/editor.ts` — `InitialTabsResult` type, `saveOpenSessions`, `onTerminalTabClosed`, updated EditorAPI
+- `src/renderer/src/env.d.ts` — `InitialTabsResult`, `title` on SessionTabInfo, `saveOpenSessions`, `onTerminalTabClosed`
+- `src/renderer/src/store/useSessionStore.ts` — `initWithTabs` action, `title` on SessionTabInfo
+- `src/renderer/src/components/layout/TerminalPanel.tsx` — multi-tab init, debounced persistence, silent tab close listener

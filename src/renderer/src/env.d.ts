@@ -48,6 +48,12 @@ interface DiskSession {
 interface SessionTabInfo {
   tabId: string
   sessionId: string | null // null until .jsonl appears (new sessions)
+  title?: string // saved title for restore; renderer uses as initial slug
+}
+
+interface InitialTabsResult {
+  tabs: SessionTabInfo[]
+  activeSessionId: string | null
 }
 
 interface EditorConfig {
@@ -113,7 +119,8 @@ interface EditorAPI {
   gitShowHead: (relPath: string) => Promise<{ content: string } | { error: 'untracked' | 'other' }>
 
   // Terminal
-  terminalCreateInitial: () => Promise<SessionTabInfo | null>
+  terminalCreateInitial: () => Promise<InitialTabsResult | null>
+  saveOpenSessions: (projectPath: string, tabs: Array<{ sessionId: string; title: string }>, activeSessionId: string | null) => void
   terminalCreateNew: () => Promise<SessionTabInfo | null>
   terminalResumeSession: (sessionId: string) => Promise<SessionTabInfo | null>
   terminalWrite: (tabId: string, data: string) => void
@@ -128,6 +135,7 @@ interface EditorAPI {
   onTerminalDeadSession: (cb: (tabId: string, sessionId: string | null) => void) => () => void
   onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void
   onTerminalNewTab: (cb: (tab: SessionTabInfo) => void) => () => void
+  onTerminalTabClosed: (cb: (tabId: string) => void) => () => void
 
   // Toolbar
   getToolbarInfo: () => Promise<ToolbarInfo>

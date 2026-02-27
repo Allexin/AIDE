@@ -194,7 +194,7 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   const { terminalCollapsed, collapsedWidthPx, toggleTerminalCollapse, focusTerminal } =
     usePanelStore()
 
-  const { tabs, activeTabId, initialized, initWithTab, addTab, setActiveTab, closeTab, updateSlug, updateSessionId, markExited, setAttention } =
+  const { tabs, activeTabId, initialized, initWithTab, initWithTabs, addTab, setActiveTab, closeTab, updateSlug, updateSessionId, markExited, setAttention } =
     useSessionStore()
 
   const projectPath = useFileTreeStore((s) => s.projectPath)
@@ -266,13 +266,40 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
     fitFunctions.current.get(activeTabId)?.focus()
   }, [activeTabId, projectPath])
 
-  // Initialize on first mount: create initial PTY tab
+  // Initialize on first mount: restore saved sessions or create initial PTY tab
+  const initCalledRef = useRef(false)
   useEffect(() => {
-    if (initialized) return
-    window.editorApi.terminalCreateInitial().then((tab) => {
-      if (tab) initWithTab(tab)
+    if (initialized || initCalledRef.current) return
+    initCalledRef.current = true
+    window.editorApi.terminalCreateInitial().then((result) => {
+      if (!result) return
+      if (result.tabs.length === 1) {
+        initWithTab(result.tabs[0])
+      } else if (result.tabs.length > 1) {
+        const activeTab = result.activeSessionId
+          ? result.tabs.find((t) => t.sessionId === result.activeSessionId)
+          : null
+        initWithTabs(result.tabs, activeTab?.tabId ?? null)
+      }
     })
-  }, [initialized, initWithTab])
+  }, [initialized, initWithTab, initWithTabs])
+
+  // Persist open sessions on tab changes (debounced)
+  useEffect(() => {
+    if (!initialized || !projectPath) return
+    const timer = setTimeout(() => {
+      const currentTabs = useSessionStore.getState().tabs
+      const currentActive = useSessionStore.getState().activeTabId
+      const toSave = currentTabs
+        .filter((t) => t.sessionId)
+        .map((t) => ({ sessionId: t.sessionId!, title: t.slug }))
+      if (toSave.length > 0) {
+        const activeSession = currentTabs.find((t) => t.tabId === currentActive)?.sessionId ?? null
+        window.editorApi.saveOpenSessions(projectPath, toSave, activeSession)
+      }
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [initialized, projectPath, tabs, activeTabId])
 
   // Listen for push events from main process
   useEffect(() => {
@@ -285,11 +312,16 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
     const removeNewTab = window.editorApi.onTerminalNewTab((tab) => addTab(tab))
     const removeDeadSession = window.editorApi.onTerminalDeadSession((tabId, _sessionId) => {
       // Close the dead tab (unless it's the last one)
-      if (tabs.length > 1) {
+      if (useSessionStore.getState().tabs.length > 1) {
         window.editorApi.terminalCloseTab(tabId)
         closeTab(tabId)
       }
       setDeadSessionDialog(true)
+    })
+
+    // Silent tab close from restore (dead session during startup)
+    const removeTabClosed = window.editorApi.onTerminalTabClosed((tabId) => {
+      closeTab(tabId)
     })
 
     return () => {
@@ -299,8 +331,9 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
       removeSwitch()
       removeNewTab()
       removeDeadSession()
+      removeTabClosed()
     }
-  }, [updateSessionId, markExited, setActiveTab, addTab, updateSlug, tabs.length, closeTab])
+  }, [updateSessionId, markExited, setActiveTab, addTab, updateSlug, closeTab])
 
   // Resize all terminal on panel container resize
   useEffect(() => {

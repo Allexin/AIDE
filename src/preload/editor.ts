@@ -23,6 +23,12 @@ interface GitStatusResult {
 interface SessionTabInfo {
   tabId: string
   sessionId: string | null
+  title?: string
+}
+
+interface InitialTabsResult {
+  tabs: SessionTabInfo[]
+  activeSessionId: string | null
 }
 
 export interface EditorConfig {
@@ -84,7 +90,8 @@ export interface EditorAPI {
   gitShowHead: (relPath: string) => Promise<{ content: string } | { error: 'untracked' | 'other' }>
 
   // Terminal
-  terminalCreateInitial: () => Promise<SessionTabInfo | null>
+  terminalCreateInitial: () => Promise<InitialTabsResult | null>
+  saveOpenSessions: (projectPath: string, tabs: Array<{ sessionId: string; title: string }>, activeSessionId: string | null) => void
   terminalCreateNew: () => Promise<SessionTabInfo | null>
   terminalResumeSession: (sessionId: string) => Promise<SessionTabInfo | null>
   terminalWrite: (tabId: string, data: string) => void
@@ -99,6 +106,7 @@ export interface EditorAPI {
   onTerminalDeadSession: (cb: (tabId: string, sessionId: string | null) => void) => () => void
   onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void
   onTerminalNewTab: (cb: (tab: SessionTabInfo) => void) => () => void
+  onTerminalTabClosed: (cb: (tabId: string) => void) => () => void
 
   // Toolbar
   getToolbarInfo: () => Promise<ToolbarInfo>
@@ -185,6 +193,8 @@ const editorApi: EditorAPI = {
 
   // Terminal
   terminalCreateInitial: () => ipcRenderer.invoke('terminal:create-initial'),
+  saveOpenSessions: (projectPath: string, tabs: Array<{ sessionId: string; title: string }>, activeSessionId: string | null) =>
+    ipcRenderer.send('state:save-open-sessions', { projectPath, tabs, activeSessionId }),
   terminalCreateNew: () => ipcRenderer.invoke('terminal:create-new'),
   terminalResumeSession: (sessionId) => ipcRenderer.invoke('terminal:resume-session', sessionId),
   terminalWrite: (tabId, data) => ipcRenderer.send('terminal:write', tabId, data),
@@ -242,6 +252,12 @@ const editorApi: EditorAPI = {
     const handler = (_: unknown, tab: SessionTabInfo): void => cb(tab)
     ipcRenderer.on('terminal:new-tab', handler)
     return () => ipcRenderer.removeListener('terminal:new-tab', handler)
+  },
+
+  onTerminalTabClosed: (cb: (tabId: string) => void) => {
+    const handler = (_: unknown, payload: { tabId: string }): void => cb(payload.tabId)
+    ipcRenderer.on('terminal:tab-closed', handler)
+    return () => ipcRenderer.removeListener('terminal:tab-closed', handler)
   },
 
   // Toolbar

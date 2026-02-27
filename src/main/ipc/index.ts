@@ -2,7 +2,7 @@ import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { existsSync, readdirSync, readFileSync, writeFileSync, statSync, promises as fsAsync } from 'fs'
 import { join } from 'path'
 import { spawn } from 'child_process'
-import { removeRecentProject, getAppState } from '../config/appState'
+import { removeRecentProject, getAppState, saveOpenSessions, loadOpenSessions } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { readProjectSettings } from '../config/projectConfig'
 import {
@@ -176,13 +176,23 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     return { available: false, changed: [], deleted: [] }
   })
 
-  // ── Terminal: create initial tab on project open ─────────────────────────────
+  // ── Terminal: create initial tabs on project open (restore saved sessions) ──
   ipcMain.handle('terminal:create-initial', async (event) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender)
     if (!senderWin) return null
     const ptyMgr = ptyRegistry.get(senderWin)
     if (!ptyMgr) return null
-    return ptyMgr.createInitialTab()
+    let projectPath = ''
+    for (const [p, win] of openProjects) {
+      if (win === senderWin) { projectPath = p; break }
+    }
+    const saved = projectPath ? loadOpenSessions(projectPath) : null
+    return ptyMgr.createInitialTabs(saved?.tabs ?? undefined)
+  })
+
+  // ── State: save open sessions for a project ────────────────────────────────
+  ipcMain.on('state:save-open-sessions', (_event, data: { projectPath: string; tabs: Array<{ sessionId: string; title: string }>; activeSessionId: string | null }) => {
+    saveOpenSessions(data.projectPath, { tabs: data.tabs, activeSessionId: data.activeSessionId })
   })
 
   // ── Terminal: create new session tab ─────────────────────────────────────────

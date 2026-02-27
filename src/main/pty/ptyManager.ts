@@ -2,11 +2,13 @@ import * as nodePty from 'node-pty'
 import { BrowserWindow } from 'electron'
 import type { CliTool } from './cliTools/types'
 import { claudeCodeTool } from './cliTools/claudeCode'
+import type { SavedSessionEntry } from '../config/appState'
 
 
 export interface SessionTabInfo {
   tabId: string
   sessionId: string | null // null until first session file appears (new sessions)
+  title?: string // saved title for restore; renderer uses as initial slug
 }
 
 interface PtyTab extends SessionTabInfo {
@@ -18,6 +20,7 @@ interface HealthCheck {
   buf: string
   startTime: number
   resolved: boolean
+  silent: boolean // if true, dead sessions are handled silently (no IPC to renderer)
   onResult: ((result: 'ok' | 'dead') => void) | null
 }
 
@@ -42,14 +45,77 @@ export class PtyManager {
     this.tool = tool
   }
 
-  /** Called on project open: resume most recent session or start fresh. */
-  async createInitialTab(): Promise<SessionTabInfo> {
+  /** Called on project open: restore saved sessions, or resume most recent, or start fresh. */
+  async createInitialTabs(saved?: SavedSessionEntry[]): Promise<{ tabs: SessionTabInfo[]; activeSessionId: string | null }> {
     await this.tool.prepareProject?.(this.projectPath)
+
+    // If we have saved sessions from last run, restore them
+    if (saved && saved.length > 0) {
+      const tabInfos: SessionTabInfo[] = []
+      const restoreTabIds: string[] = []
+
+      for (const entry of saved) {
+        const info = this.spawnResumeTab(entry.sessionId, true) // silent = true for restore
+        tabInfos.push({ ...info, title: entry.title })
+        restoreTabIds.push(info.tabId)
+      }
+
+      // Wait for all health checks, then silently close dead tabs
+      this.handleRestoreDeadSessions(restoreTabIds)
+
+      return { tabs: tabInfos, activeSessionId: saved[0].sessionId }
+    }
+
+    // Fallback: resume most recent session or start fresh
     const sessions = await this.tool.scanSessions(this.projectPath)
     if (sessions.length > 0) {
-      return this.spawnResumeTab(sessions[0].sessionId)
+      const info = this.spawnResumeTab(sessions[0].sessionId)
+      return { tabs: [info], activeSessionId: sessions[0].sessionId }
     }
-    return this.spawnNewSessionTab()
+    const info = this.spawnNewSessionTab()
+    return { tabs: [info], activeSessionId: null }
+  }
+
+  /** After restore: wait for health checks, silently close dead tabs, spawn new if all dead. */
+  private handleRestoreDeadSessions(tabIds: string[]): void {
+    const pending = new Set(tabIds)
+    const dead = new Set<string>()
+
+    const check = (): void => {
+      if (pending.size > 0) return // still waiting
+
+      // Close dead tabs silently
+      for (const tabId of dead) {
+        this.closeTab(tabId)
+        this.send('terminal:tab-closed', { tabId })
+      }
+
+      // If all tabs died, spawn a new session
+      if (dead.size === tabIds.length) {
+        const info = this.spawnNewSessionTab()
+        this.send('terminal:new-tab', { tabId: info.tabId, sessionId: info.sessionId })
+      }
+    }
+
+    for (const tabId of tabIds) {
+      const hc = this.healthChecks.get(tabId)
+      if (!hc) {
+        pending.delete(tabId)
+        continue
+      }
+
+      // Intercept the health check result
+      const origOnResult = hc.onResult
+      hc.onResult = (result) => {
+        origOnResult?.(result)
+        pending.delete(tabId)
+        if (result === 'dead') dead.add(tabId)
+        check()
+      }
+    }
+
+    // If no health checks were pending at all
+    check()
   }
 
   /** Open a brand-new session tab. */
@@ -156,7 +222,7 @@ export class PtyManager {
     return { tabId, sessionId: null }
   }
 
-  private spawnResumeTab(sessionId: string): SessionTabInfo {
+  private spawnResumeTab(sessionId: string, silent = false): SessionTabInfo {
     const tabId = nextTabId()
     const pty = this.spawnPty(tabId)
     const tab: PtyTab = { tabId, sessionId, pty }
@@ -167,7 +233,7 @@ export class PtyManager {
       pty.write(`${this.tool.resumeCommand(sessionId)}\r`)
     }, 500)
 
-    this.startHealthCheck(tabId)
+    this.startHealthCheck(tabId, silent)
 
     return { tabId, sessionId }
   }
@@ -220,12 +286,13 @@ export class PtyManager {
     return pty
   }
 
-  private startHealthCheck(tabId: string): void {
+  private startHealthCheck(tabId: string, silent = false): void {
     if (!this.tool.checkStartupHealth) return
     this.healthChecks.set(tabId, {
       buf: '',
       startTime: Date.now(),
       resolved: false,
+      silent,
       onResult: null
     })
   }
@@ -243,7 +310,8 @@ export class PtyManager {
     hc.resolved = true
     if (result === 'ok') {
       this.send('terminal:tab-ready', { tabId })
-    } else {
+    } else if (!hc.silent) {
+      // Only notify renderer for non-silent (user-initiated) dead sessions
       const tab = this.tabs.get(tabId)
       this.send('terminal:dead-session', { tabId, sessionId: tab?.sessionId ?? null })
     }

@@ -7,12 +7,24 @@ export interface RecentProject {
   lastOpened: string // ISO 8601
 }
 
+export interface SavedSessionEntry {
+  sessionId: string
+  title: string
+}
+
+export interface ProjectOpenSessions {
+  tabs: SavedSessionEntry[]
+  activeSessionId: string | null
+}
+
 export interface AppState {
   recentProjects: RecentProject[]
+  openSessions: Record<string, ProjectOpenSessions> // keyed by project path
 }
 
 const DEFAULTS: AppState = {
-  recentProjects: []
+  recentProjects: [],
+  openSessions: {}
 }
 
 let state: AppState = structuredClone(DEFAULTS)
@@ -52,4 +64,13 @@ export function addRecentProject(projectPath: string, maxRecent: number): void {
 export function removeRecentProject(projectPath: string): void {
   state.recentProjects = state.recentProjects.filter(p => p.path !== projectPath)
   saveAppState()
+}
+
+export function saveOpenSessions(projectPath: string, data: ProjectOpenSessions): void {
+  state.openSessions[projectPath] = data
+  saveAppState()
+}
+
+export function loadOpenSessions(projectPath: string): ProjectOpenSessions | null {
+  return state.openSessions[projectPath] ?? null
 }

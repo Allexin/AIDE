@@ -3,6 +3,7 @@ import { create } from 'zustand'
 interface SessionTabInfo {
   tabId: string
   sessionId: string | null
+  title?: string
 }
 
 export interface SessionTab {
@@ -20,6 +21,7 @@ interface SessionState {
 
   // Actions
   initWithTab: (tab: SessionTabInfo) => void
+  initWithTabs: (tabs: SessionTabInfo[], activeTabId: string | null) => void
   addTab: (tab: SessionTabInfo) => void
   setActiveTab: (tabId: string) => void
   updateSlug: (tabId: string, slug: string) => void
@@ -36,8 +38,15 @@ export const useSessionStore = create<SessionState>((set) => ({
 
   initWithTab: (tab: SessionTabInfo) =>
     set({
-      tabs: [{ tabId: tab.tabId, sessionId: tab.sessionId, slug: 'Claude Code', exited: false, attention: false }],
+      tabs: [{ tabId: tab.tabId, sessionId: tab.sessionId, slug: tab.title || 'Claude Code', exited: false, attention: false }],
       activeTabId: tab.tabId,
+      initialized: true
+    }),
+
+  initWithTabs: (tabs: SessionTabInfo[], activeTabId: string | null) =>
+    set({
+      tabs: tabs.map((t) => ({ tabId: t.tabId, sessionId: t.sessionId, slug: t.title || 'Claude Code', exited: false, attention: false })),
+      activeTabId: activeTabId ?? tabs[0]?.tabId ?? null,
       initialized: true
     }),
 
