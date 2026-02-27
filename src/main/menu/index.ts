@@ -4,8 +4,11 @@ import { existsSync } from 'fs'
 import { getAppState } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { createPickerWindow } from '../windows/picker'
+import { createAccountManagerWindow } from '../windows/accountManager'
 import { getRunningCount, killAllProcesses } from '../toolbar/processManager'
 import { registerCommand } from './commandRegistry'
+import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
+import { listAccounts } from '../config/accountStorage'
 
 // Injected by setupMenu — avoids circular dep with windows/editor.ts
 type OpenProjectFn = (path: string) => { success: boolean; error?: string }
@@ -166,6 +169,47 @@ export function rebuildMenu(): void {
   const win = getEditorWindow()
   const editEnabled = win ? (editorFileOpenMap.get(win) ?? false) : false
 
+  // Build "Load Account" submenu per tool
+  const loadAccountSubmenu: Electron.MenuItemConstructorOptions[] = []
+  for (const tool of getRegisteredTools()) {
+    const accs = listAccounts(tool.id)
+    if (accs.length === 0) {
+      loadAccountSubmenu.push({
+        label: tool.name,
+        submenu: [{ label: 'No saved accounts', enabled: false }]
+      })
+    } else {
+      loadAccountSubmenu.push({
+        label: tool.name,
+        submenu: accs.map((acc) => ({
+          label: acc.name,
+          click: async (): Promise<void> => {
+            const cliTool = getToolById(tool.id)
+            if (!cliTool?.importCredentials) return
+            const stored = listAccounts(tool.id).find((a) => a.id === acc.id)
+            if (!stored) return
+            await cliTool.importCredentials(stored.credentials)
+            const focused = BrowserWindow.getFocusedWindow()
+            if (!focused) return
+            const { response } = await dialog.showMessageBox(focused, {
+              type: 'info',
+              title: 'AIDE',
+              message: `Loaded account "${acc.name}" for ${tool.name}.`,
+              detail: 'Restart AIDE to apply the new credentials.',
+              buttons: ['Restart Now', 'Restart Later'],
+              defaultId: 0,
+              cancelId: 1
+            })
+            if (response === 0) {
+              app.relaunch()
+              app.exit(0)
+            }
+          }
+        }))
+      })
+    }
+  }
+
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: 'File',
@@ -186,6 +230,20 @@ export function rebuildMenu(): void {
         { label: 'Cut',   enabled: editEnabled, click: (): void => sendEditCommand('cut') },
         { label: 'Copy',  enabled: editEnabled, click: (): void => sendEditCommand('copy') },
         { label: 'Paste', enabled: editEnabled, click: (): void => sendEditCommand('paste') }
+      ]
+    },
+    {
+      label: 'CLI',
+      submenu: [
+        {
+          label: 'Manage Accounts...',
+          click: (): void => {
+            const parent = getEditorWindow() ?? undefined
+            createAccountManagerWindow(parent)
+          }
+        },
+        { type: 'separator' },
+        { label: 'Load Account', submenu: loadAccountSubmenu }
       ]
     }
   ]

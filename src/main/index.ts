@@ -3,6 +3,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { initAppConfig } from './config/appConfig'
 import { initAppState } from './config/appState'
+import { initAccountStorage } from './config/accountStorage'
 import { releaseLock } from './lock'
 import { createPickerWindow } from './windows/picker'
 import { openProjectAndTrack } from './windows/editor'
@@ -35,6 +36,7 @@ function resolveStartupProject(): string | null {
 app.whenReady().then(() => {
   initAppConfig()
   initAppState()
+  initAccountStorage()
   setupIpcHandlers(openProjects)
   setupMenu(openProjects, (path) => openProjectAndTrack(path, openProjects))
 

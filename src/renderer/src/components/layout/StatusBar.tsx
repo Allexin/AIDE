@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { useFileTreeStore } from '../../store/useFileTreeStore'
 import { useEditorStore } from '../../store/useEditorStore'
 
@@ -58,6 +58,32 @@ export default function StatusBar(): React.ReactElement {
     }
   }
 
+  // ── CLI account sensor (left) ───────────────────────────────────────────────
+  const [accountLabel, setAccountLabel] = useState<string | null>(null)
+  const [accountSaved, setAccountSaved] = useState(true)
+
+  const refreshAccount = React.useCallback(() => {
+    const toolId = 'claude-code'
+    window.editorApi.getAccountCurrentInfo(toolId).then((info) => {
+      if (info) {
+        setAccountLabel(info.label)
+        setAccountSaved(info.saved)
+      } else {
+        setAccountLabel(null)
+      }
+    })
+  }, [])
+
+  useEffect(() => {
+    refreshAccount()
+    const unsubs = [
+      window.editorApi.onAccountsChanged(refreshAccount),
+      window.editorApi.onTerminalSwitchTab(refreshAccount),
+      window.editorApi.onTerminalNewTab(refreshAccount)
+    ]
+    return () => unsubs.forEach((u) => u())
+  }, [refreshAccount])
+
   // ── File language sensor (right) ────────────────────────────────────────────
   const langDisplay = currentLanguage ? (LANG_DISPLAY[currentLanguage] ?? currentLanguage) : null
 
@@ -87,6 +113,17 @@ export default function StatusBar(): React.ReactElement {
             title={fileStatus === '?' ? 'Untracked file' : 'File has uncommitted changes'}
           >
             {fileStatus}
+          </span>
+        )}
+        {accountLabel && (
+          <span
+            style={{
+              ...sensorStyle,
+              color: accountSaved ? 'rgba(255,255,255,0.9)' : '#cca700'
+            }}
+            title={accountSaved ? 'CLI account' : 'CLI account not saved in AIDE'}
+          >
+            {accountLabel}
           </span>
         )}
       </div>

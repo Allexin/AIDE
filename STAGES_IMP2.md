@@ -171,3 +171,100 @@ Returns `PreviewMessage[]` with `{ role: 'user' | 'assistant', text: string }`.
 - `src/preload/sessionPicker.ts` — `PreviewMessage` interface, `getPreview` method
 - `src/renderer/src/env.d.ts` — `PreviewMessage` interface, `getPreview` in `SessionPickerAPI`
 - `src/renderer/src/windows/SessionPickerApp.tsx` — expand/collapse toggle, lazy preview loading, preview panel UI
+
+---
+
+## Batch L — Account Management for CLI Tools ✅
+
+### L1. Account storage (`aide-accounts.json`)
+
+**Done.** New `src/main/config/accountStorage.ts` provides CRUD for saved accounts:
+- `initAccountStorage()` — loads from `aide-accounts.json` in userData
+- `listAccounts(toolId)` / `saveAccount(toolId, name, creds)` / `deleteAccount(toolId, id)` / `updateAccount(toolId, id, creds)` / `getAccount(toolId, id)`
+- Each account stores: `id` (UUID), `name`, `savedAt` (ISO), `credentials` (opaque object)
+
+### L2. `CliTool` interface extension
+
+**Done.** Three new optional methods on `CliTool`:
+- `isLoggedIn?()` — checks if credentials exist
+- `exportCredentials?()` — returns serialisable credential snapshot (or null)
+- `importCredentials?(creds)` — writes credentials back to disk
+
+### L3. Claude Code credential implementation
+
+**Done.** `claudeCodeTool` implements all three methods:
+- `isLoggedIn` — checks `~/.claude.json` for `oauthAccount.emailAddress`
+- `exportCredentials` — extracts `oauthAccount` + `userID` from `~/.claude.json`
+- `importCredentials` — merges `oauthAccount` + `userID` back into `~/.claude.json`
+- Email address is preserved as part of the `oauthAccount` object
+
+### L4. IPC handlers (`accounts:*`)
+
+**Done.** Seven new IPC handlers:
+- `accounts:get-tools` — returns registered CLI tools
+- `accounts:is-logged-in` — delegates to `tool.isLoggedIn()`
+- `accounts:get-login-email` — extracts email from exported credentials
+- `accounts:list` / `accounts:save-current` / `accounts:delete` / `accounts:update` / `accounts:load`
+- Save and delete trigger `rebuildMenu()` to update the Load Account submenu
+
+### L5. Account Manager window
+
+**Done.** New Electron window (`src/main/windows/accountManager.ts`):
+- Singleton pattern — focuses existing window if already open
+- 560×460 px, no menu bar, child of editor window
+- Uses dedicated preload (`src/preload/accountManager.ts`)
+
+### L6. Account Manager UI
+
+**Done.** `src/renderer/src/windows/AccountManagerApp.tsx`:
+- Tool tabs at top (currently Claude Code, extensible for future tools)
+- Login status indicator with email display
+- Saved accounts list with Load / Update / Delete buttons per account
+- "Save Current As..." input + button (disabled when not logged in)
+- Toast notifications for all actions
+- Dark theme consistent with AIDE
+
+### L7. Menu integration
+
+**Done.** New "CLI" top-level menu in `src/main/menu/index.ts`:
+- **Manage Accounts...** — opens Account Manager window
+- **Load Account** — dynamic submenu per CLI tool, lists saved accounts
+  - Clicking an account: imports credentials → shows restart dialog (Restart Now / Restart Later)
+  - Submenu rebuilds on every `rebuildMenu()` call (triggered by save/delete)
+
+### L8. Build config
+
+**Done.** `electron.vite.config.ts` — added `accountManager` preload entry. `src/main/index.ts` — calls `initAccountStorage()` on startup. `src/renderer/src/App.tsx` — routes `?window=account-manager` to `AccountManagerApp`.
+
+### L9. Status bar account sensor
+
+**Done.** New sensor in `StatusBar.tsx` (left group):
+- Calls `accounts:get-current-info` IPC on mount
+- If credentials match a saved account: displays `AccountName (identifier)` in white
+- If no match: displays `account not saved (identifier)` in yellow (#cca700)
+- Not shown if tool has no `getLoginIdentifier` or user is not logged in
+
+### L10. Refactor: credential internals hidden behind CliTool interface
+
+**Done.** IPC and renderer never inspect credential contents. All tool-specific logic stays inside the `CliTool` implementation:
+- `getLoginIdentifier()` — returns human-readable login identifier (email for Claude Code, any string for other tools)
+- `credentialsMatch(saved)` — compares saved credentials blob against current active credentials
+- `CliAccountInfo` (no credentials) sent to renderer; full `CliAccount` (with credentials) stays in main process only
+- `accountStorage.ts` stores `identifier` field alongside credentials at save time
+- IPC `accounts:get-current-info` uses only `tool.getLoginIdentifier()` + `tool.credentialsMatch()` — no knowledge of OAuth or email fields
+
+**Files changed:**
+- `src/main/config/accountStorage.ts` — new file, CRUD for aide-accounts.json, `CliAccount` + `CliAccountInfo` types
+- `src/main/pty/cliTools/types.ts` — `isLoggedIn`, `getLoginIdentifier`, `credentialsMatch`, `exportCredentials`, `importCredentials` on CliTool
+- `src/main/pty/cliTools/claudeCode.ts` — all credential methods implementation (OAuth-specific logic encapsulated here)
+- `src/main/windows/accountManager.ts` — new file, Account Manager window
+- `src/main/ipc/index.ts` — `accounts:*` IPC handlers (tool-agnostic, no credential peeking)
+- `src/main/menu/index.ts` — "CLI" menu with Manage Accounts + Load Account submenu
+- `src/main/index.ts` — `initAccountStorage()` call
+- `src/preload/accountManager.ts` — new file, context bridge for Account Manager
+- `src/preload/editor.ts` — `getAccountCurrentInfo` method
+- `src/renderer/src/App.tsx` — account-manager window routing
+- `src/renderer/src/windows/AccountManagerApp.tsx` — new file, Account Manager UI (uses `CliAccountInfo`, no credentials)
+- `src/renderer/src/components/layout/StatusBar.tsx` — account sensor
+- `src/renderer/src/env.d.ts` — `CliAccountInfo`, `AccountManagerAPI` interfaces
+- `electron.vite.config.ts` — accountManager preload entry

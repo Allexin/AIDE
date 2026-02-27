@@ -14,7 +14,8 @@ export default defineConfig({
         input: {
           picker: resolve(__dirname, 'src/preload/picker.ts'),
           editor: resolve(__dirname, 'src/preload/editor.ts'),
-          sessionPicker: resolve(__dirname, 'src/preload/sessionPicker.ts')
+          sessionPicker: resolve(__dirname, 'src/preload/sessionPicker.ts'),
+          accountManager: resolve(__dirname, 'src/preload/accountManager.ts')
         }
       }
     }

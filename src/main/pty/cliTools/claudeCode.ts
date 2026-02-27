@@ -47,6 +47,9 @@ async function ensureProjectTrusted(projectPath: string): Promise<void> {
   writeFileSync(CLAUDE_JSON, JSON.stringify(root, null, 2), 'utf-8')
 }
 
+/** Keys from ~/.claude.json that constitute auth credentials. */
+const CREDENTIAL_KEYS = ['oauthAccount', 'userID'] as const
+
 export const claudeCodeTool: CliTool = {
   id: 'claude-code',
   name: 'Claude Code',
@@ -77,6 +80,72 @@ export const claudeCodeTool: CliTool = {
     if (accumulated.includes('? for shortcuts')) return 'ok'
     if (elapsedMs > 15000) return 'ok' // assume ok after 15s
     return 'pending'
+  },
+
+  async isLoggedIn(): Promise<boolean> {
+    if (!existsSync(CLAUDE_JSON)) return false
+    try {
+      const root = JSON.parse(readFileSync(CLAUDE_JSON, 'utf-8'))
+      return !!(root.oauthAccount && root.oauthAccount.emailAddress)
+    } catch {
+      return false
+    }
+  },
+
+  async getLoginIdentifier(): Promise<string | null> {
+    if (!existsSync(CLAUDE_JSON)) return null
+    try {
+      const root = JSON.parse(readFileSync(CLAUDE_JSON, 'utf-8'))
+      return root.oauthAccount?.emailAddress ?? null
+    } catch {
+      return null
+    }
+  },
+
+  async credentialsMatch(saved: Record<string, unknown>): Promise<boolean> {
+    if (!existsSync(CLAUDE_JSON)) return false
+    try {
+      const root = JSON.parse(readFileSync(CLAUDE_JSON, 'utf-8'))
+      const currentOauth = root.oauthAccount
+      const savedOauth = saved.oauthAccount as Record<string, unknown> | undefined
+      if (!currentOauth || !savedOauth) return false
+      return currentOauth.accountUuid === savedOauth.accountUuid
+        && currentOauth.emailAddress === savedOauth.emailAddress
+    } catch {
+      return false
+    }
+  },
+
+  async exportCredentials(): Promise<Record<string, unknown> | null> {
+    if (!existsSync(CLAUDE_JSON)) return null
+    try {
+      const root = JSON.parse(readFileSync(CLAUDE_JSON, 'utf-8'))
+      if (!root.oauthAccount) return null
+      const creds: Record<string, unknown> = {}
+      for (const key of CREDENTIAL_KEYS) {
+        if (root[key] !== undefined) creds[key] = root[key]
+      }
+      return creds
+    } catch {
+      return null
+    }
+  },
+
+  async importCredentials(credentials: Record<string, unknown>): Promise<void> {
+    let root: Record<string, unknown> = {}
+    if (existsSync(CLAUDE_JSON)) {
+      try {
+        root = JSON.parse(readFileSync(CLAUDE_JSON, 'utf-8'))
+      } catch {
+        // start fresh
+      }
+    }
+    for (const key of CREDENTIAL_KEYS) {
+      if (credentials[key] !== undefined) {
+        root[key] = credentials[key]
+      }
+    }
+    writeFileSync(CLAUDE_JSON, JSON.stringify(root, null, 2), 'utf-8')
   },
 
   watchForNewSessions(projectPath: string, onNew: (session: CliSession) => void): () => void {

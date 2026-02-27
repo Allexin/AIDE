@@ -16,14 +16,21 @@ import {
 import { openProjectAndTrack } from '../windows/editor'
 import { runGitStatus } from '../filetree/gitStatus'
 import { ptyRegistry, pickerEditorMap } from '../pty/registry'
-import { getRegisteredTools } from '../pty/cliTools/registry'
+import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
+import {
+  listAccounts,
+  listAccountInfos,
+  saveAccount,
+  deleteAccount as deleteStoredAccount,
+  updateAccount as updateStoredAccount
+} from '../config/accountStorage'
 import { scanSessions, readSessionPreview, getSessionsDir } from '../pty/sessionScanner'
 import { createSessionPickerWindow } from '../windows/sessionPicker'
 import {
   spawnButtonProcess,
   killButtonProcess
 } from '../toolbar/processManager'
-import { setEditorFileOpen } from '../menu'
+import { setEditorFileOpen, rebuildMenu } from '../menu'
 
 // Helper: spawn one git subcommand, stream stdout/stderr lines, return success/error.
 function runGitSubcommand(
@@ -634,6 +641,102 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   ipcMain.on('menu:editor-file-changed', (event, hasFile: boolean) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender)
     if (senderWin) setEditorFileOpen(senderWin, hasFile)
+  })
+
+  // ── Accounts: get current account display info ──────────────────────────────
+  ipcMain.handle('accounts:get-current-info', async (_event, toolId: string) => {
+    const tool = getToolById(toolId)
+    if (!tool?.getLoginIdentifier) return null
+    const identifier = await tool.getLoginIdentifier()
+    if (!identifier) return null
+
+    // Check if current credentials match any saved account
+    if (tool.credentialsMatch) {
+      const saved = listAccounts(toolId)
+      for (const acc of saved) {
+        if (await tool.credentialsMatch(acc.credentials)) {
+          return { label: `${acc.name} (${identifier})`, saved: true }
+        }
+      }
+    }
+
+    return { label: `account not saved (${identifier})`, saved: false }
+  })
+
+  // ── Accounts: get tools list ─────────────────────────────────────────────────
+  ipcMain.handle('accounts:get-tools', () => getRegisteredTools())
+
+  // ── Accounts: check if logged in ───────────────────────────────────────────
+  ipcMain.handle('accounts:is-logged-in', async (_event, toolId: string) => {
+    const tool = getToolById(toolId)
+    if (!tool?.isLoggedIn) return false
+    return tool.isLoggedIn()
+  })
+
+  // ── Accounts: get current login identifier ──────────────────────────────────
+  ipcMain.handle('accounts:get-login-identifier', async (_event, toolId: string) => {
+    const tool = getToolById(toolId)
+    if (!tool?.getLoginIdentifier) return null
+    return tool.getLoginIdentifier()
+  })
+
+  /** Notify all editor windows that accounts changed so sensors refresh. */
+  function broadcastAccountsChanged(): void {
+    for (const win of openProjects.values()) {
+      if (!win.isDestroyed()) win.webContents.send('accounts:changed')
+    }
+  }
+
+  // ── Accounts: list saved accounts (no credentials exposed) ──────────────────
+  ipcMain.handle('accounts:list', (_event, toolId: string) => {
+    return listAccountInfos(toolId)
+  })
+
+  // ── Accounts: save current credentials ─────────────────────────────────────
+  ipcMain.handle('accounts:save-current', async (_event, toolId: string, name: string) => {
+    const tool = getToolById(toolId)
+    if (!tool?.exportCredentials || !tool?.getLoginIdentifier) return null
+    const [creds, identifier] = await Promise.all([
+      tool.exportCredentials(),
+      tool.getLoginIdentifier()
+    ])
+    if (!creds || !identifier) return null
+    const result = saveAccount(toolId, name, identifier, creds)
+    rebuildMenu()
+    broadcastAccountsChanged()
+    return result
+  })
+
+  // ── Accounts: delete saved account ─────────────────────────────────────────
+  ipcMain.handle('accounts:delete', (_event, toolId: string, accountId: string) => {
+    deleteStoredAccount(toolId, accountId)
+    rebuildMenu()
+    broadcastAccountsChanged()
+  })
+
+  // ── Accounts: update saved account with current credentials ────────────────
+  ipcMain.handle('accounts:update', async (_event, toolId: string, accountId: string) => {
+    const tool = getToolById(toolId)
+    if (!tool?.exportCredentials || !tool?.getLoginIdentifier) return null
+    const [creds, identifier] = await Promise.all([
+      tool.exportCredentials(),
+      tool.getLoginIdentifier()
+    ])
+    if (!creds || !identifier) return null
+    const result = updateStoredAccount(toolId, accountId, identifier, creds)
+    broadcastAccountsChanged()
+    return result
+  })
+
+  // ── Accounts: load saved credentials into CLI tool ─────────────────────────
+  ipcMain.handle('accounts:load', async (_event, toolId: string, accountId: string) => {
+    const tool = getToolById(toolId)
+    if (!tool?.importCredentials) return false
+    const stored = listAccounts(toolId).find((a) => a.id === accountId)
+    if (!stored) return false
+    await tool.importCredentials(stored.credentials)
+    broadcastAccountsChanged()
+    return true
   })
 
   // ── Session picker: new session ───────────────────────────────────────────────

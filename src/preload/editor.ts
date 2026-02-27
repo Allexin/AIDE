@@ -128,6 +128,10 @@ export interface EditorAPI {
   // CLI tools
   getCliTools: () => Promise<{ id: string; name: string }[]>
 
+  // Accounts
+  getAccountCurrentInfo: (toolId: string) => Promise<{ label: string; saved: boolean } | null>
+  onAccountsChanged: (cb: () => void) => () => void
+
   // PTY: create session with prompt
   terminalCreateWithPrompt: (toolId: string, prompt: string) => Promise<SessionTabInfo | null>
 
@@ -302,6 +306,15 @@ const editorApi: EditorAPI = {
 
   // CLI tools
   getCliTools: () => ipcRenderer.invoke('cli-tools:list'),
+
+  // Accounts
+  getAccountCurrentInfo: (toolId: string) =>
+    ipcRenderer.invoke('accounts:get-current-info', toolId) as Promise<{ label: string; saved: boolean } | null>,
+  onAccountsChanged: (cb: () => void): (() => void) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('accounts:changed', handler)
+    return () => ipcRenderer.removeListener('accounts:changed', handler)
+  },
 
   // PTY: create session with prompt
   terminalCreateWithPrompt: (toolId, prompt) =>

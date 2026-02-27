@@ -157,6 +157,10 @@ interface EditorAPI {
   // CLI tools
   getCliTools: () => Promise<{ id: string; name: string }[]>
 
+  // Accounts
+  getAccountCurrentInfo: (toolId: string) => Promise<{ label: string; saved: boolean } | null>
+  onAccountsChanged: (cb: () => void) => () => void
+
   // PTY: create session with prompt
   terminalCreateWithPrompt: (toolId: string, prompt: string) => Promise<SessionTabInfo | null>
 
@@ -197,8 +201,27 @@ interface SessionPickerAPI {
   newSession: () => Promise<void>
 }
 
+interface CliAccountInfo {
+  id: string
+  name: string
+  identifier: string // human-readable login identifier (e.g. email)
+  savedAt: string
+}
+
+interface AccountManagerAPI {
+  getTools: () => Promise<{ id: string; name: string }[]>
+  isLoggedIn: (toolId: string) => Promise<boolean>
+  getLoginIdentifier: (toolId: string) => Promise<string | null>
+  listAccounts: (toolId: string) => Promise<CliAccountInfo[]>
+  saveCurrent: (toolId: string, name: string) => Promise<CliAccountInfo | null>
+  deleteAccount: (toolId: string, accountId: string) => Promise<void>
+  updateAccount: (toolId: string, accountId: string) => Promise<CliAccountInfo | null>
+  loadAccount: (toolId: string, accountId: string) => Promise<boolean>
+}
+
 declare interface Window {
   pickerApi: PickerAPI
   editorApi: EditorAPI
   sessionPickerApi: SessionPickerAPI
+  accountManagerApi: AccountManagerAPI
 }

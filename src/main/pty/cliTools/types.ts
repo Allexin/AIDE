@@ -47,4 +47,25 @@ export interface CliTool {
     accumulated: string,
     elapsedMs: number
   ): 'ok' | 'dead' | 'pending'
+
+  /** Check if the user is currently logged in to this CLI tool. */
+  isLoggedIn?(): Promise<boolean>
+
+  /** Return a human-readable identifier for the currently logged-in user
+   *  (e.g. email address). Returns null if not logged in.
+   */
+  getLoginIdentifier?(): Promise<string | null>
+
+  /** Check whether the given saved credentials match the currently active ones.
+   *  Used to find the matching saved account for status display.
+   */
+  credentialsMatch?(saved: Record<string, unknown>): Promise<boolean>
+
+  /** Export the current credentials as a serialisable object.
+   *  Returns null if not logged in.
+   */
+  exportCredentials?(): Promise<Record<string, unknown> | null>
+
+  /** Import previously exported credentials, overwriting the current ones. */
+  importCredentials?(credentials: Record<string, unknown>): Promise<void>
 }
