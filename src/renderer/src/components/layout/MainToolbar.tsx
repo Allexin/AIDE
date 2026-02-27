@@ -2,14 +2,28 @@ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { useToolbarStore } from '../../store/useToolbarStore'
 import { logManager } from '../../store/useLogStore'
 
-// Inject spinner keyframes once into document head
-let spinnerStyleInjected = false
-function injectSpinnerStyle(): void {
-  if (spinnerStyleInjected) return
-  spinnerStyleInjected = true
+// Helper to check if an item is a splitter
+function isSplitter(item: ToolbarItem): item is ToolbarSplitter {
+  return (item as ToolbarSplitter).type === 'splitter'
+}
+
+// Inject keyframes once into document head
+let stylesInjected = false
+function injectStyles(): void {
+  if (stylesInjected) return
+  stylesInjected = true
   const style = document.createElement('style')
-  style.textContent =
-    '@keyframes aide-spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }'
+  style.textContent = `
+@keyframes aide-spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
+@keyframes aide-jiggle {
+  0%   { transform: translate(0px, 0px) rotate(-4deg); }
+  20%  { transform: translate(1px, -1px) rotate(4deg); }
+  40%  { transform: translate(-1px, 1px) rotate(-3deg); }
+  60%  { transform: translate(1px, 0px) rotate(3deg); }
+  80%  { transform: translate(-1px, -1px) rotate(-4deg); }
+  100% { transform: translate(0px, 0px) rotate(4deg); }
+}
+`
   document.head.appendChild(style)
 }
 
@@ -98,18 +112,47 @@ function ModalOverlay({
   )
 }
 
+// ── Splitter visual ───────────────────────────────────────────────────────────
+
+function SplitterItem({ jiggle }: { jiggle: boolean }): React.ReactElement {
+  return (
+    <div
+      style={{
+        width: 1,
+        height: 20,
+        background: '#555',
+        flexShrink: 0,
+        margin: '0 4px',
+        animation: jiggle ? 'aide-jiggle 0.5s ease-in-out infinite' : 'none'
+      }}
+    />
+  )
+}
+
 // ── Single toolbar button ─────────────────────────────────────────────────────
 
 interface ToolbarButtonItemProps {
   button: ToolbarButton
   running: boolean
+  jiggle: boolean
+  draggable?: boolean
   onClick: (btn: ToolbarButton) => void
+  onDragStart?: (e: React.DragEvent) => void
+  onDragOver?: (e: React.DragEvent) => void
+  onDrop?: (e: React.DragEvent) => void
+  onDragEnd?: () => void
 }
 
 function ToolbarButtonItem({
   button,
   running,
-  onClick
+  jiggle,
+  draggable: isDraggable,
+  onClick,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd
 }: ToolbarButtonItemProps): React.ReactElement {
   const [hovered, setHovered] = useState(false)
 
@@ -125,13 +168,18 @@ function ToolbarButtonItem({
       onClick={() => onClick(button)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      draggable={isDraggable}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
       style={{
         width: 32,
         height: 32,
         background: hovered ? '#3d3d3d' : 'none',
         border: '1px solid transparent',
         borderRadius: 4,
-        cursor: 'pointer',
+        cursor: isDraggable ? 'grab' : 'pointer',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -141,7 +189,8 @@ function ToolbarButtonItem({
         flexShrink: 0,
         padding: 0,
         color: '#cccccc',
-        transition: 'background 0.1s'
+        transition: 'background 0.1s',
+        animation: jiggle ? 'aide-jiggle 0.5s ease-in-out infinite' : 'none'
       }}
     >
       {isImage ? (
@@ -417,8 +466,8 @@ interface CliToolInfo {
 
 interface PresetDialogProps {
   presetGroups: ToolbarPresetGroup[]
-  currentButtons: ToolbarButton[]
-  onSave: (buttons: ToolbarButton[]) => void
+  currentButtons: ToolbarItem[]
+  onSave: (buttons: ToolbarItem[]) => void
   onCancel: () => void
 }
 
@@ -447,22 +496,20 @@ function PresetDialog({
     onCancel()
   }
 
+  // Only actual buttons (not splitters) for preset matching
+  const currentRealButtons = currentButtons.filter(
+    (item): item is ToolbarButton => !isSplitter(item)
+  )
+
   // Build the full list: preset buttons + any current buttons not in any preset
   const presetButtonIds = new Set(presetGroups.flatMap((g) => g.buttons.map((b) => b.id)))
 
   // Buttons currently in the toolbar that aren't covered by any preset group
-  const extraButtons = currentButtons.filter((b) => !presetButtonIds.has(b.id))
+  const extraButtons = currentRealButtons.filter((b) => !presetButtonIds.has(b.id))
 
   // Start checked: all buttons currently in toolbar
-  const currentIds = new Set(currentButtons.map((b) => b.id))
+  const currentIds = new Set(currentRealButtons.map((b) => b.id))
   const [checked, setChecked] = useState<Set<string>>(() => new Set(currentIds))
-
-  // Map: id → button object (for building the final save list)
-  const buttonMap = new Map<string, ToolbarButton>()
-  for (const g of presetGroups) {
-    for (const b of g.buttons) buttonMap.set(b.id, b)
-  }
-  for (const b of extraButtons) buttonMap.set(b.id, b)
 
   const toggle = (id: string, val: boolean): void => {
     setChecked((prev) => {
@@ -473,15 +520,17 @@ function PresetDialog({
   }
 
   const handleSave = (): void => {
-    // Preserve order: current checked buttons first, then newly added preset buttons
-    const result: ToolbarButton[] = []
+    // Build result preserving existing order (including splitters)
+    const result: ToolbarItem[] = []
     const added = new Set<string>()
 
-    // Existing checked buttons in their current order
-    for (const b of currentButtons) {
-      if (checked.has(b.id)) {
-        result.push(b)
-        added.add(b.id)
+    // Walk current items: keep checked buttons and splitters in their positions
+    for (const item of currentButtons) {
+      if (isSplitter(item)) {
+        result.push(item)
+      } else if (checked.has(item.id)) {
+        result.push(item)
+        added.add(item.id)
       }
     }
     // Newly checked preset buttons (not already added)
@@ -690,7 +739,23 @@ function PresetDialog({
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center', marginTop: 16 }}>
+          <button
+            onClick={() => { onSave([...currentButtons, { type: 'splitter' as const }]); }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#888',
+              fontSize: 12,
+              cursor: 'pointer',
+              padding: 0,
+              textDecoration: 'underline',
+              textUnderlineOffset: 2,
+              marginRight: 'auto'
+            }}
+          >
+            Add splitter
+          </button>
           <DialogButton onClick={handleSave} label="Save" primary />
           <DialogButton onClick={onCancel} label="Cancel" />
         </div>
@@ -708,13 +773,15 @@ export default function MainToolbar(): React.ReactElement {
     suggestedType,
     showAutoDetectDialog,
     showPresetDialog,
+    editMode,
     setButtons,
     markRunning,
     markStopped,
     setProjectType,
     setSuggestedType,
     setShowAutoDetectDialog,
-    setShowPresetDialog
+    setShowPresetDialog,
+    setEditMode
   } = useToolbarStore()
 
   const [runningDialog, setRunningDialog] = useState<ToolbarButton | null>(null)
@@ -722,11 +789,22 @@ export default function MainToolbar(): React.ReactElement {
   const stripRef = useRef<HTMLDivElement>(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
   const [canScrollRight, setCanScrollRight] = useState(false)
+  const dragIndexRef = useRef<number | null>(null)
 
-  // ── Spinner CSS injection ──
+  // ── Style injection ──
   useEffect(() => {
-    injectSpinnerStyle()
+    injectStyles()
   }, [])
+
+  // ── Escape exits edit mode ──
+  useEffect(() => {
+    if (!editMode) return
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setEditMode(false)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [editMode, setEditMode])
 
   // ── Load toolbar info + presets + IPC subscriptions ──
   useEffect(() => {
@@ -786,6 +864,7 @@ export default function MainToolbar(): React.ReactElement {
 
   // ── Button click handler ──
   const handleButtonClick = async (button: ToolbarButton): Promise<void> => {
+    if (editMode) return // In edit mode, clicks don't run commands
     if (runningButtonIds.has(button.id)) {
       setRunningDialog(button)
     } else {
@@ -805,9 +884,50 @@ export default function MainToolbar(): React.ReactElement {
     setRunningDialog(null)
   }
 
+  // ── Drag & drop reorder ──
+  const handleDragStart = (index: number, e: React.DragEvent): void => {
+    dragIndexRef.current = index
+    e.dataTransfer.effectAllowed = 'move'
+    // Use a transparent drag image to avoid the default ghost
+    const el = e.currentTarget as HTMLElement
+    e.dataTransfer.setDragImage(el, 16, 16)
+  }
+
+  const handleDragOver = (e: React.DragEvent): void => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+  }
+
+  const handleDrop = async (targetIndex: number): Promise<void> => {
+    const fromIndex = dragIndexRef.current
+    dragIndexRef.current = null
+    if (fromIndex === null || fromIndex === targetIndex) return
+
+    const newItems = [...buttons]
+    const [moved] = newItems.splice(fromIndex, 1)
+    newItems.splice(targetIndex, 0, moved)
+
+    setButtons(newItems)
+    await window.editorApi.toolbarSaveButtons(newItems)
+  }
+
+  const handleDragEnd = (): void => {
+    dragIndexRef.current = null
+  }
+
+  const handleDropToTrash = async (e: React.DragEvent): Promise<void> => {
+    e.preventDefault()
+    const fromIndex = dragIndexRef.current
+    dragIndexRef.current = null
+    if (fromIndex === null) return
+    const newItems = [...buttons]
+    newItems.splice(fromIndex, 1)
+    setButtons(newItems)
+    await window.editorApi.toolbarSaveButtons(newItems)
+  }
+
   // ── Auto-detect: user clicks "Add Selected" ──
   const handleAutoDetectAdd = async (newButtons: ToolbarButton[]): Promise<void> => {
-    // Merge: existing buttons + newly selected ones
     const merged = [...buttons, ...newButtons]
     const updated = await window.editorApi.toolbarSaveButtons(merged)
     setButtons(updated)
@@ -835,11 +955,22 @@ export default function MainToolbar(): React.ReactElement {
   }
 
   // ── Preset dialog: save ──
-  const handlePresetSave = async (selectedButtons: ToolbarButton[]): Promise<void> => {
+  const handlePresetSave = async (selectedButtons: ToolbarItem[]): Promise<void> => {
     const updated = await window.editorApi.toolbarSaveButtons(selectedButtons)
     setButtons(updated)
     setShowPresetDialog(false)
   }
+
+  // ── Edit mode: open preset dialog + exit edit mode ──
+  const handleAddInEditMode = (): void => {
+    setEditMode(false)
+    setShowPresetDialog(true)
+  }
+
+  // Collect button IDs for auto-detect
+  const currentButtonIds = new Set(
+    buttons.filter((b): b is ToolbarButton => !isSplitter(b)).map((b) => b.id)
+  )
 
   return (
     <>
@@ -877,14 +1008,40 @@ export default function MainToolbar(): React.ReactElement {
             paddingRight: canScrollRight ? 4 : 0
           }}
         >
-          {buttons.map((btn) => (
-            <ToolbarButtonItem
-              key={btn.id}
-              button={btn}
-              running={runningButtonIds.has(btn.id)}
-              onClick={handleButtonClick}
-            />
-          ))}
+          {buttons.map((item, index) => {
+            if (isSplitter(item)) {
+              return (
+                <div
+                  key={`splitter-${index}`}
+                  draggable={editMode}
+                  onDragStart={(e) => handleDragStart(index, e)}
+                  onDragOver={handleDragOver}
+                  onDrop={() => handleDrop(index)}
+                  onDragEnd={handleDragEnd}
+                  style={{ display: 'flex', alignItems: 'center', cursor: editMode ? 'grab' : 'default' }}
+                >
+                  <SplitterItem jiggle={editMode} />
+                </div>
+              )
+            }
+            return (
+              <ToolbarButtonItem
+                key={item.id}
+                button={item}
+                running={runningButtonIds.has(item.id)}
+                jiggle={editMode}
+                draggable={editMode}
+                onClick={handleButtonClick}
+                onDragStart={(e) => handleDragStart(index, e)}
+                onDragOver={handleDragOver}
+                onDrop={() => handleDrop(index)}
+                onDragEnd={handleDragEnd}
+              />
+            )
+          })}
+
+          {/* "+" button appears inside the strip only in edit mode */}
+          {editMode && <AddButton onClick={handleAddInEditMode} />}
         </div>
 
         {canScrollRight && (
@@ -894,8 +1051,19 @@ export default function MainToolbar(): React.ReactElement {
           />
         )}
 
-        {/* Hardcoded "+" button — always at the right end, outside scroll strip */}
-        <AddButton onClick={() => setShowPresetDialog(true)} />
+        {/* Trash drop zone — only in edit mode, next to edit button */}
+        {editMode && (
+          <TrashDropZone
+            onDragOver={handleDragOver}
+            onDrop={handleDropToTrash}
+          />
+        )}
+
+        {/* Edit mode toggle — always at the right end, outside scroll strip */}
+        <EditModeButton
+          active={editMode}
+          onClick={() => setEditMode(!editMode)}
+        />
       </div>
 
       {/* Running process dialog */}
@@ -913,7 +1081,7 @@ export default function MainToolbar(): React.ReactElement {
         <AutoDetectDialog
           suggestedType={suggestedType}
           presetGroups={presetGroups}
-          currentButtonIds={new Set(buttons.map((b) => b.id))}
+          currentButtonIds={currentButtonIds}
           onAddSelected={handleAutoDetectAdd}
           onSkip={handleAutoDetectSkip}
           onConfigureManually={handleAutoDetectConfigureManually}
@@ -933,13 +1101,53 @@ export default function MainToolbar(): React.ReactElement {
   )
 }
 
-// ── Add button ────────────────────────────────────────────────────────────────
+// ── Edit mode button (replaces the old "+" button) ───────────────────────────
+
+function EditModeButton({
+  active,
+  onClick
+}: {
+  active: boolean
+  onClick: () => void
+}): React.ReactElement {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <button
+      title={active ? 'Exit edit mode' : 'Edit toolbar'}
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        width: 28,
+        height: 28,
+        flexShrink: 0,
+        background: active ? '#0e639c' : hovered ? '#3d3d3d' : 'none',
+        border: '1px solid',
+        borderColor: active ? '#0e639c' : hovered ? '#555' : '#444',
+        borderRadius: 4,
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 14,
+        color: active ? '#ffffff' : '#888',
+        padding: 0,
+        marginLeft: 2,
+        transition: 'background 0.1s, color 0.1s'
+      }}
+    >
+      ✏
+    </button>
+  )
+}
+
+// ── Add button (shown in edit mode inside the strip) ─────────────────────────
 
 function AddButton({ onClick }: { onClick: () => void }): React.ReactElement {
   const [hovered, setHovered] = useState(false)
   return (
     <button
-      title="Manage toolbar buttons"
+      title="Add toolbar buttons"
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -964,5 +1172,44 @@ function AddButton({ onClick }: { onClick: () => void }): React.ReactElement {
     >
       +
     </button>
+  )
+}
+
+// ── Trash drop zone (shown in edit mode next to edit button) ─────────────────
+
+function TrashDropZone({
+  onDragOver,
+  onDrop
+}: {
+  onDragOver: (e: React.DragEvent) => void
+  onDrop: (e: React.DragEvent) => void
+}): React.ReactElement {
+  const [dragOver, setDragOver] = useState(false)
+  return (
+    <div
+      title="Drop here to remove"
+      onDragOver={(e) => { onDragOver(e); setDragOver(true) }}
+      onDragEnter={() => setDragOver(true)}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => { setDragOver(false); onDrop(e) }}
+      style={{
+        width: 28,
+        height: 28,
+        flexShrink: 0,
+        background: dragOver ? '#a93226' : '#3d3d3d',
+        border: '1px solid',
+        borderColor: dragOver ? '#c0392b' : '#555',
+        borderRadius: 4,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 14,
+        color: dragOver ? '#ffffff' : '#888',
+        marginLeft: 2,
+        transition: 'background 0.15s, border-color 0.15s, color 0.15s'
+      }}
+    >
+      🗑
+    </div>
   )
 }

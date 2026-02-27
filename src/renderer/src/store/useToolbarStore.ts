@@ -1,20 +1,22 @@
 import { create } from 'zustand'
 
 interface ToolbarState {
-  buttons: ToolbarButton[]
+  buttons: ToolbarItem[]
   runningButtonIds: Set<string>
   projectType: string
   suggestedType: string | null
   showAutoDetectDialog: boolean
   showPresetDialog: boolean
+  editMode: boolean
 
-  setButtons: (buttons: ToolbarButton[]) => void
+  setButtons: (buttons: ToolbarItem[]) => void
   markRunning: (id: string) => void
   markStopped: (id: string) => void
   setProjectType: (type: string) => void
   setSuggestedType: (type: string | null) => void
   setShowAutoDetectDialog: (show: boolean) => void
   setShowPresetDialog: (show: boolean) => void
+  setEditMode: (on: boolean) => void
 }
 
 export const useToolbarStore = create<ToolbarState>((set) => ({
@@ -24,6 +26,7 @@ export const useToolbarStore = create<ToolbarState>((set) => ({
   suggestedType: null,
   showAutoDetectDialog: false,
   showPresetDialog: false,
+  editMode: false,
 
   setButtons: (buttons) => set({ buttons }),
 
@@ -40,5 +43,6 @@ export const useToolbarStore = create<ToolbarState>((set) => ({
   setProjectType: (type) => set({ projectType: type }),
   setSuggestedType: (type) => set({ suggestedType: type }),
   setShowAutoDetectDialog: (show) => set({ showAutoDetectDialog: show }),
-  setShowPresetDialog: (show) => set({ showPresetDialog: show })
+  setShowPresetDialog: (show) => set({ showPresetDialog: show }),
+  setEditMode: (on) => set({ editMode: on })
 }))

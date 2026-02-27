@@ -1,6 +1,6 @@
 import { existsSync, watch, type FSWatcher } from 'fs'
 import { join } from 'path'
-import { readToolbarButtons, type ToolbarButton } from '../config/toolbarConfig'
+import { readToolbarButtons, type ToolbarItem } from '../config/toolbarConfig'
 
 /**
  * Watch aide/toolbar.json and .aide/toolbar.json for changes.
@@ -9,7 +9,7 @@ import { readToolbarButtons, type ToolbarButton } from '../config/toolbarConfig'
  */
 export function startToolbarWatcher(
   projectPath: string,
-  onChange: (buttons: ToolbarButton[]) => void
+  onChange: (buttons: ToolbarItem[]) => void
 ): () => void {
   const watchers: FSWatcher[] = []
   let debounceTimer: ReturnType<typeof setTimeout> | null = null

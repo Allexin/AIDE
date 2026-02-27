@@ -112,6 +112,22 @@ npm test
 
 For `.aide/toolbar.json` personal buttons, place scripts in `.aide/scripts/` and reference them as `.aide/scripts/my-script.ps1`.
 
+## Splitters
+
+Splitters are visual separators that group buttons. Add a splitter to the `buttons` array:
+
+```json
+{
+  "buttons": [
+    { "id": "build", "icon": "🔨", "tooltip": "Build", "command": "npm run build" },
+    { "type": "splitter" },
+    { "id": "test", "icon": "🧪", "tooltip": "Test", "command": "npm test" }
+  ]
+}
+```
+
+A splitter has only one field: `"type": "splitter"`. It renders as a vertical line between button groups. Splitters can also be added and removed via the toolbar edit mode UI.
+
 ## Icon Formats
 
 - **Emoji:** Any emoji character, e.g. `"🔨"`, `"▶"`, `"🧪"`

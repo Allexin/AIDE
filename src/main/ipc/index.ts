@@ -11,7 +11,8 @@ import {
   writeLocalToolbarConfig,
   detectProjectType,
   PRESET_GROUPS,
-  type ToolbarButton
+  type ToolbarButton,
+  type ToolbarItem
 } from '../config/toolbarConfig'
 import { openProjectAndTrack } from '../windows/editor'
 import { runGitStatus } from '../filetree/gitStatus'
@@ -422,7 +423,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   ipcMain.handle('toolbar:get-presets', () => PRESET_GROUPS)
 
   // ── Toolbar: save local buttons (replaces .aide/toolbar.json buttons array) ──
-  ipcMain.handle('toolbar:save-buttons', (event, buttons: ToolbarButton[]) => {
+  ipcMain.handle('toolbar:save-buttons', (event, buttons: ToolbarItem[]) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender)
     if (!senderWin) return []
     for (const [projectPath, win] of openProjects) {
@@ -456,8 +457,8 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     if (!senderWin) return { success: false, error: 'No window' }
     for (const [projectPath, win] of openProjects) {
       if (win === senderWin) {
-        const buttons = readToolbarButtons(projectPath)
-        const button = buttons.find((b) => b.id === buttonId)
+        const items = readToolbarButtons(projectPath)
+        const button = items.find((b): b is ToolbarButton => !('type' in b) && b.id === buttonId)
         if (!button) return { success: false, error: 'Button not found' }
         spawnButtonProcess(senderWin, button, projectPath)
         return { success: true }
@@ -485,8 +486,8 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
 
     for (const [projectPath, win] of openProjects) {
       if (win === senderWin) {
-        const buttons = readToolbarButtons(projectPath)
-        const button = buttons.find((b) => b.id === buttonId)
+        const items = readToolbarButtons(projectPath)
+        const button = items.find((b): b is ToolbarButton => !('type' in b) && b.id === buttonId)
         if (button) spawnButtonProcess(senderWin, button, projectPath)
         break
       }

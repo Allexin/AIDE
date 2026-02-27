@@ -268,3 +268,53 @@ Returns `PreviewMessage[]` with `{ role: 'user' | 'assistant', text: string }`.
 - `src/renderer/src/components/layout/StatusBar.tsx` — account sensor
 - `src/renderer/src/env.d.ts` — `CliAccountInfo`, `AccountManagerAPI` interfaces
 - `electron.vite.config.ts` — accountManager preload entry
+
+---
+
+## Batch M — Toolbar: Splitters + Edit Mode + Drag Reorder
+
+### M1. Splitter support in config
+
+**Done.** New `ToolbarSplitter` type (`{ type: 'splitter' }`) and `ToolbarItem` union type (`ToolbarButton | ToolbarSplitter`). Updated all layers: main config types, IPC handlers, preload bridge, renderer env types, Zustand store. Splitters render as a 1px vertical separator line between button groups.
+
+### M2. Edit mode (replaces "+" button)
+
+**Done.** The always-visible "+" button replaced with a pencil edit toggle button at the right end of the toolbar. Clicking it toggles `editMode` in the store. Active state highlighted in blue.
+
+### M3. Jiggle animation
+
+**Done.** In edit mode all buttons and splitters get `aide-jiggle` CSS keyframe animation (translate + rotate oscillation, 0.5s loop). The "+" add button (only visible in edit mode) does not jiggle.
+
+### M4. Drag & drop reorder
+
+**Done.** In edit mode all items (buttons + splitters) are HTML5 draggable. On drop the array is reordered and saved to `.aide/toolbar.json` via IPC. In edit mode clicking buttons does NOT run commands.
+
+### M5. Add button in edit mode
+
+**Done.** "+" button appears inside the scroll strip after the last item, only in edit mode. Clicking it opens the PresetDialog and exits edit mode.
+
+### M6. Exit edit mode
+
+**Done.** Three ways to exit: click the pencil button again, click the "+" button, or press Escape.
+
+### M7. "Add splitter" in PresetDialog
+
+**Done.** Underlined link at the bottom-left of the PresetDialog. Clicking it immediately saves the current buttons with a new splitter appended at the end.
+
+### M8. Trash drop zone
+
+**Done.** In edit mode a trash icon (🗑) appears next to the edit button. Dragging any button or splitter onto it removes the item from the toolbar and saves. The zone highlights red on drag-over.
+
+### M9. Toolbar documentation
+
+**Done.** Added "Splitters" section to `resources/docs/toolbar.md` with JSON example and description.
+
+**Files changed:**
+- `src/main/config/toolbarConfig.ts` — `ToolbarSplitter`, `ToolbarItem`, `isSplitter()`, updated `readToolbarButtons` return type and merge logic
+- `src/main/ipc/index.ts` — `ToolbarItem` import, type guards for button lookup in run/kill-restart handlers
+- `src/main/toolbar/toolbarWatcher.ts` — `ToolbarItem` type in onChange callback
+- `src/preload/editor.ts` — `ToolbarSplitter`, `ToolbarItem` types, updated `toolbarSaveButtons` and `onToolbarConfigUpdated` signatures
+- `src/renderer/src/env.d.ts` — `ToolbarSplitter`, `ToolbarItem` types, updated `ToolbarInfo`, `toolbarSaveButtons`, `onToolbarConfigUpdated`
+- `src/renderer/src/store/useToolbarStore.ts` — `editMode` state + `setEditMode` action, `buttons` typed as `ToolbarItem[]`
+- `src/renderer/src/components/layout/MainToolbar.tsx` — `SplitterItem`, `EditModeButton`, `AddButton`, `TrashDropZone` components; jiggle CSS keyframes; drag & drop reorder; trash drop-to-delete; "Add splitter" link in PresetDialog; edit mode logic
+- `resources/docs/toolbar.md` — Splitters section

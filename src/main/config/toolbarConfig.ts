@@ -18,9 +18,19 @@ export interface ToolbarButton {
   }
 }
 
+export interface ToolbarSplitter {
+  type: 'splitter'
+}
+
+export type ToolbarItem = ToolbarButton | ToolbarSplitter
+
+export function isSplitter(item: ToolbarItem): item is ToolbarSplitter {
+  return (item as ToolbarSplitter).type === 'splitter'
+}
+
 export interface ToolbarConfig {
   projectType?: string
-  buttons: ToolbarButton[]
+  buttons: ToolbarItem[]
 }
 
 export interface ToolbarPresetGroup {
@@ -439,11 +449,11 @@ export function deployToolbarDocs(projectPath: string): void {
  * Reads and merges toolbar buttons from aide/toolbar.json (shared) and
  * .aide/toolbar.json (local). Local wins on duplicate id.
  */
-export function readToolbarButtons(projectDir: string): ToolbarButton[] {
+export function readToolbarButtons(projectDir: string): ToolbarItem[] {
   const sharedPath = join(projectDir, 'aide', 'toolbar.json')
   const localPath = join(projectDir, '.aide', 'toolbar.json')
 
-  const readButtons = (filePath: string): ToolbarButton[] => {
+  const readItems = (filePath: string): ToolbarItem[] => {
     if (!existsSync(filePath)) return []
     try {
       const raw = readFileSync(filePath, 'utf8')
@@ -454,13 +464,20 @@ export function readToolbarButtons(projectDir: string): ToolbarButton[] {
     }
   }
 
-  const shared = readButtons(sharedPath)
-  const local = readButtons(localPath)
+  const shared = readItems(sharedPath)
+  const local = readItems(localPath)
 
-  // Merge: local overrides shared on same id; preserve order (shared first, then local-only)
-  const merged = new Map<string, ToolbarButton>()
-  for (const btn of shared) merged.set(btn.id, btn)
-  for (const btn of local) merged.set(btn.id, btn)
+  // If local has items, use local order (local config is the user's arrangement).
+  // Merge in shared buttons not present in local.
+  if (local.length > 0) {
+    const localButtonIds = new Set(
+      local.filter((item): item is ToolbarButton => !isSplitter(item)).map((b) => b.id)
+    )
+    const extraShared = shared.filter(
+      (item) => !isSplitter(item) && !localButtonIds.has((item as ToolbarButton).id)
+    )
+    return [...local, ...extraShared]
+  }
 
-  return [...merged.values()]
+  return shared
 }

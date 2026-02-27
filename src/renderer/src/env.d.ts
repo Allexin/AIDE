@@ -83,6 +83,12 @@ interface ToolbarButton {
   }
 }
 
+interface ToolbarSplitter {
+  type: 'splitter'
+}
+
+type ToolbarItem = ToolbarButton | ToolbarSplitter
+
 interface ToolbarPresetGroup {
   type: string
   label: string
@@ -90,7 +96,7 @@ interface ToolbarPresetGroup {
 }
 
 interface ToolbarInfo {
-  buttons: ToolbarButton[]
+  buttons: ToolbarItem[]
   projectType: string
   suggestedType: string | null
 }
@@ -140,7 +146,7 @@ interface EditorAPI {
   // Toolbar
   getToolbarInfo: () => Promise<ToolbarInfo>
   getToolbarPresets: () => Promise<ToolbarPresetGroup[]>
-  toolbarSaveButtons: (buttons: ToolbarButton[]) => Promise<ToolbarButton[]>
+  toolbarSaveButtons: (buttons: ToolbarItem[]) => Promise<ToolbarItem[]>
   toolbarSetProjectType: (type: string) => Promise<void>
   toolbarRunButton: (buttonId: string) => Promise<{ success: boolean; error?: string }>
   toolbarKillButton: (buttonId: string) => Promise<void>
@@ -152,7 +158,7 @@ interface EditorAPI {
   onToolbarProcessExited: (
     cb: (payload: { buttonId: string; exitCode: number | null }) => void
   ) => () => void
-  onToolbarConfigUpdated: (cb: (buttons: ToolbarButton[]) => void) => () => void
+  onToolbarConfigUpdated: (cb: (buttons: ToolbarItem[]) => void) => () => void
 
   // CLI tools
   getCliTools: () => Promise<{ id: string; name: string }[]>
