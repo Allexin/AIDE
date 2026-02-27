@@ -133,3 +133,41 @@ New helpers: `saveOpenSessions(projectPath, data)` and `loadOpenSessions(project
 - `src/renderer/src/env.d.ts` — `InitialTabsResult`, `title` on SessionTabInfo, `saveOpenSessions`, `onTerminalTabClosed`
 - `src/renderer/src/store/useSessionStore.ts` — `initWithTabs` action, `title` on SessionTabInfo
 - `src/renderer/src/components/layout/TerminalPanel.tsx` — multi-tab init, debounced persistence, silent tab close listener
+
+---
+
+## Batch K — Session Picker Preview ✅
+
+### K1. `readSessionPreview` in sessionScanner
+
+**Done.** New function reads the last ~5 KB of a session JSONL file using low-level `openSync`/`readSync` (avoids loading the entire file). Parses user + assistant messages, skipping tool/command/meta entries. If the earliest message in the 5 KB window is cut off, expands backwards in 4 KB steps (up to 5 iterations) until the full message boundary is found.
+
+Returns `PreviewMessage[]` with `{ role: 'user' | 'assistant', text: string }`.
+
+### K2. IPC + preload
+
+**Done.**
+- New `session-picker:get-preview` IPC handler — takes `sessionId`, resolves project path from editor window, calls `readSessionPreview`
+- `preload/sessionPicker.ts` — added `getPreview(sessionId)` method
+- `env.d.ts` — added `PreviewMessage` interface and `getPreview` to `SessionPickerAPI`
+
+### K3. Session Picker UI — expand/collapse preview
+
+**Done.** Each session row now has a `▸`/`▾` toggle button (left side). Clicking it:
+- Lazily loads preview via `getPreview(sessionId)` (cached after first load)
+- Shows a scrollable panel (max 200px) with color-coded messages:
+  - **You** (blue `#569cd6`) for user messages
+  - **Claude** (teal `#4ec9b0`) for assistant messages
+- Long messages truncated at 500 chars with `…`
+- Shows "Loading…" during fetch, "No messages" if empty
+
+### K4. Filter out empty/dead sessions
+
+**Done.** `scanSessions` now skips sessions with no real user messages (`readLastUserMessage` returns empty string). These dead sessions never appear in the picker. The `'Claude Code'` fallback title removed — `title` always contains the actual last user message text.
+
+**Files changed:**
+- `src/main/pty/sessionScanner.ts` — `PreviewMessage` interface, `readSessionPreview` function, dead session filtering in `scanSessions`
+- `src/main/ipc/index.ts` — `session-picker:get-preview` handler, imports
+- `src/preload/sessionPicker.ts` — `PreviewMessage` interface, `getPreview` method
+- `src/renderer/src/env.d.ts` — `PreviewMessage` interface, `getPreview` in `SessionPickerAPI`
+- `src/renderer/src/windows/SessionPickerApp.tsx` — expand/collapse toggle, lazy preview loading, preview panel UI

@@ -184,8 +184,14 @@ interface EditorAPI {
   ) => () => void
 }
 
+interface PreviewMessage {
+  role: 'user' | 'assistant'
+  text: string
+}
+
 interface SessionPickerAPI {
   getSessions: () => Promise<{ diskSessions: DiskSession[]; openTabs: SessionTabInfo[] }>
+  getPreview: (sessionId: string) => Promise<PreviewMessage[]>
   switchTab: (tabId: string) => void
   resumeSession: (sessionId: string) => Promise<void>
   newSession: () => Promise<void>

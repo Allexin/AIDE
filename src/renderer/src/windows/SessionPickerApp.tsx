@@ -166,6 +166,11 @@ export default function SessionPickerApp(): React.ReactElement {
   )
 }
 
+interface PreviewMessage {
+  role: 'user' | 'assistant'
+  text: string
+}
+
 interface SessionRowProps {
   entry: SessionEntry
   onSelect: (entry: SessionEntry) => void
@@ -174,58 +179,136 @@ interface SessionRowProps {
 
 function SessionRow({ entry, onSelect, disabled }: SessionRowProps): React.ReactElement {
   const [hovered, setHovered] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const [preview, setPreview] = useState<PreviewMessage[] | null>(null)
+  const [loadingPreview, setLoadingPreview] = useState(false)
+
+  const togglePreview = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (expanded) {
+      setExpanded(false)
+      return
+    }
+    setExpanded(true)
+    if (preview === null) {
+      setLoadingPreview(true)
+      window.sessionPickerApi.getPreview(entry.sessionId).then((msgs) => {
+        setPreview(msgs)
+        setLoadingPreview(false)
+      })
+    }
+  }
 
   return (
-    <div
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onClick={() => !disabled && onSelect(entry)}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        padding: '8px 16px',
-        gap: 8,
-        cursor: disabled ? 'default' : 'pointer',
-        background: hovered && !disabled ? '#2a2d2e' : 'transparent',
-        borderBottom: '1px solid #2d2d2d'
-      }}
-    >
-      {/* Running indicator */}
-      <span
+    <div style={{ borderBottom: '1px solid #2d2d2d' }}>
+      <div
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onClick={() => !disabled && onSelect(entry)}
         style={{
-          fontSize: 10,
-          color: entry.openTabId ? '#4ec9b0' : 'transparent',
-          flexShrink: 0,
-          width: 10
+          display: 'flex',
+          alignItems: 'center',
+          padding: '8px 16px',
+          gap: 8,
+          cursor: disabled ? 'default' : 'pointer',
+          background: hovered && !disabled ? '#2a2d2e' : 'transparent'
         }}
       >
-        ●
-      </span>
+        {/* Expand/collapse toggle */}
+        <span
+          onClick={togglePreview}
+          style={{
+            fontSize: 10,
+            color: '#888',
+            flexShrink: 0,
+            width: 14,
+            cursor: 'pointer',
+            textAlign: 'center',
+            userSelect: 'none'
+          }}
+        >
+          {expanded ? '▾' : '▸'}
+        </span>
 
-      {/* Slug / session ID */}
-      <span
-        style={{
-          flex: 1,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          color: entry.openTabId ? '#d4d4d4' : '#9d9d9d'
-        }}
-      >
-        {entry.slug}
-      </span>
+        {/* Running indicator */}
+        <span
+          style={{
+            fontSize: 10,
+            color: entry.openTabId ? '#4ec9b0' : 'transparent',
+            flexShrink: 0,
+            width: 10
+          }}
+        >
+          ●
+        </span>
 
-      {/* Relative time */}
-      <span
-        style={{
-          fontSize: 11,
-          color: '#555',
-          flexShrink: 0,
-          whiteSpace: 'nowrap'
-        }}
-      >
-        {formatRelativeTime(entry.mtime)}
-      </span>
+        {/* Slug / session ID */}
+        <span
+          style={{
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            color: entry.openTabId ? '#d4d4d4' : '#9d9d9d'
+          }}
+        >
+          {entry.slug}
+        </span>
+
+        {/* Relative time */}
+        <span
+          style={{
+            fontSize: 11,
+            color: '#555',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
+          }}
+        >
+          {formatRelativeTime(entry.mtime)}
+        </span>
+      </div>
+
+      {/* Preview panel */}
+      {expanded && (
+        <div
+          style={{
+            padding: '4px 16px 8px 40px',
+            background: '#1a1a1a',
+            maxHeight: 200,
+            overflowY: 'auto',
+            fontSize: 11,
+            lineHeight: '1.5'
+          }}
+        >
+          {loadingPreview ? (
+            <span style={{ color: '#555' }}>Loading…</span>
+          ) : preview && preview.length > 0 ? (
+            preview.map((msg, i) => (
+              <div key={i} style={{ marginBottom: 4 }}>
+                <span
+                  style={{
+                    color: msg.role === 'user' ? '#569cd6' : '#4ec9b0',
+                    fontWeight: 600
+                  }}
+                >
+                  {msg.role === 'user' ? 'You' : 'Claude'}:
+                </span>{' '}
+                <span
+                  style={{
+                    color: '#b0b0b0',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word'
+                  }}
+                >
+                  {msg.text.length > 500 ? msg.text.slice(0, 500) + '…' : msg.text}
+                </span>
+              </div>
+            ))
+          ) : (
+            <span style={{ color: '#555' }}>No messages</span>
+          )}
+        </div>
+      )}
     </div>
   )
 }

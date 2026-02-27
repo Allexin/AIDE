@@ -17,7 +17,7 @@ import { openProjectAndTrack } from '../windows/editor'
 import { runGitStatus } from '../filetree/gitStatus'
 import { ptyRegistry, pickerEditorMap } from '../pty/registry'
 import { getRegisteredTools } from '../pty/cliTools/registry'
-import { scanSessions } from '../pty/sessionScanner'
+import { scanSessions, readSessionPreview, getSessionsDir } from '../pty/sessionScanner'
 import { createSessionPickerWindow } from '../windows/sessionPicker'
 import {
   spawnButtonProcess,
@@ -286,6 +286,26 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     const maxSessions = getAppConfig().sessions.maxSessionsInPicker
 
     return { diskSessions: diskSessions.slice(0, maxSessions), openTabs }
+  })
+
+  // ── Session picker: get session preview messages ──────────────────────────────
+  ipcMain.handle('session-picker:get-preview', async (event, sessionId: string) => {
+    const pickerWin = BrowserWindow.fromWebContents(event.sender)
+    if (!pickerWin) return []
+
+    const editorWin = pickerEditorMap.get(pickerWin)
+    if (!editorWin) return []
+
+    let projectPath: string | undefined
+    for (const [p, w] of openProjects) {
+      if (w === editorWin) {
+        projectPath = p
+        break
+      }
+    }
+    if (!projectPath) return []
+
+    return readSessionPreview(getSessionsDir(projectPath), sessionId)
   })
 
   // ── Session picker: switch to already-open tab ────────────────────────────────
