@@ -16,6 +16,7 @@ import {
 import { openProjectAndTrack } from '../windows/editor'
 import { runGitStatus } from '../filetree/gitStatus'
 import { ptyRegistry, pickerEditorMap } from '../pty/registry'
+import { getRegisteredTools } from '../pty/cliTools/registry'
 import { scanSessions } from '../pty/sessionScanner'
 import { createSessionPickerWindow } from '../windows/sessionPicker'
 import {
@@ -222,6 +223,20 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     if (!senderWin) return []
     return ptyRegistry.get(senderWin)?.getTabs() ?? []
   })
+
+  // ── Terminal: create new session with prompt ──────────────────────────────────
+  ipcMain.handle('terminal:create-with-prompt', async (event, _toolId: string, prompt: string) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return null
+    const ptyMgr = ptyRegistry.get(senderWin)
+    if (!ptyMgr) return null
+    const tabInfo = await ptyMgr.createNewSessionWithPrompt(prompt)
+    senderWin.webContents.send('terminal:new-tab', tabInfo)
+    return tabInfo
+  })
+
+  // ── CLI tools: list registered tools ──────────────────────────────────────────
+  ipcMain.handle('cli-tools:list', () => getRegisteredTools())
 
   // ── Terminal: open session picker window ──────────────────────────────────────
   ipcMain.on('terminal:open-session-picker', (event) => {

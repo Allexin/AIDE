@@ -4,7 +4,7 @@ import { existsSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { checkAndAcquireLock, releaseLock } from '../lock'
 import { ensureAideDirectory } from '../config/projectConfig'
-import { ensureDefaultToolbar } from '../config/toolbarConfig'
+import { ensureDefaultToolbar, deployToolbarDocs } from '../config/toolbarConfig'
 import { ensureGitignoreEntry } from '../gitignore'
 import { addRecentProject } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
@@ -12,6 +12,7 @@ import { startProjectWatcher, stopProjectWatcher } from '../filetree/watcher'
 import { PtyManager } from '../pty/ptyManager'
 import { ptyRegistry } from '../pty/registry'
 import { getRunningCount, killAllProcesses, disposeProcessManager } from '../toolbar/processManager'
+import { startToolbarWatcher } from '../toolbar/toolbarWatcher'
 import { rebuildMenu, removeEditorWindow } from '../menu'
 
 export function createEditorWindow(projectPath: string): BrowserWindow {
@@ -65,6 +66,7 @@ export function openProjectAndTrack(
 
   ensureAideDirectory(projectPath)
   ensureDefaultToolbar(projectPath)
+  deployToolbarDocs(projectPath)
 
   const lockResult = checkAndAcquireLock(projectPath)
   if (!lockResult.acquired) {
@@ -89,6 +91,13 @@ export function openProjectAndTrack(
   // Start filesystem watcher after the window is ready to receive IPC events
   editorWin.webContents.once('did-finish-load', () => {
     startProjectWatcher(projectPath, editorWin)
+  })
+
+  // Watch toolbar config files for hot reload
+  const stopToolbarWatcher = startToolbarWatcher(projectPath, (buttons) => {
+    if (!editorWin.isDestroyed()) {
+      editorWin.webContents.send('toolbar:config-updated', buttons)
+    }
   })
 
 
@@ -117,6 +126,7 @@ export function openProjectAndTrack(
   })
 
   editorWin.on('closed', () => {
+    stopToolbarWatcher()
     disposeProcessManager(editorWin)
     ptyMgr.disposeAll()
     ptyRegistry.delete(editorWin)

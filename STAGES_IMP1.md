@@ -224,3 +224,59 @@ EditorPanel had a critical bug: closing a file could zero its contents. Root cau
 - `src/preload/editor.ts` — sync bridge methods + updated `EditorAPI` types
 - `src/renderer/src/env.d.ts` — sync return types for `readFile`/`writeFile`
 - `src/renderer/src/components/layout/EditorPanel.tsx` — dirty flag + all sync conversions
+
+---
+
+## Batch G — Toolbar Improvements ✅
+
+*Note: Originally planned as "Batch F" in IMPROVEMENTS_PLAN1.md, renamed to G to avoid collision with the Sync IO batch above.*
+
+### G1. Hot reload toolbar config
+
+**Done.** Editing `aide/toolbar.json` or `.aide/toolbar.json` updates the toolbar live without restarting AIDE.
+
+- `startToolbarWatcher(projectPath, onChange)` in new `src/main/toolbar/toolbarWatcher.ts` — `fs.watch` on both config files with 300ms debounce; returns cleanup function
+- Editor window setup calls `startToolbarWatcher`, sends `toolbar:config-updated` IPC on change
+- Cleanup on window close
+- Renderer subscribes via `onToolbarConfigUpdated` → `setButtons(newButtons)`
+
+### G2. Auto-deploy toolbar docs
+
+**Done.** On project open, bundled documentation is copied to `.aide/docs/toolbar.md` (created if missing, updated if outdated).
+
+- `resources/docs/toolbar.md` — full documentation covering: config files, file format, button fields, variables, relative paths in commands, external scripts (`aide/scripts/` and `.aide/scripts/`), icon formats, channels, project type, hot reload
+- `deployToolbarDocs(projectPath)` in `toolbarConfig.ts` — reads bundled doc, compares with `.aide/docs/toolbar.md`, writes if different or missing
+- Called from `openProjectAndTrack` in `editor.ts`
+
+### G3. AI helper with CLI tool split button
+
+**Done.** PresetDialog now has an "AI Helper" section: textarea + split button that sends a prompt to a new CLI tool session.
+
+**CLI tool registry:**
+- `src/main/pty/cliTools/registry.ts` — `getRegisteredTools()` returns `[{ id, name }]` from registry array; `getToolById(id)` for lookup. Currently contains `claudeCodeTool`.
+
+**IPC:**
+- `cli-tools:list` → returns registered tools
+- `terminal:create-with-prompt` → creates new session tab, sends `terminal:new-tab` to renderer, writes prompt to PTY after 2s delay
+
+**PtyManager:**
+- `createNewSessionWithPrompt(prompt)` — calls `prepareProject`, spawns new session tab, writes prompt after tool has time to start (2s after the 0.5s newSessionCommand delay)
+
+**PresetDialog UI:**
+- Textarea for describing the toolbar change
+- Split button: main part = "Ask {tool.name}", dropdown arrow lists all registered tools (only shown if >1 tool)
+- On click: sends prompt prefixed with `"Please read .aide/docs/toolbar.md to understand the toolbar configuration format, then help with: ..."` → closes dialog
+
+**New files:**
+- `src/main/toolbar/toolbarWatcher.ts`
+- `src/main/pty/cliTools/registry.ts`
+- `resources/docs/toolbar.md`
+
+**Files changed:**
+- `src/main/config/toolbarConfig.ts` — `deployToolbarDocs`, `mkdirSync` import
+- `src/main/ipc/index.ts` — `cli-tools:list`, `terminal:create-with-prompt` handlers
+- `src/main/pty/ptyManager.ts` — `createNewSessionWithPrompt`
+- `src/main/windows/editor.ts` — toolbar watcher + docs deploy on project open
+- `src/preload/editor.ts` — `onToolbarConfigUpdated`, `getCliTools`, `terminalCreateWithPrompt`
+- `src/renderer/src/env.d.ts` — matching types
+- `src/renderer/src/components/layout/MainToolbar.tsx` — config update subscription, AI helper UI in PresetDialog

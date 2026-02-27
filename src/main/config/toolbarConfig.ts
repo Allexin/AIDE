@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, readdirSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs'
 import { join } from 'path'
 
 export interface ToolbarChannel {
@@ -412,6 +412,27 @@ export function ensureDefaultToolbar(projectDir: string): void {
   if (!existsSync(localPath)) {
     writeFileSync(localPath, JSON.stringify(DEFAULT_TOOLBAR, null, 2), 'utf8')
   }
+}
+
+/**
+ * Copy bundled toolbar.md to aide/docs/toolbar.md if missing or outdated.
+ */
+export function deployToolbarDocs(projectPath: string): void {
+  const bundledPath = join(__dirname, '../../resources/docs/toolbar.md')
+  if (!existsSync(bundledPath)) return
+
+  const destDir = join(projectPath, '.aide', 'docs')
+  const destPath = join(destDir, 'toolbar.md')
+
+  const bundled = readFileSync(bundledPath, 'utf8')
+
+  if (existsSync(destPath)) {
+    const existing = readFileSync(destPath, 'utf8')
+    if (existing === bundled) return // already up to date
+  }
+
+  mkdirSync(destDir, { recursive: true })
+  writeFileSync(destPath, bundled, 'utf8')
 }
 
 /**

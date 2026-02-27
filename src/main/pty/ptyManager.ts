@@ -56,6 +56,20 @@ export class PtyManager {
     return this.spawnResumeTab(sessionId)
   }
 
+  /** Open a new session and write a prompt to it after init. */
+  async createNewSessionWithPrompt(prompt: string): Promise<SessionTabInfo> {
+    await this.tool.prepareProject?.(this.projectPath)
+    const tabInfo = this.spawnNewSessionTab()
+
+    // Write prompt after the tool has had time to start (1.5s after the 0.5s newSessionCommand delay)
+    setTimeout(() => {
+      if (!this.tabs.has(tabInfo.tabId)) return
+      this.write(tabInfo.tabId, prompt + '\r')
+    }, 2000)
+
+    return tabInfo
+  }
+
   /** Get snapshot of all open tabs (safe to serialize). */
   getTabs(): SessionTabInfo[] {
     return Array.from(this.tabs.values()).map((t) => ({

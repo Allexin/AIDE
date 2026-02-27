@@ -112,6 +112,13 @@ export interface EditorAPI {
   onToolbarProcessExited: (
     cb: (payload: { buttonId: string; exitCode: number | null }) => void
   ) => () => void
+  onToolbarConfigUpdated: (cb: (buttons: ToolbarButton[]) => void) => () => void
+
+  // CLI tools
+  getCliTools: () => Promise<{ id: string; name: string }[]>
+
+  // PTY: create session with prompt
+  terminalCreateWithPrompt: (toolId: string, prompt: string) => Promise<SessionTabInfo | null>
 
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
   getPathForFile: (file: File) => string
@@ -253,6 +260,19 @@ const editorApi: EditorAPI = {
     ipcRenderer.on('toolbar:process-exited', handler)
     return () => ipcRenderer.removeListener('toolbar:process-exited', handler)
   },
+
+  onToolbarConfigUpdated: (cb) => {
+    const handler = (_: unknown, buttons: ToolbarButton[]): void => cb(buttons)
+    ipcRenderer.on('toolbar:config-updated', handler)
+    return () => ipcRenderer.removeListener('toolbar:config-updated', handler)
+  },
+
+  // CLI tools
+  getCliTools: () => ipcRenderer.invoke('cli-tools:list'),
+
+  // PTY: create session with prompt
+  terminalCreateWithPrompt: (toolId, prompt) =>
+    ipcRenderer.invoke('terminal:create-with-prompt', toolId, prompt),
 
   getPathForFile: (file) => webUtils.getPathForFile(file),
 

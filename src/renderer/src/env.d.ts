@@ -1,5 +1,7 @@
 /// <reference types="vite/client" />
 
+declare const __APP_VERSION__: string
+
 interface RecentProject {
   path: string
   lastOpened: string // ISO 8601
@@ -139,6 +141,13 @@ interface EditorAPI {
   onToolbarProcessExited: (
     cb: (payload: { buttonId: string; exitCode: number | null }) => void
   ) => () => void
+  onToolbarConfigUpdated: (cb: (buttons: ToolbarButton[]) => void) => () => void
+
+  // CLI tools
+  getCliTools: () => Promise<{ id: string; name: string }[]>
+
+  // PTY: create session with prompt
+  terminalCreateWithPrompt: (toolId: string, prompt: string) => Promise<SessionTabInfo | null>
 
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
   getPathForFile: (file: File) => string

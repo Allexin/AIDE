@@ -410,6 +410,11 @@ function AutoDetectDialog({
 
 // ── Preset manager dialog ─────────────────────────────────────────────────────
 
+interface CliToolInfo {
+  id: string
+  name: string
+}
+
 interface PresetDialogProps {
   presetGroups: ToolbarPresetGroup[]
   currentButtons: ToolbarButton[]
@@ -423,6 +428,25 @@ function PresetDialog({
   onSave,
   onCancel
 }: PresetDialogProps): React.ReactElement {
+  const [cliTools, setCliTools] = useState<CliToolInfo[]>([])
+  const [aiPrompt, setAiPrompt] = useState('')
+  const [selectedToolIdx, setSelectedToolIdx] = useState(0)
+  const [showToolDropdown, setShowToolDropdown] = useState(false)
+
+  useEffect(() => {
+    window.editorApi.getCliTools().then((tools) => {
+      setCliTools(tools)
+    })
+  }, [])
+
+  const handleAskTool = async (): Promise<void> => {
+    const tool = cliTools[selectedToolIdx]
+    if (!tool || !aiPrompt.trim()) return
+    const prompt = `Please read .aide/docs/toolbar.md to understand the toolbar configuration format, then help with:\n\n${aiPrompt.trim()}`
+    await window.editorApi.terminalCreateWithPrompt(tool.id, prompt)
+    onCancel()
+  }
+
   // Build the full list: preset buttons + any current buttons not in any preset
   const presetButtonIds = new Set(presetGroups.flatMap((g) => g.buttons.map((b) => b.id)))
 
@@ -555,6 +579,117 @@ function PresetDialog({
           ))}
         </div>
 
+        {/* AI helper section */}
+        {cliTools.length > 0 && (
+          <div
+            style={{
+              borderTop: '1px solid #333',
+              marginTop: 16,
+              paddingTop: 12
+            }}
+          >
+            <div style={{ color: '#888', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+              AI Helper
+            </div>
+            <textarea
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              placeholder="Describe what you want to add or change in the toolbar..."
+              style={{
+                width: '100%',
+                height: 60,
+                background: '#1e1e1e',
+                border: '1px solid #444',
+                borderRadius: 4,
+                color: '#cccccc',
+                fontSize: 12,
+                padding: '6px 8px',
+                resize: 'vertical',
+                fontFamily: 'inherit',
+                boxSizing: 'border-box'
+              }}
+            />
+            <div style={{ display: 'flex', gap: 0, marginTop: 8, position: 'relative' }}>
+              {/* Main button */}
+              <button
+                onClick={handleAskTool}
+                disabled={!aiPrompt.trim()}
+                style={{
+                  padding: '5px 14px',
+                  fontSize: 12,
+                  borderRadius: cliTools.length > 1 ? '3px 0 0 3px' : 3,
+                  cursor: aiPrompt.trim() ? 'pointer' : 'default',
+                  border: '1px solid #555',
+                  background: aiPrompt.trim() ? '#0e639c' : '#2d2d2d',
+                  color: aiPrompt.trim() ? '#ffffff' : '#666',
+                  flexShrink: 0
+                }}
+              >
+                Ask {cliTools[selectedToolIdx]?.name ?? 'AI'}
+              </button>
+              {/* Dropdown arrow (only if multiple tools) */}
+              {cliTools.length > 1 && (
+                <button
+                  onClick={() => setShowToolDropdown(!showToolDropdown)}
+                  style={{
+                    padding: '5px 6px',
+                    fontSize: 10,
+                    borderRadius: '0 3px 3px 0',
+                    cursor: 'pointer',
+                    border: '1px solid #555',
+                    borderLeft: 'none',
+                    background: showToolDropdown ? '#1177bb' : '#0e639c',
+                    color: '#ffffff',
+                    flexShrink: 0
+                  }}
+                >
+                  ▾
+                </button>
+              )}
+              {/* Dropdown menu */}
+              {showToolDropdown && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    marginTop: 2,
+                    background: '#252526',
+                    border: '1px solid #454545',
+                    borderRadius: 4,
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                    zIndex: 10,
+                    minWidth: 140
+                  }}
+                >
+                  {cliTools.map((tool, idx) => (
+                    <button
+                      key={tool.id}
+                      onClick={() => {
+                        setSelectedToolIdx(idx)
+                        setShowToolDropdown(false)
+                      }}
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        padding: '6px 12px',
+                        fontSize: 12,
+                        background: idx === selectedToolIdx ? '#0e639c' : 'transparent',
+                        color: '#cccccc',
+                        border: 'none',
+                        cursor: 'pointer',
+                        textAlign: 'left'
+                      }}
+                    >
+                      {tool.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
           <DialogButton onClick={handleSave} label="Save" primary />
           <DialogButton onClick={onCancel} label="Cancel" />
@@ -606,6 +741,10 @@ export default function MainToolbar(): React.ReactElement {
 
     window.editorApi.getToolbarPresets().then(setPresetGroups)
 
+    const unsubConfigUpdated = window.editorApi.onToolbarConfigUpdated((newButtons) => {
+      setButtons(newButtons)
+    })
+
     const unsubOutput = window.editorApi.onToolbarOutput(({ channelName, line, attention }) => {
       logManager.append(channelName, line, attention)
     })
@@ -617,6 +756,7 @@ export default function MainToolbar(): React.ReactElement {
     })
 
     return () => {
+      unsubConfigUpdated()
       unsubOutput()
       unsubStarted()
       unsubExited()
