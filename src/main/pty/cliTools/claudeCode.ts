@@ -240,7 +240,7 @@ export const claudeCodeTool: CliTool = {
           const label = key.replace(/_/g, ' ')
           parts.push(`${Math.round(util)}%`)
           const resetStr = bucket.resets_at
-            ? ` resets ${new Date(bucket.resets_at).toLocaleString()}`
+            ? ` resets ${new Date(bucket.resets_at).toLocaleString(undefined, { timeZoneName: 'short' })}`
             : ''
           tipParts.push(`${label}: ${Math.round(util)}%${resetStr}`)
         }
