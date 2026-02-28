@@ -113,6 +113,7 @@ export interface EditorAPI {
   onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void
   onTerminalNewTab: (cb: (tab: SessionTabInfo) => void) => () => void
   onTerminalTabClosed: (cb: (tabId: string) => void) => () => void
+  onTerminalResetTabs: (cb: (tabs: { tabId: string; sessionId: string | null }[]) => void) => () => void
 
   // Toolbar
   getToolbarInfo: () => Promise<ToolbarInfo>
@@ -270,6 +271,13 @@ const editorApi: EditorAPI = {
     const handler = (_: unknown, payload: { tabId: string }): void => cb(payload.tabId)
     ipcRenderer.on('terminal:tab-closed', handler)
     return () => ipcRenderer.removeListener('terminal:tab-closed', handler)
+  },
+
+  onTerminalResetTabs: (cb: (tabs: { tabId: string; sessionId: string | null }[]) => void) => {
+    const handler = (_: unknown, tabs: { tabId: string; sessionId: string | null }[]): void =>
+      cb(tabs)
+    ipcRenderer.on('terminal:reset-tabs', handler)
+    return () => ipcRenderer.removeListener('terminal:reset-tabs', handler)
   },
 
   // Toolbar

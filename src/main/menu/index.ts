@@ -10,6 +10,7 @@ import { getRunningCount, killAllProcesses } from '../toolbar/processManager'
 import { registerCommand } from './commandRegistry'
 import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
 import { listAccounts } from '../config/accountStorage'
+import { restartToolSessions } from '../pty/registry'
 
 // Injected by setupMenu — avoids circular dep with windows/editor.ts
 type OpenProjectFn = (path: string) => { success: boolean; error?: string }
@@ -150,30 +151,6 @@ async function handleOpenRecent(projectPath: string): Promise<void> {
   }
 }
 
-/** Show restart prompt after credential change, preserving current project. */
-async function promptRestart(message: string): Promise<void> {
-  const focused = BrowserWindow.getFocusedWindow()
-  if (!focused) return
-  const { response } = await dialog.showMessageBox(focused, {
-    type: 'info',
-    title: 'AIDE',
-    message,
-    detail: 'Restart AIDE to apply the changes.',
-    buttons: ['Restart Now', 'Restart Later'],
-    defaultId: 0,
-    cancelId: 1
-  })
-  if (response === 0) {
-    const currentProject = [...(openProjectsRef?.keys() ?? [])][0]
-    if (currentProject) {
-      app.relaunch({ args: [...process.argv.slice(1), currentProject] })
-    } else {
-      app.relaunch()
-    }
-    app.exit(0)
-  }
-}
-
 // ── Full rebuild — call only when menu content changes (Open Recent list) ──────
 
 export function rebuildMenu(): void {
@@ -207,7 +184,7 @@ export function rebuildMenu(): void {
         label: 'Logout',
         click: async (): Promise<void> => {
           await cliTool.clearCredentials!()
-          promptRestart(`Logged out of ${tool.name}.`)
+          restartToolSessions(tool.id)
         }
       })
       toolSubmenu.push({ type: 'separator' })
@@ -225,7 +202,7 @@ export function rebuildMenu(): void {
             const stored = listAccounts(tool.id).find((a) => a.id === acc.id)
             if (!stored) return
             await t.importCredentials(stored.credentials)
-            promptRestart(`Loaded account "${acc.name}" for ${tool.name}.`)
+            restartToolSessions(tool.id)
           }
         })
       }

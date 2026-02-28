@@ -34,7 +34,7 @@ export class PtyManager {
   private tabs = new Map<string, PtyTab>()
   private readonly win: BrowserWindow
   private readonly projectPath: string
-  private readonly tool: CliTool
+  readonly tool: CliTool
 
   // Per-tab buffer for incomplete OSC sequences split across PTY data chunks
   private titleBufs = new Map<string, string>()
@@ -178,6 +178,36 @@ export class PtyManager {
       tab.pty.kill()
     } catch {}
     this.tabs.delete(tabId)
+  }
+
+  /** Close all tabs and reopen the same sessions. Used after credential/account changes. */
+  async resetAllTabs(): Promise<void> {
+    // Snapshot sessions before killing
+    const sessions = [...this.tabs.values()].map((t) => t.sessionId)
+
+    // Kill every existing tab
+    for (const tabId of [...this.tabs.keys()]) {
+      this.closeTab(tabId)
+    }
+
+    await this.tool.prepareProject?.(this.projectPath)
+
+    // Reopen: resume each saved session, or new if it had no sessionId
+    const newTabs: { tabId: string; sessionId: string | null }[] = []
+    for (const sessionId of sessions) {
+      const info = sessionId
+        ? this.spawnResumeTab(sessionId)
+        : this.spawnNewSessionTab()
+      newTabs.push({ tabId: info.tabId, sessionId: info.sessionId })
+    }
+
+    // Fallback: if there were no tabs at all, start a fresh one
+    if (newTabs.length === 0) {
+      const info = this.spawnNewSessionTab()
+      newTabs.push({ tabId: info.tabId, sessionId: info.sessionId })
+    }
+
+    this.send('terminal:reset-tabs', newTabs)
   }
 
   disposeAll(): void {

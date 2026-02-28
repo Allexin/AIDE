@@ -118,6 +118,8 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }: Termi
       }
     })
 
+
+
     // Initial fit if active
     if (isActive) {
       requestAnimationFrame(() => {
@@ -194,7 +196,7 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   const { terminalCollapsed, collapsedWidthPx, toggleTerminalCollapse, focusTerminal } =
     usePanelStore()
 
-  const { tabs, activeTabId, initialized, initWithTab, initWithTabs, addTab, setActiveTab, closeTab, updateSlug, updateSessionId, markExited, setAttention } =
+  const { tabs, activeTabId, initialized, initWithTab, initWithTabs, addTab, setActiveTab, closeTab, resetTabs, updateSlug, updateSessionId, markExited, setAttention } =
     useSessionStore()
 
   const projectPath = useFileTreeStore((s) => s.projectPath)
@@ -324,6 +326,11 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
       closeTab(tabId)
     })
 
+    // Account switch: replace all tabs with a fresh one
+    const removeResetTabs = window.editorApi.onTerminalResetTabs((newTabs) => {
+      resetTabs(newTabs)
+    })
+
     return () => {
       removeTitle()
       removeSessionId()
@@ -332,8 +339,9 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
       removeNewTab()
       removeDeadSession()
       removeTabClosed()
+      removeResetTabs()
     }
-  }, [updateSessionId, markExited, setActiveTab, addTab, updateSlug, closeTab])
+  }, [updateSessionId, markExited, setActiveTab, addTab, updateSlug, closeTab, resetTabs])
 
   // Resize all terminal on panel container resize
   useEffect(() => {

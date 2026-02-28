@@ -28,6 +28,7 @@ interface SessionState {
   updateSessionId: (tabId: string, sessionId: string) => void
   markExited: (tabId: string) => void
   closeTab: (tabId: string) => void
+  resetTabs: (tabs: SessionTabInfo[]) => void
   setAttention: (tabId: string, attention: boolean) => void
 }
 
@@ -87,6 +88,12 @@ export const useSessionStore = create<SessionState>((set) => ({
           ? remaining[Math.max(0, state.tabs.findIndex((t) => t.tabId === tabId) - 1)]?.tabId ?? remaining[0].tabId
           : state.activeTabId
       return { tabs: remaining, activeTabId: newActive }
+    }),
+
+  resetTabs: (newTabs: SessionTabInfo[]) =>
+    set({
+      tabs: newTabs.map((t) => ({ tabId: t.tabId, sessionId: t.sessionId, slug: 'Claude Code', exited: false, attention: false })),
+      activeTabId: newTabs[0]?.tabId ?? null
     }),
 
   setAttention: (tabId: string, attention: boolean) =>
