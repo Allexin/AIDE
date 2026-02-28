@@ -150,6 +150,30 @@ async function handleOpenRecent(projectPath: string): Promise<void> {
   }
 }
 
+/** Show restart prompt after credential change, preserving current project. */
+async function promptRestart(message: string): Promise<void> {
+  const focused = BrowserWindow.getFocusedWindow()
+  if (!focused) return
+  const { response } = await dialog.showMessageBox(focused, {
+    type: 'info',
+    title: 'AIDE',
+    message,
+    detail: 'Restart AIDE to apply the changes.',
+    buttons: ['Restart Now', 'Restart Later'],
+    defaultId: 0,
+    cancelId: 1
+  })
+  if (response === 0) {
+    const currentProject = [...(openProjectsRef?.keys() ?? [])][0]
+    if (currentProject) {
+      app.relaunch({ args: [...process.argv.slice(1), currentProject] })
+    } else {
+      app.relaunch()
+    }
+    app.exit(0)
+  }
+}
+
 // ── Full rebuild — call only when menu content changes (Open Recent list) ──────
 
 export function rebuildMenu(): void {
@@ -174,41 +198,40 @@ export function rebuildMenu(): void {
   const loadAccountSubmenu: Electron.MenuItemConstructorOptions[] = []
   for (const tool of getRegisteredTools()) {
     const accs = listAccounts(tool.id)
-    if (accs.length === 0) {
-      loadAccountSubmenu.push({
-        label: tool.name,
-        submenu: [{ label: 'No saved accounts', enabled: false }]
+    const toolSubmenu: Electron.MenuItemConstructorOptions[] = []
+
+    // Logout item — clears credentials locally without revoking tokens
+    const cliTool = getToolById(tool.id)
+    if (cliTool?.clearCredentials) {
+      toolSubmenu.push({
+        label: 'Logout',
+        click: async (): Promise<void> => {
+          await cliTool.clearCredentials!()
+          promptRestart(`Logged out of ${tool.name}.`)
+        }
       })
+      toolSubmenu.push({ type: 'separator' })
+    }
+
+    if (accs.length === 0) {
+      toolSubmenu.push({ label: 'No saved accounts', enabled: false })
     } else {
-      loadAccountSubmenu.push({
-        label: tool.name,
-        submenu: accs.map((acc) => ({
+      for (const acc of accs) {
+        toolSubmenu.push({
           label: acc.name,
           click: async (): Promise<void> => {
-            const cliTool = getToolById(tool.id)
-            if (!cliTool?.importCredentials) return
+            const t = getToolById(tool.id)
+            if (!t?.importCredentials) return
             const stored = listAccounts(tool.id).find((a) => a.id === acc.id)
             if (!stored) return
-            await cliTool.importCredentials(stored.credentials)
-            const focused = BrowserWindow.getFocusedWindow()
-            if (!focused) return
-            const { response } = await dialog.showMessageBox(focused, {
-              type: 'info',
-              title: 'AIDE',
-              message: `Loaded account "${acc.name}" for ${tool.name}.`,
-              detail: 'Restart AIDE to apply the new credentials.',
-              buttons: ['Restart Now', 'Restart Later'],
-              defaultId: 0,
-              cancelId: 1
-            })
-            if (response === 0) {
-              app.relaunch()
-              app.exit(0)
-            }
+            await t.importCredentials(stored.credentials)
+            promptRestart(`Loaded account "${acc.name}" for ${tool.name}.`)
           }
-        }))
-      })
+        })
+      }
     }
+
+    loadAccountSubmenu.push({ label: tool.name, submenu: toolSubmenu })
   }
 
   const template: Electron.MenuItemConstructorOptions[] = [

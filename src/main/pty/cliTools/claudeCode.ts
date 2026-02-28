@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { net, session } from 'electron'
@@ -54,6 +54,9 @@ async function ensureProjectTrusted(projectPath: string): Promise<void> {
 
 /** Keys from ~/.claude.json that constitute auth credentials. */
 const CREDENTIAL_KEYS = ['oauthAccount', 'userID'] as const
+
+/** Path to the separate credentials file (access/refresh tokens). */
+const CREDENTIALS_JSON = join(homedir(), '.claude', '.credentials.json')
 
 export const claudeCodeTool: CliTool = {
   id: 'claude-code',
@@ -130,6 +133,12 @@ export const claudeCodeTool: CliTool = {
       for (const key of CREDENTIAL_KEYS) {
         if (root[key] !== undefined) creds[key] = root[key]
       }
+      // Also export access/refresh tokens from ~/.claude/.credentials.json
+      if (existsSync(CREDENTIALS_JSON)) {
+        try {
+          creds._credentialsJson = JSON.parse(readFileSync(CREDENTIALS_JSON, 'utf-8'))
+        } catch { /* ignore */ }
+      }
       return creds
     } catch {
       return null
@@ -151,6 +160,28 @@ export const claudeCodeTool: CliTool = {
       }
     }
     writeFileSync(CLAUDE_JSON, JSON.stringify(root, null, 2), 'utf-8')
+
+    // Restore access/refresh tokens to ~/.claude/.credentials.json
+    if (credentials._credentialsJson) {
+      const dir = join(homedir(), '.claude')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(CREDENTIALS_JSON, JSON.stringify(credentials._credentialsJson, null, 2), 'utf-8')
+    }
+  },
+
+  async clearCredentials(): Promise<void> {
+    // Remove auth keys from ~/.claude.json (keep other settings intact)
+    if (existsSync(CLAUDE_JSON)) {
+      try {
+        const root = JSON.parse(readFileSync(CLAUDE_JSON, 'utf-8'))
+        for (const key of CREDENTIAL_KEYS) delete root[key]
+        writeFileSync(CLAUDE_JSON, JSON.stringify(root, null, 2), 'utf-8')
+      } catch { /* ignore */ }
+    }
+    // Remove the tokens file entirely
+    if (existsSync(CREDENTIALS_JSON)) {
+      try { unlinkSync(CREDENTIALS_JSON) } catch { /* ignore */ }
+    }
   },
 
   async getUsageInfo(): Promise<UsageInfo | null> {
@@ -194,7 +225,6 @@ export const claudeCodeTool: CliTool = {
         return null
       }
       const data = (await res.json()) as Record<string, unknown>
-      cliLog(LOG_CH, `[usage] API response keys: ${Object.keys(data).join(', ')}`)
 
       // Build summary from whatever fields are present
       const parts: string[] = []

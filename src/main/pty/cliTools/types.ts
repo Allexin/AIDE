@@ -69,6 +69,11 @@ export interface CliTool {
   /** Import previously exported credentials, overwriting the current ones. */
   importCredentials?(credentials: Record<string, unknown>): Promise<void>
 
+  /** Clear local credentials so the CLI tool prompts for a new login.
+   *  Unlike the CLI's own logout, this does NOT revoke tokens server-side.
+   */
+  clearCredentials?(): Promise<void>
+
   /** Return current usage/limit info for display in the status bar.
    *  The implementation decides what to show — the caller treats it opaquely.
    */
