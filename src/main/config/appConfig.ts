@@ -26,11 +26,18 @@ export interface GitConfig {
   addBatchSize: number // files per `git add` call in commit dialog
 }
 
+export interface ProxyConfig {
+  enabled: boolean
+  address: string        // e.g. "http://127.0.0.1:1080"
+  useForCliTools: boolean // inject into PTY env
+}
+
 export interface AppConfig {
   editor: EditorConfig
   ui: UiConfig
   sessions: SessionsConfig
   git: GitConfig
+  proxy: ProxyConfig
 }
 
 const DEFAULTS: AppConfig = {
@@ -53,6 +60,11 @@ const DEFAULTS: AppConfig = {
   },
   git: {
     addBatchSize: 10
+  },
+  proxy: {
+    enabled: false,
+    address: '',
+    useForCliTools: true
   }
 }
 
@@ -72,7 +84,8 @@ export function initAppConfig(): void {
         editor: { ...DEFAULTS.editor, ...(parsed.editor ?? {}) },
         ui: { ...DEFAULTS.ui, ...(parsed.ui ?? {}) },
         sessions: { ...DEFAULTS.sessions, ...(parsed.sessions ?? {}) },
-        git: { ...DEFAULTS.git, ...(parsed.git ?? {}) }
+        git: { ...DEFAULTS.git, ...(parsed.git ?? {}) },
+        proxy: { ...DEFAULTS.proxy, ...(parsed.proxy ?? {}) }
       }
     } catch {
       config = structuredClone(DEFAULTS)

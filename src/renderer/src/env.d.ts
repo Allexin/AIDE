@@ -165,6 +165,8 @@ interface EditorAPI {
 
   // Accounts
   getAccountCurrentInfo: (toolId: string) => Promise<{ label: string; saved: boolean } | null>
+  getUsageInfo: (toolId: string) => Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical' } | null>
+  onCliLog: (cb: (channel: string, message: string) => void) => () => void
   onAccountsChanged: (cb: () => void) => () => void
 
   // PTY: create session with prompt
@@ -225,9 +227,15 @@ interface AccountManagerAPI {
   loadAccount: (toolId: string, accountId: string) => Promise<boolean>
 }
 
+interface SettingsAPI {
+  getProxyConfig: () => Promise<{ enabled: boolean; address: string; useForCliTools: boolean }>
+  saveProxyConfig: (config: { enabled: boolean; address: string; useForCliTools: boolean }) => Promise<void>
+}
+
 declare interface Window {
   pickerApi: PickerAPI
   editorApi: EditorAPI
   sessionPickerApi: SessionPickerAPI
   accountManagerApi: AccountManagerAPI
+  settingsApi: SettingsAPI
 }

@@ -5,6 +5,7 @@ import { getAppState } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { createPickerWindow } from '../windows/picker'
 import { createAccountManagerWindow } from '../windows/accountManager'
+import { createSettingsWindow } from '../windows/settings'
 import { getRunningCount, killAllProcesses } from '../toolbar/processManager'
 import { registerCommand } from './commandRegistry'
 import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
@@ -243,7 +244,15 @@ export function rebuildMenu(): void {
           }
         },
         { type: 'separator' },
-        { label: 'Load Account', submenu: loadAccountSubmenu }
+        { label: 'Load Account', submenu: loadAccountSubmenu },
+        { type: 'separator' },
+        {
+          label: 'Settings...',
+          click: (): void => {
+            const parent = getEditorWindow() ?? undefined
+            createSettingsWindow(parent)
+          }
+        }
       ]
     }
   ]

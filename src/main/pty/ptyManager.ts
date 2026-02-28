@@ -1,5 +1,6 @@
 import * as nodePty from 'node-pty'
 import { BrowserWindow } from 'electron'
+import { getAppConfig } from '../config/appConfig'
 import type { CliTool } from './cliTools/types'
 import { claudeCodeTool } from './cliTools/claudeCode'
 import type { SavedSessionEntry } from '../config/appState'
@@ -268,12 +269,21 @@ export class PtyManager {
   }
 
   private spawnPty(tabId: string): nodePty.IPty {
+    const env = { ...process.env } as Record<string, string>
+    const proxy = getAppConfig().proxy
+    if (proxy.enabled && proxy.useForCliTools && proxy.address) {
+      env.HTTP_PROXY = proxy.address
+      env.http_proxy = proxy.address
+      env.HTTPS_PROXY = proxy.address
+      env.https_proxy = proxy.address
+    }
+
     const pty = nodePty.spawn('powershell.exe', [], {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
       cwd: this.projectPath,
-      env: process.env as Record<string, string>
+      env
     })
 
     pty.onData((data) => {

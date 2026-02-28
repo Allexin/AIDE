@@ -68,4 +68,18 @@ export interface CliTool {
 
   /** Import previously exported credentials, overwriting the current ones. */
   importCredentials?(credentials: Record<string, unknown>): Promise<void>
+
+  /** Return current usage/limit info for display in the status bar.
+   *  The implementation decides what to show — the caller treats it opaquely.
+   */
+  getUsageInfo?(): Promise<UsageInfo | null>
+}
+
+export interface UsageInfo {
+  /** Short text for the status bar (e.g. "37% / 26%"). */
+  summary: string
+  /** Longer text shown on hover. */
+  tooltip: string
+  /** Colour hint: normal = white, warn = yellow, critical = red. */
+  level: 'normal' | 'warn' | 'critical'
 }

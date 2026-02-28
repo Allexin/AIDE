@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { usePanelStore } from '../store/usePanelStore'
+import { logManager } from '../store/useLogStore'
 import { useEditorStore } from '../store/useEditorStore'
 import { useFileTreeStore } from '../store/useFileTreeStore'
 import { useToastStore } from '../store/useToastStore'
@@ -46,6 +47,13 @@ export default function EditorApp(): React.ReactElement {
     }
     init()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Forward CLI log events from main process into the LogPanel
+  useEffect(() => {
+    return window.editorApi.onCliLog((channel, message) => {
+      logManager.append(channel, message)
+    })
+  }, [])
 
   // Blank dark screen while config loads (IPC is fast — imperceptible)
   if (!initialized) {

@@ -136,6 +136,8 @@ export interface EditorAPI {
 
   // Accounts
   getAccountCurrentInfo: (toolId: string) => Promise<{ label: string; saved: boolean } | null>
+  getUsageInfo: (toolId: string) => Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical' } | null>
+  onCliLog: (cb: (channel: string, message: string) => void) => () => void
   onAccountsChanged: (cb: () => void) => () => void
 
   // PTY: create session with prompt
@@ -316,6 +318,14 @@ const editorApi: EditorAPI = {
   // Accounts
   getAccountCurrentInfo: (toolId: string) =>
     ipcRenderer.invoke('accounts:get-current-info', toolId) as Promise<{ label: string; saved: boolean } | null>,
+  getUsageInfo: (toolId: string) =>
+    ipcRenderer.invoke('usage:get-info', toolId) as Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical' } | null>,
+  onCliLog: (cb: (channel: string, message: string) => void): (() => void) => {
+    const handler = (_e: unknown, data: { channel: string; message: string }): void =>
+      cb(data.channel, data.message)
+    ipcRenderer.on('cli:log', handler)
+    return () => ipcRenderer.removeListener('cli:log', handler)
+  },
   onAccountsChanged: (cb: () => void): (() => void) => {
     const handler = (): void => cb()
     ipcRenderer.on('accounts:changed', handler)

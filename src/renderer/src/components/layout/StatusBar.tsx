@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { useFileTreeStore } from '../../store/useFileTreeStore'
 import { useEditorStore } from '../../store/useEditorStore'
 
@@ -84,6 +84,48 @@ export default function StatusBar(): React.ReactElement {
     return () => unsubs.forEach((u) => u())
   }, [refreshAccount])
 
+  // ── Usage limits sensor (left, next to account) ────────────────────────────
+  const [usageInfo, setUsageInfo] = useState<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical' } | null>(null)
+  const lastUsageFetch = useRef(0)
+
+  const fetchUsage = useCallback(() => {
+    lastUsageFetch.current = Date.now()
+    window.editorApi.getUsageInfo('claude-code').then((info) => {
+      setUsageInfo(info)
+    })
+  }, [])
+
+  useEffect(() => {
+    fetchUsage()
+
+    // Adaptive polling: 1 min focused, 5 min unfocused
+    let timerId: ReturnType<typeof setInterval>
+
+    const startInterval = (): void => {
+      clearInterval(timerId)
+      const ms = document.hasFocus() ? 60_000 : 300_000
+      timerId = setInterval(fetchUsage, ms)
+    }
+
+    startInterval()
+
+    const onFocus = (): void => {
+      // If >1 min since last fetch, refresh immediately
+      if (Date.now() - lastUsageFetch.current > 60_000) fetchUsage()
+      startInterval()
+    }
+    const onBlur = (): void => startInterval()
+
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('blur', onBlur)
+
+    return () => {
+      clearInterval(timerId)
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [fetchUsage])
+
   // ── File language sensor (right) ────────────────────────────────────────────
   const langDisplay = currentLanguage ? (LANG_DISPLAY[currentLanguage] ?? currentLanguage) : null
 
@@ -124,6 +166,19 @@ export default function StatusBar(): React.ReactElement {
             title={accountSaved ? 'CLI account' : 'CLI account not saved in AIDE'}
           >
             {accountLabel}
+          </span>
+        )}
+        {usageInfo && (
+          <span
+            style={{
+              ...sensorStyle,
+              color: usageInfo.level === 'critical' ? '#f44747'
+                : usageInfo.level === 'warn' ? '#cca700'
+                : 'rgba(255,255,255,0.9)'
+            }}
+            title={usageInfo.tooltip}
+          >
+            {usageInfo.summary}
           </span>
         )}
       </div>

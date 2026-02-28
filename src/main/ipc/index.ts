@@ -3,7 +3,8 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, statSync, promise
 import { join } from 'path'
 import { spawn } from 'child_process'
 import { removeRecentProject, getAppState, saveOpenSessions, loadOpenSessions } from '../config/appState'
-import { getAppConfig } from '../config/appConfig'
+import { getAppConfig, updateAppConfig } from '../config/appConfig'
+import type { ProxyConfig } from '../config/appConfig'
 import { readProjectSettings } from '../config/projectConfig'
 import {
   readToolbarButtons,
@@ -26,6 +27,7 @@ import {
   updateAccount as updateStoredAccount
 } from '../config/accountStorage'
 import { scanSessions, readSessionPreview, getSessionsDir } from '../pty/sessionScanner'
+import { initCliLogger } from '../pty/cliTools/cliLogger'
 import { createSessionPickerWindow } from '../windows/sessionPicker'
 import {
   spawnButtonProcess,
@@ -72,6 +74,9 @@ function runGitSubcommand(
 }
 
 export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void {
+  // Wire up CLI logger so any cliLog() call broadcasts to all renderer windows
+  initCliLogger(() => openProjects.values())
+
   // ── Picker: open native folder dialog ──────────────────────────────────────
   ipcMain.handle('pick:select-folder', async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
@@ -664,6 +669,13 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     return { label: `account not saved (${identifier})`, saved: false }
   })
 
+  // ── Usage info: get usage/limits for a CLI tool ────────────────────────────
+  ipcMain.handle('usage:get-info', async (_event, toolId: string) => {
+    const tool = getToolById(toolId)
+    if (!tool?.getUsageInfo) return null
+    return tool.getUsageInfo()
+  })
+
   // ── Accounts: get tools list ─────────────────────────────────────────────────
   ipcMain.handle('accounts:get-tools', () => getRegisteredTools())
 
@@ -738,6 +750,14 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     await tool.importCredentials(stored.credentials)
     broadcastAccountsChanged()
     return true
+  })
+
+  // ── Settings: get proxy config ──────────────────────────────────────────────
+  ipcMain.handle('settings:get-proxy', () => getAppConfig().proxy)
+
+  // ── Settings: save proxy config ────────────────────────────────────────────
+  ipcMain.handle('settings:save-proxy', (_event, proxy: ProxyConfig) => {
+    updateAppConfig({ proxy })
   })
 
   // ── Session picker: new session ───────────────────────────────────────────────
