@@ -85,7 +85,8 @@ export const claudeCodeTool: CliTool = {
 
   checkStartupHealth(accumulated: string, elapsedMs: number): 'ok' | 'dead' | 'pending' {
     if (accumulated.includes('No conversation found with session ID')) return 'dead'
-    if (accumulated.includes('? for shortcuts')) return 'ok'
+    // CLI sets terminal title to "✻ Claude Code" (OSC sequence) when ready
+    if (accumulated.includes('Claude Code')) return 'ok'
     if (elapsedMs > 15000) return 'ok' // assume ok after 15s
     return 'pending'
   },

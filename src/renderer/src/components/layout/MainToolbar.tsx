@@ -482,17 +482,18 @@ function PresetDialog({
   const [selectedToolIdx, setSelectedToolIdx] = useState(0)
   const [showToolDropdown, setShowToolDropdown] = useState(false)
 
+
   useEffect(() => {
     window.editorApi.getCliTools().then((tools) => {
       setCliTools(tools)
     })
   }, [])
 
-  const handleAskTool = async (): Promise<void> => {
+  const handleAskTool = (): void => {
     const tool = cliTools[selectedToolIdx]
     if (!tool || !aiPrompt.trim()) return
     const prompt = `Please read .aide/docs/toolbar.md to understand the toolbar configuration format, then help with:\n\n${aiPrompt.trim()}`
-    await window.editorApi.terminalCreateWithPrompt(tool.id, prompt)
+    window.editorApi.terminalCreateWithPrompt(tool.id, prompt)
     onCancel()
   }
 

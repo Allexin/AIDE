@@ -131,16 +131,17 @@ export class PtyManager {
     return this.spawnResumeTab(sessionId)
   }
 
-  /** Open a new session and write a prompt to it after init. */
+  /** Open a new session and write a prompt to it after init (non-blocking). */
   async createNewSessionWithPrompt(prompt: string): Promise<SessionTabInfo> {
     await this.tool.prepareProject?.(this.projectPath)
     const tabInfo = this.spawnNewSessionTab()
-    this.startHealthCheck(tabInfo.tabId)
 
-    const result = await this.waitForReady(tabInfo.tabId)
-    if (result === 'ok' && this.tabs.has(tabInfo.tabId)) {
-      this.write(tabInfo.tabId, prompt + '\r')
-    }
+    // Write prompt in background after CLI is ready — don't block IPC
+    this.waitForReady(tabInfo.tabId).then((result) => {
+      if (result === 'ok' && this.tabs.has(tabInfo.tabId)) {
+        this.write(tabInfo.tabId, prompt + '\r')
+      }
+    })
 
     return tabInfo
   }
@@ -343,7 +344,7 @@ export class PtyManager {
 
     hc.buf += data
     const elapsed = Date.now() - hc.startTime
-    const result = this.tool.checkStartupHealth(hc.buf, elapsed)
+const result = this.tool.checkStartupHealth(hc.buf, elapsed)
 
     if (result === 'pending') return
 
