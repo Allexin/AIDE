@@ -38,7 +38,7 @@ A lightweight desktop code editor built with Electron, React, and Monaco Editor.
 
 ```bash
 # Clone the repository
-git clone https://github.com/user/aide.git
+git clone https://gitverse.ru/basovav/AIDE.git
 cd aide
 
 # Install dependencies
