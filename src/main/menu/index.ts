@@ -151,6 +151,13 @@ async function handleOpenRecent(projectPath: string): Promise<void> {
   }
 }
 
+function broadcastAccountsChanged(): void {
+  if (!openProjectsRef) return
+  for (const win of openProjectsRef.values()) {
+    if (!win.isDestroyed()) win.webContents.send('accounts:changed')
+  }
+}
+
 // ── Full rebuild — call only when menu content changes (Open Recent list) ──────
 
 export function rebuildMenu(): void {
@@ -185,6 +192,7 @@ export function rebuildMenu(): void {
         click: async (): Promise<void> => {
           await cliTool.clearCredentials!()
           restartToolSessions(tool.id)
+          broadcastAccountsChanged()
         }
       })
       toolSubmenu.push({ type: 'separator' })
@@ -203,6 +211,7 @@ export function rebuildMenu(): void {
             if (!stored) return
             await t.importCredentials(stored.credentials)
             restartToolSessions(tool.id)
+            broadcastAccountsChanged()
           }
         })
       }
