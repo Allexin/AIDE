@@ -39,6 +39,9 @@ export function createEditorWindow(projectPath: string): BrowserWindow {
     return { action: 'deny' }
   })
 
+  const windowTitle = `AIDE — ${folderName}(${projectPath})`
+  win.webContents.on('did-finish-load', () => win.setTitle(windowTitle))
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'] + '/?window=editor')
   } else {
