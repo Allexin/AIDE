@@ -5,7 +5,6 @@ import { is } from '@electron-toolkit/utils'
 import { checkAndAcquireLock, releaseLock } from '../lock'
 import { ensureAideDirectory } from '../config/projectConfig'
 import { ensureDefaultToolbar, deployToolbarDocs } from '../config/toolbarConfig'
-import { ensureGitignoreEntry } from '../gitignore'
 import { addRecentProject } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { startProjectWatcher, stopProjectWatcher } from '../filetree/watcher'
@@ -76,7 +75,6 @@ export function openProjectAndTrack(
     }
   }
 
-  ensureGitignoreEntry(projectPath, '.aide')
   addRecentProject(projectPath, getAppConfig().sessions.maxRecentProjects)
   // Rebuild menu so Open Recent submenu reflects the newly added project
   rebuildMenu()

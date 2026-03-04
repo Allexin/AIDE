@@ -85,9 +85,11 @@ export function startProjectWatcher(projectPath: string, win: BrowserWindow): vo
 
   // Watch .git/index to detect commits, staging, and other git operations.
   // No filetree:fs-changed sent — only a git status refresh.
-  const gitIndexPath = path.join(projectPath, '.git', 'index')
+  const gitDir = path.join(projectPath, '.git')
   try {
-    entry.gitIndexWatcher = fs.watch(gitIndexPath, () => scheduleGitRefresh())
+    entry.gitIndexWatcher = fs.watch(gitDir, (_event, filename) => {
+      if (filename && filename.toString() === 'index') scheduleGitRefresh()
+    })
     entry.gitIndexWatcher.on('error', () => {
       entry.gitIndexWatcher = null
     })
