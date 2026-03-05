@@ -4,6 +4,12 @@ import type * as MonacoNS from 'monaco-editor'
 import '../../monacoSetup'
 import { useEditorStore } from '../../store/useEditorStore'
 import { usePanelStore } from '../../store/usePanelStore'
+import { logManager } from '../../store/useLogStore'
+
+const LOG_CH = 'Editor Debug'
+function editorLog(msg: string): void {
+  logManager.append(LOG_CH, msg)
+}
 
 // ── Language detection ────────────────────────────────────────────────────────
 
@@ -283,6 +289,12 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
 
   const applyFileToEditor = useCallback(
     (filePath: string, content: string, mtime: number) => {
+      const currentOpenFile = useEditorStore.getState().openFile
+      editorLog(`applyFileToEditor path=${filePath} len=${content.length} openFile=${currentOpenFile} loadedFile=${loadedFileRef.current} mounted=${!!editorRef.current}`)
+      if (filePath !== currentOpenFile) {
+        editorLog(`STALE apply: path=${filePath} but openFile=${currentOpenFile} — skipping`)
+        return
+      }
       loadedFileRef.current = filePath
       diskContentRef.current = content
       diskMtimeRef.current = mtime
@@ -292,9 +304,13 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
       useEditorStore.getState().setCurrentLanguage(lang)
 
       if (editorRef.current && monacoRef.current) {
-        if (editorRef.current.getValue() !== content) {
+        const current = editorRef.current.getValue()
+        if (current !== content) {
+          editorLog(`setValue len=${content.length} (was ${current.length})`)
           editorRef.current.setValue(content)
           editorRef.current.setScrollPosition({ scrollTop: 0 })
+        } else {
+          editorLog(`setValue skipped — content identical`)
         }
         const model = editorRef.current.getModel()
         if (model) monacoRef.current.editor.setModelLanguage(model, lang)
@@ -302,6 +318,7 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
         // Monaco not mounted yet; content applied in onMount
         pendingContentRef.current = content
         pendingLangRef.current = lang
+        editorLog(`Monaco not mounted, stored as pending`)
       }
     },
     []
@@ -341,8 +358,12 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
 
   const loadFile = useCallback(
     (filePath: string) => {
+      editorLog(`loadFile path=${filePath} openFile=${useEditorStore.getState().openFile}`)
       const readResult = window.editorApi.readFile(filePath)
-      if ('error' in readResult) return
+      if ('error' in readResult) {
+        editorLog(`readFile ERROR for ${filePath}: ${readResult.error}`)
+        return
+      }
 
       const maxBytes = (editorConfig?.maxFileSizeMb ?? 5) * 1024 * 1024
       if (readResult.size > maxBytes) {
@@ -367,6 +388,7 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
   // ── React to openFile changes ───────────────────────────────────────────────
 
   useEffect(() => {
+    editorLog(`openFile effect: openFile=${openFile} loadedFile=${loadedFileRef.current}`)
     if (!openFile) {
       // Editor is being closed
       loadedFileRef.current = null
@@ -382,6 +404,7 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
     // Auto-save previous file before loading the new one
     const prevFile = loadedFileRef.current
     if (prevFile && prevFile !== openFile && editorRef.current && dirtyRef.current) {
+      editorLog(`auto-saving previous file: ${prevFile}`)
       const content = editorRef.current.getValue()
       const writeResult = window.editorApi.writeFile(prevFile, content)
       if (!('error' in writeResult)) {
@@ -440,17 +463,22 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
       const changedPath = event.path
       if (changedPath !== loadedFileRef.current) return
 
+      editorLog(`onFsChanged path=${changedPath} loadedFile=${loadedFileRef.current}`)
       const result = window.editorApi.readFile(changedPath)
       if ('error' in result) return // File deleted — FileTreeStore will close the editor
 
       // Ignore if mtime hasn't advanced (means this was triggered by our own save)
-      if (result.mtime <= diskMtimeRef.current) return
+      if (result.mtime <= diskMtimeRef.current) {
+        editorLog(`onFsChanged ignored — mtime not advanced (${result.mtime} <= ${diskMtimeRef.current})`)
+        return
+      }
 
       if (!editorRef.current) return
       const hasLocalChanges = dirtyRef.current
 
       if (!hasLocalChanges) {
         // Silent reload: user has no pending edits
+        editorLog(`onFsChanged silent reload len=${result.content.length}`)
         applyFileToEditor(changedPath, result.content, result.mtime)
       } else {
         // Conflict: store the new disk state for the conflict dialog
@@ -553,8 +581,11 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
     editorRef.current = editor
     monacoRef.current = monacoInstance as unknown as typeof MonacoNS
 
+    editorLog(`handleEditorMount hasPending=${pendingContentRef.current !== null} openFile=${useEditorStore.getState().openFile} loadedFile=${loadedFileRef.current}`)
+
     // Apply content that was loaded before Monaco finished initializing
     if (pendingContentRef.current !== null) {
+      editorLog(`applying pending content len=${pendingContentRef.current.length}`)
       editor.setValue(pendingContentRef.current)
       if (pendingLangRef.current) {
         const model = editor.getModel()
