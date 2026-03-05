@@ -27,14 +27,14 @@ export const useLogStore = create<LogState>((set) => ({
   activeChannelId: null,
 
   append: (channelId: string, line: string, attention = false) => {
-    const stripped = stripAnsi(line)
+    const incoming = stripAnsi(line).split('\n')
     set((state) => {
       const idx = state.channels.findIndex((c) => c.id === channelId)
 
       if (idx >= 0) {
-        // Existing channel — append line, enforce buffer cap
+        // Existing channel — append lines, enforce buffer cap
         const ch = state.channels[idx]
-        let newLines = [...ch.lines, stripped]
+        let newLines = [...ch.lines, ...incoming]
 
         if (newLines.length > MAX_LINES) {
           // Drop oldest entries to stay at limit
@@ -56,7 +56,7 @@ export const useLogStore = create<LogState>((set) => ({
         // New channel — auto-create on first append
         const newChannel: LogChannel = {
           id: channelId,
-          lines: [stripped],
+          lines: incoming,
           attention,
           blinking: attention // blink immediately if attention channel
         }
