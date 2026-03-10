@@ -42,12 +42,12 @@ function parsePorcelain(output: string): Pick<GitStatusResult, 'changed' | 'dele
 
 export async function runGitStatus(projectPath: string): Promise<GitStatusResult> {
   const [statusResult, branchResult] = await Promise.allSettled([
-    execFileAsync('git', ['status', '--porcelain'], {
+    execFileAsync('git', ['--no-optional-locks', 'status', '--porcelain'], {
       cwd: projectPath,
       timeout: 15000,
       windowsHide: true
     }),
-    execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+    execFileAsync('git', ['--no-optional-locks', 'rev-parse', '--abbrev-ref', 'HEAD'], {
       cwd: projectPath,
       timeout: 5000,
       windowsHide: true

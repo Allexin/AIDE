@@ -10,6 +10,8 @@ import { runGitStatus, GitStatusResult } from './gitStatus'
 class GitRefreshQueue {
   private running = false
   private pending = false
+  /** Timestamp of the last git status completion — used to suppress self-triggered .git/index events */
+  lastRunEnd = 0
 
   async request(projectPath: string, send: (s: GitStatusResult) => void): Promise<void> {
     if (this.running) {
@@ -25,6 +27,7 @@ class GitRefreshQueue {
     try {
       send(await runGitStatus(projectPath))
     } finally {
+      this.lastRunEnd = Date.now()
       this.running = false
       if (this.pending) await this._run(projectPath, send)
     }
@@ -86,9 +89,21 @@ export function startProjectWatcher(projectPath: string, win: BrowserWindow): vo
   // Watch .git/index to detect commits, staging, and other git operations.
   // No filetree:fs-changed sent — only a git status refresh.
   const gitDir = path.join(projectPath, '.git')
+  // Suppress .git/index events that fire right after our own git commands finish.
+  // git status refreshes the index file, which triggers fs.watch again — causing a loop.
+  const GIT_SELF_TRIGGER_MS = 1500
+
   try {
     entry.gitIndexWatcher = fs.watch(gitDir, (_event, filename) => {
-      if (filename && filename.toString() === 'index') scheduleGitRefresh()
+      if (!filename) return
+      const name = filename.toString()
+      // Only react to the 'index' file itself, ignore index.lock and other files
+      if (name !== 'index') return
+      // If our own git status just finished, this event is self-triggered — skip it
+      if (Date.now() - queue.lastRunEnd < GIT_SELF_TRIGGER_MS) return
+      // If git is currently running, this is likely caused by the in-flight command — skip
+      if (queue['running']) return
+      scheduleGitRefresh()
     })
     entry.gitIndexWatcher.on('error', () => {
       entry.gitIndexWatcher = null
