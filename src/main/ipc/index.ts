@@ -5,7 +5,7 @@ import { spawn } from 'child_process'
 import { removeRecentProject, getAppState, saveOpenSessions, loadOpenSessions } from '../config/appState'
 import { getAppConfig, updateAppConfig } from '../config/appConfig'
 import type { ProxyConfig } from '../config/appConfig'
-import { readProjectSettings } from '../config/projectConfig'
+import { readProjectSettings, writeProjectSettings } from '../config/projectConfig'
 import {
   readToolbarButtons,
   readLocalToolbarConfig,
@@ -131,10 +131,25 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     for (const [projectPath, win] of openProjects) {
       if (win === senderWin) {
         const s = readProjectSettings(projectPath)
-        return { activePanelRatio: s.activePanelRatio, collapsedWidthPx: s.collapsedWidthPx }
+        return { activePanelRatio: s.activePanelRatio, collapsedWidthPx: s.collapsedWidthPx, fileTreeWidth: s.fileTreeWidth }
       }
     }
-    return { activePanelRatio: 0.75, collapsedWidthPx: 20 }
+    return { activePanelRatio: 0.75, collapsedWidthPx: 20, fileTreeWidth: 250 }
+  })
+
+  // ── Editor: save file tree width to project settings ──────────────────────────
+  ipcMain.handle('editor:save-file-tree-width', (event, width: number) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return
+
+    for (const [projectPath, win] of openProjects) {
+      if (win === senderWin) {
+        const s = readProjectSettings(projectPath)
+        s.fileTreeWidth = width
+        writeProjectSettings(projectPath, s)
+        return
+      }
+    }
   })
 
   // ── File tree: read a single directory level ─────────────────────────────────

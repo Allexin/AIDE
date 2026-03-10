@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, renameSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { net, session } from 'electron'
@@ -8,6 +8,9 @@ import { getAppConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
 
 const LOG_CH = 'Claude Code Errors'
+
+/** Detected CLI version, parsed from the startup banner ("Claude Code vX.Y.Z"). */
+let detectedCliVersion: string | null = null
 
 const CLAUDE_JSON = join(homedir(), '.claude.json')
 
@@ -58,6 +61,24 @@ const CREDENTIAL_KEYS = ['oauthAccount', 'userID'] as const
 /** Path to the separate credentials file (access/refresh tokens). */
 const CREDENTIALS_JSON = join(homedir(), '.claude', '.credentials.json')
 
+/** Exponential backoff state for usage API 429 responses. */
+const usageBackoff = { delay: 60_000, until: 0 }
+
+function usageFromCache(cached: Record<string, unknown>): UsageInfo {
+  const s = (cached.session as Record<string, unknown>)?.percent as number ?? 0
+  const w = (cached.week as Record<string, unknown>)?.percent as number ?? 0
+  const maxP = Math.max(s, w)
+  const lvl: UsageInfo['level'] = maxP >= 90 ? 'critical' : maxP >= 70 ? 'warn' : 'normal'
+  const sResets = (cached.session as Record<string, unknown>)?.resets as string ?? ''
+  const wResets = (cached.week as Record<string, unknown>)?.resets as string ?? ''
+  return {
+    summary: `${s}% / ${w}%`,
+    tooltip: `session: ${s}%${sResets ? ` resets ${sResets}` : ''}\nweek: ${w}%${wResets ? ` resets ${wResets}` : ''}`,
+    level: lvl,
+    fetchedAt: (cached.updatedAt as number) || Date.now()
+  }
+}
+
 export const claudeCodeTool: CliTool = {
   id: 'claude-code',
   name: 'Claude Code',
@@ -86,7 +107,12 @@ export const claudeCodeTool: CliTool = {
   checkStartupHealth(accumulated: string, elapsedMs: number): 'ok' | 'dead' | 'pending' {
     if (accumulated.includes('No conversation found with session ID')) return 'dead'
     // CLI sets terminal title to "✻ Claude Code" (OSC sequence) when ready
-    if (accumulated.includes('Claude Code')) return 'ok'
+    if (accumulated.includes('Claude Code')) {
+      // Parse version from startup banner: "Claude Code v2.1.69"
+      const vm = /Claude Code v(\d+\.\d+\.\d+)/.exec(accumulated)
+      if (vm) detectedCliVersion = vm[1]
+      return 'ok'
+    }
     if (elapsedMs > 15000) return 'ok' // assume ok after 15s
     return 'pending'
   },
@@ -186,7 +212,31 @@ export const claudeCodeTool: CliTool = {
   },
 
   async getUsageInfo(): Promise<UsageInfo | null> {
-    // Access token lives in ~/.claude/.credentials.json
+    const CACHE_MAX_AGE = 7 * 60 * 1000 // 7 minutes
+    const cachePath = join(homedir(), '.aide', 'usage.json')
+
+    // ── Try cached file first (shared across multiple AIDE instances) ──
+    try {
+      if (existsSync(cachePath)) {
+        const cached = JSON.parse(readFileSync(cachePath, 'utf-8'))
+        if (cached.updatedAt && Date.now() - cached.updatedAt < CACHE_MAX_AGE) {
+          // If we're in a backoff period, always use cache
+          if (usageBackoff.until > Date.now()) {
+            return usageFromCache(cached)
+          }
+          return usageFromCache(cached)
+        }
+        // Cache expired but we're in backoff — still use stale cache
+        if (usageBackoff.until > Date.now()) {
+          return usageFromCache(cached)
+        }
+      }
+    } catch { /* cache miss — proceed to API */ }
+
+    // If in backoff period and no cache, skip
+    if (usageBackoff.until > Date.now()) return null
+
+    // ── Fetch from API ──
     const credsPath = join(homedir(), '.claude', '.credentials.json')
     let accessToken: string | undefined
     try {
@@ -205,7 +255,6 @@ export const claudeCodeTool: CliTool = {
     }
 
     try {
-      // Apply proxy settings if configured
       const proxyConfig = getAppConfig().proxy
       if (proxyConfig.enabled && proxyConfig.address) {
         await session.defaultSession.setProxy({ proxyRules: proxyConfig.address })
@@ -213,21 +262,40 @@ export const claudeCodeTool: CliTool = {
         await session.defaultSession.setProxy({ proxyRules: '' })
       }
 
+      const userAgent = `claude-cli/${detectedCliVersion ?? '1.0.0'} (external, cli)`
       const res = await net.fetch('https://api.anthropic.com/api/oauth/usage', {
         headers: {
           Authorization: `Bearer ${accessToken}`,
+          'User-Agent': userAgent,
           'anthropic-beta': 'oauth-2025-04-20',
+          'x-app': 'cli',
           'Content-Type': 'application/json'
         }
       })
       if (!res.ok) {
-        const body = await res.text().catch(() => '')
-        cliLog(LOG_CH, `[usage] API returned ${res.status} ${res.statusText}: ${body}`)
+        if (res.status === 429) {
+          // Exponential backoff: use retry-after header or double the delay
+          const retryAfter = res.headers.get('retry-after')
+          const delaySec = retryAfter ? parseInt(retryAfter, 10) : 0
+          const backoffMs = delaySec > 0
+            ? delaySec * 1000
+            : Math.min(usageBackoff.delay * 2, 30 * 60 * 1000) // max 30 min
+          usageBackoff.delay = backoffMs
+          usageBackoff.until = Date.now() + backoffMs
+          cliLog(LOG_CH, `[usage] 429 rate limited, backing off ${Math.round(backoffMs / 1000)}s`)
+        } else {
+          const body = await res.text().catch(() => '')
+          cliLog(LOG_CH, `[usage] API returned ${res.status} ${res.statusText}: ${body}`)
+        }
         return null
       }
+
+      // Success — reset backoff
+      usageBackoff.delay = 60_000
+      usageBackoff.until = 0
+
       const data = (await res.json()) as Record<string, unknown>
 
-      // Build summary from whatever fields are present
       const parts: string[] = []
       const tipParts: string[] = []
       let maxUtil = 0
@@ -252,12 +320,44 @@ export const claudeCodeTool: CliTool = {
         return null
       }
 
-      const level = maxUtil >= 90 ? 'critical' : maxUtil >= 70 ? 'warn' : 'normal'
-      return {
+      const level: UsageInfo['level'] = maxUtil >= 90 ? 'critical' : maxUtil >= 70 ? 'warn' : 'normal'
+      const now = Date.now()
+      const result: UsageInfo = {
         summary: parts.join(' / '),
         tooltip: tipParts.join('\n'),
-        level
+        level,
+        fetchedAt: now
       }
+
+      // ── Write cache ──
+      try {
+        const dir = join(homedir(), '.aide')
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+
+        const bucketEntries = Object.entries(data)
+          .filter(([, v]) => v && typeof v === 'object' && 'utilization' in (v as Record<string, unknown>))
+          .map(([, v]) => v as { utilization: number | null; resets_at?: string })
+          .filter((b) => b.utilization != null)
+
+        const toCache = (b?: { utilization: number | null; resets_at?: string }): { percent: number; resets: string } => ({
+          percent: b ? Math.round(b.utilization!) : 0,
+          resets: b?.resets_at ? new Date(b.resets_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: undefined }) : ''
+        })
+
+        const cacheData = {
+          session: toCache(bucketEntries[0]),
+          week: toCache(bucketEntries[1]),
+          updatedAt: Date.now()
+        }
+
+        const tmp = cachePath + '.tmp'
+        writeFileSync(tmp, JSON.stringify(cacheData, null, 2), 'utf-8')
+        renameSync(tmp, cachePath)
+      } catch (e) {
+        cliLog(LOG_CH, `[usage] failed to write cache: ${e}`)
+      }
+
+      return result
     } catch (e) {
       cliLog(LOG_CH, `[usage] fetch error: ${e}`)
       return null

@@ -36,7 +36,7 @@ export default function EditorApp(): React.ReactElement {
       initFromConfig({
         activePanelRatio: projectSettings.activePanelRatio,
         collapsedWidthPx: projectSettings.collapsedWidthPx,
-        fileTreeWidthPx: appConfig.ui.fileTreeWidthPx,
+        fileTreeWidthPx: projectSettings.fileTreeWidth,
         logPanelExpandedHeightPx: appConfig.ui.logPanelExpandedHeightPx
       })
       useEditorStore.getState().setEditorConfig(appConfig.editor)

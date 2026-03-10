@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 export interface ProjectSettings {
   activePanelRatio: number
   collapsedWidthPx: number
+  fileTreeWidth: number
 }
 
 // Matches TreeNode in env.d.ts
@@ -79,6 +80,7 @@ export interface EditorAPI {
 
   getProjectPath: () => Promise<string | null>
   getProjectSettings: () => Promise<ProjectSettings>
+  saveFileTreeWidth: (width: number) => Promise<void>
   getConfig: () => Promise<{
     editor: EditorConfig
     ui: { fileTreeWidthPx: number; logPanelExpandedHeightPx: number }
@@ -137,7 +139,7 @@ export interface EditorAPI {
 
   // Accounts
   getAccountCurrentInfo: (toolId: string) => Promise<{ label: string; saved: boolean } | null>
-  getUsageInfo: (toolId: string) => Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical' } | null>
+  getUsageInfo: (toolId: string) => Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number } | null>
   onCliLog: (cb: (channel: string, message: string) => void) => () => void
   onAccountsChanged: (cb: () => void) => () => void
 
@@ -183,6 +185,7 @@ const editorApi: EditorAPI = {
 
   getProjectPath: () => ipcRenderer.invoke('editor:get-project-path'),
   getProjectSettings: () => ipcRenderer.invoke('editor:get-project-settings'),
+  saveFileTreeWidth: (width: number) => ipcRenderer.invoke('editor:save-file-tree-width', width),
   getConfig: () => ipcRenderer.invoke('config:get'),
 
   readDir: (dirPath: string) => ipcRenderer.invoke('filetree:read-dir', dirPath),
@@ -327,7 +330,7 @@ const editorApi: EditorAPI = {
   getAccountCurrentInfo: (toolId: string) =>
     ipcRenderer.invoke('accounts:get-current-info', toolId) as Promise<{ label: string; saved: boolean } | null>,
   getUsageInfo: (toolId: string) =>
-    ipcRenderer.invoke('usage:get-info', toolId) as Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical' } | null>,
+    ipcRenderer.invoke('usage:get-info', toolId) as Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number } | null>,
   onCliLog: (cb: (channel: string, message: string) => void): (() => void) => {
     const handler = (_e: unknown, data: { channel: string; message: string }): void =>
       cb(data.channel, data.message)

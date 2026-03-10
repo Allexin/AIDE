@@ -18,6 +18,7 @@ interface PickerAPI {
 interface ProjectSettings {
   activePanelRatio: number
   collapsedWidthPx: number
+  fileTreeWidth: number
 }
 
 // A node in the file tree — file or directory.
@@ -108,6 +109,7 @@ interface EditorAPI {
 
   getProjectPath: () => Promise<string | null>
   getProjectSettings: () => Promise<ProjectSettings>
+  saveFileTreeWidth: (width: number) => Promise<void>
   getConfig: () => Promise<{
     editor: EditorConfig
     ui: { fileTreeWidthPx: number; logPanelExpandedHeightPx: number }
@@ -166,7 +168,7 @@ interface EditorAPI {
 
   // Accounts
   getAccountCurrentInfo: (toolId: string) => Promise<{ label: string; saved: boolean } | null>
-  getUsageInfo: (toolId: string) => Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical' } | null>
+  getUsageInfo: (toolId: string) => Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number } | null>
   onCliLog: (cb: (channel: string, message: string) => void) => () => void
   onAccountsChanged: (cb: () => void) => () => void
 

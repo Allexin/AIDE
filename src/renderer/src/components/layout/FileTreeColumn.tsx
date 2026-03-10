@@ -1,9 +1,12 @@
-import React, { useState } from 'react'
+import React, { useCallback, useRef, useState } from 'react'
 import { usePanelStore } from '../../store/usePanelStore'
 import { useFileTreeStore } from '../../store/useFileTreeStore'
 import { useToastStore } from '../../store/useToastStore'
 import FileTree from '../filetree/FileTree'
 import CommitDialog from '../git/CommitDialog'
+
+const MIN_WIDTH = 120
+const MAX_WIDTH = 600
 
 const toolbarBtnStyle: React.CSSProperties = {
   background: 'none',
@@ -74,7 +77,36 @@ function FileTreeToolbar(): React.ReactElement {
 }
 
 export default function FileTreeColumn(): React.ReactElement {
-  const { fileTreeWidthPx } = usePanelStore()
+  const { fileTreeWidthPx, setFileTreeWidth } = usePanelStore()
+  const dragging = useRef(false)
+  const startX = useRef(0)
+  const startW = useRef(0)
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault()
+      dragging.current = true
+      startX.current = e.clientX
+      startW.current = fileTreeWidthPx
+      ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+    },
+    [fileTreeWidthPx]
+  )
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!dragging.current) return
+      const newW = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startW.current + e.clientX - startX.current))
+      setFileTreeWidth(newW)
+    },
+    [setFileTreeWidth]
+  )
+
+  const onPointerUp = useCallback(() => {
+    if (!dragging.current) return
+    dragging.current = false
+    window.editorApi.saveFileTreeWidth(usePanelStore.getState().fileTreeWidthPx)
+  }, [])
 
   return (
     <div
@@ -82,14 +114,36 @@ export default function FileTreeColumn(): React.ReactElement {
         width: fileTreeWidthPx,
         flexShrink: 0,
         display: 'flex',
-        flexDirection: 'column',
+        flexDirection: 'row',
         background: '#252526',
-        borderRight: '1px solid #3d3d3d',
-        overflow: 'hidden'
+        overflow: 'hidden',
+        position: 'relative'
       }}
     >
-      <FileTreeToolbar />
-      <FileTree />
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <FileTreeToolbar />
+        <FileTree />
+      </div>
+
+      {/* Resize handle */}
+      <div
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        style={{
+          width: 4,
+          cursor: 'col-resize',
+          flexShrink: 0,
+          background: dragging.current ? '#007acc' : 'transparent',
+          borderRight: '1px solid #3d3d3d'
+        }}
+        onMouseEnter={(e) => {
+          if (!dragging.current) (e.currentTarget as HTMLElement).style.background = '#007acc'
+        }}
+        onMouseLeave={(e) => {
+          if (!dragging.current) (e.currentTarget as HTMLElement).style.background = 'transparent'
+        }}
+      />
     </div>
   )
 }

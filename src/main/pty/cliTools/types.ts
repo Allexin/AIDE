@@ -87,4 +87,6 @@ export interface UsageInfo {
   tooltip: string
   /** Colour hint: normal = white, warn = yellow, critical = red. */
   level: 'normal' | 'warn' | 'critical'
+  /** Epoch ms when the data was actually fetched from the API. */
+  fetchedAt: number
 }

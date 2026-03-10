@@ -85,8 +85,9 @@ export default function StatusBar(): React.ReactElement {
   }, [refreshAccount])
 
   // ── Usage limits sensor (left, next to account) ────────────────────────────
-  const [usageInfo, setUsageInfo] = useState<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical' } | null>(null)
+  const [usageInfo, setUsageInfo] = useState<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number } | null>(null)
   const lastUsageFetch = useRef(0)
+  const [usageAge, setUsageAge] = useState('')
 
   const fetchUsage = useCallback(() => {
     lastUsageFetch.current = Date.now()
@@ -95,23 +96,38 @@ export default function StatusBar(): React.ReactElement {
     })
   }, [])
 
+  // Update age label every second based on fetchedAt from the data itself
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!usageInfo?.fetchedAt) return
+      const sec = Math.floor((Date.now() - usageInfo.fetchedAt) / 1000)
+      if (sec < 5) { setUsageAge(''); return }
+      if (sec < 60) { setUsageAge(`${sec}s ago`); return }
+      const min = Math.floor(sec / 60)
+      if (min < 60) { setUsageAge(`${min}m ago`); return }
+      const hr = Math.floor(min / 60)
+      setUsageAge(`${hr}h${min % 60}m ago`)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [usageInfo?.fetchedAt])
+
   useEffect(() => {
     fetchUsage()
 
-    // Adaptive polling: 1 min focused, 5 min unfocused
+    // Adaptive polling: 5 min focused, 20 min unfocused
     let timerId: ReturnType<typeof setInterval>
 
     const startInterval = (): void => {
       clearInterval(timerId)
-      const ms = document.hasFocus() ? 60_000 : 300_000
+      const ms = document.hasFocus() ? 300_000 : 1_200_000
       timerId = setInterval(fetchUsage, ms)
     }
 
     startInterval()
 
     const onFocus = (): void => {
-      // If >1 min since last fetch, refresh immediately
-      if (Date.now() - lastUsageFetch.current > 60_000) fetchUsage()
+      // If >5 min since last fetch, refresh immediately
+      if (Date.now() - lastUsageFetch.current > 300_000) fetchUsage()
       startInterval()
     }
     const onBlur = (): void => startInterval()
@@ -178,7 +194,7 @@ export default function StatusBar(): React.ReactElement {
             }}
             title={usageInfo.tooltip}
           >
-            {usageInfo.summary}
+            {usageInfo.summary}{usageAge && <span style={{ opacity: 0.6, marginLeft: 4 }}>({usageAge})</span>}
           </span>
         )}
       </div>

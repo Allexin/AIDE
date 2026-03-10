@@ -3,6 +3,7 @@ import { BrowserWindow } from 'electron'
 import { getAppConfig } from '../config/appConfig'
 import type { CliTool } from './cliTools/types'
 import { claudeCodeTool } from './cliTools/claudeCode'
+import { cliLog } from './cliTools/cliLogger'
 import type { SavedSessionEntry } from '../config/appState'
 
 
