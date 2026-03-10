@@ -88,37 +88,59 @@ function switchProject(newPath: string, currentWin: BrowserWindow): void {
   currentWin.destroy()
 }
 
+async function askWhereToOpen(parentWin: BrowserWindow): Promise<'current' | 'new' | null> {
+  const { response } = await dialog.showMessageBox(parentWin, {
+    type: 'question',
+    title: 'AIDE',
+    message: 'Where to open the project?',
+    buttons: ['This Window', 'New Window', 'Cancel'],
+    defaultId: 0,
+    cancelId: 2
+  })
+  if (response === 0) return 'current'
+  if (response === 1) return 'new'
+  return null
+}
+
+function openInNewWindow(projectPath: string): void {
+  if (!openProjectFn) return
+  const result = openProjectFn(projectPath)
+  if (!result.success) createPickerWindow()
+}
+
 async function handleOpenFolder(): Promise<void> {
   const focused = BrowserWindow.getFocusedWindow()
   if (!focused) return
 
   const editorWin = getEditorWindow()
   if (editorWin) {
-    await checkRunningAndProceed(editorWin, async () => {
-      const result = await dialog.showOpenDialog(editorWin, { properties: ['openDirectory'] })
-      if (result.canceled || !result.filePaths[0]) return
-      const newPath = result.filePaths[0]
-      // A1: already open → just focus, no switch
-      if (openProjectsRef?.has(newPath)) {
-        openProjectsRef.get(newPath)!.focus()
-        return
-      }
-      switchProject(newPath, editorWin)
-    })
+    const result = await dialog.showOpenDialog(editorWin, { properties: ['openDirectory'] })
+    if (result.canceled || !result.filePaths[0]) return
+    const newPath = result.filePaths[0]
+    // Already open → just focus
+    if (openProjectsRef?.has(newPath)) {
+      openProjectsRef.get(newPath)!.focus()
+      return
+    }
+    const choice = await askWhereToOpen(editorWin)
+    if (!choice) return
+    if (choice === 'new') {
+      openInNewWindow(newPath)
+    } else {
+      await checkRunningAndProceed(editorWin, async () => {
+        switchProject(newPath, editorWin)
+      })
+    }
   } else {
     const result = await dialog.showOpenDialog(focused, { properties: ['openDirectory'] })
     if (result.canceled || !result.filePaths[0]) return
     const newPath = result.filePaths[0]
-    // A1: already open → just focus, no switch
     if (openProjectsRef?.has(newPath)) {
       openProjectsRef.get(newPath)!.focus()
       return
     }
     focused.close()
-    if (openProjectFn && openProjectsRef) {
-      const openResult = openProjectFn(newPath)
-      if (!openResult.success) createPickerWindow()
-    }
+    openInNewWindow(newPath)
   }
 }
 
@@ -128,7 +150,7 @@ async function handleOpenRecent(projectPath: string): Promise<void> {
     return
   }
 
-  // A1: already open → just focus, no switch
+  // Already open → just focus
   if (openProjectsRef?.has(projectPath)) {
     openProjectsRef.get(projectPath)!.focus()
     return
@@ -139,15 +161,18 @@ async function handleOpenRecent(projectPath: string): Promise<void> {
 
   const editorWin = getEditorWindow()
   if (editorWin) {
-    await checkRunningAndProceed(editorWin, async () => {
-      switchProject(projectPath, editorWin)
-    })
+    const choice = await askWhereToOpen(editorWin)
+    if (!choice) return
+    if (choice === 'new') {
+      openInNewWindow(projectPath)
+    } else {
+      await checkRunningAndProceed(editorWin, async () => {
+        switchProject(projectPath, editorWin)
+      })
+    }
   } else {
     focused.close()
-    if (openProjectFn && openProjectsRef) {
-      const openResult = openProjectFn(projectPath)
-      if (!openResult.success) createPickerWindow()
-    }
+    openInNewWindow(projectPath)
   }
 }
 
