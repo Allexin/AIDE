@@ -152,6 +152,12 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     }
   })
 
+  // ── Editor: save log panel height to app config ────────────────────────────────
+  ipcMain.handle('editor:save-log-panel-height', (_event, height: number) => {
+    const cfg = getAppConfig()
+    updateAppConfig({ ui: { ...cfg.ui, logPanelExpandedHeightPx: height } })
+  })
+
   // ── File tree: read a single directory level ─────────────────────────────────
   // Returns sorted TreeNode[]: directories first, then files, alphabetical within each group.
   // Dot-prefixed entries are excluded. relativePath uses forward slashes for git comparison.

@@ -110,6 +110,7 @@ interface EditorAPI {
   getProjectPath: () => Promise<string | null>
   getProjectSettings: () => Promise<ProjectSettings>
   saveFileTreeWidth: (width: number) => Promise<void>
+  saveLogPanelHeight: (height: number) => Promise<void>
   getConfig: () => Promise<{
     editor: EditorConfig
     ui: { fileTreeWidthPx: number; logPanelExpandedHeightPx: number }

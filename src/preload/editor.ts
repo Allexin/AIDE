@@ -81,6 +81,7 @@ export interface EditorAPI {
   getProjectPath: () => Promise<string | null>
   getProjectSettings: () => Promise<ProjectSettings>
   saveFileTreeWidth: (width: number) => Promise<void>
+  saveLogPanelHeight: (height: number) => Promise<void>
   getConfig: () => Promise<{
     editor: EditorConfig
     ui: { fileTreeWidthPx: number; logPanelExpandedHeightPx: number }
@@ -186,6 +187,7 @@ const editorApi: EditorAPI = {
   getProjectPath: () => ipcRenderer.invoke('editor:get-project-path'),
   getProjectSettings: () => ipcRenderer.invoke('editor:get-project-settings'),
   saveFileTreeWidth: (width: number) => ipcRenderer.invoke('editor:save-file-tree-width', width),
+  saveLogPanelHeight: (height: number) => ipcRenderer.invoke('editor:save-log-panel-height', height),
   getConfig: () => ipcRenderer.invoke('config:get'),
 
   readDir: (dirPath: string) => ipcRenderer.invoke('filetree:read-dir', dirPath),

@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useRef, useState } from 'react'
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { FixedSizeList, ListChildComponentProps } from 'react-window'
 import { usePanelStore } from '../../store/usePanelStore'
 import { useLogStore, LogChannel } from '../../store/useLogStore'
@@ -198,9 +198,47 @@ function TabContextMenu({ x, y, onClear, onClose, onDismiss }: ContextMenuProps)
 
 // ── Main LogPanel component ───────────────────────────────────────────────────
 
+const LOG_MIN_HEIGHT = 100
+const LOG_MAX_HEIGHT = 600
+
 export default function LogPanel(): React.ReactElement {
-  const { logPanelExpanded, logPanelExpandedHeightPx, toggleLogPanel } = usePanelStore()
+  const { logPanelExpanded, logPanelExpandedHeightPx, setLogPanelHeight, toggleLogPanel } =
+    usePanelStore()
   const { channels, activeChannelId, setActive, stopBlink, clear, close } = useLogStore()
+
+  const dragging = useRef(false)
+  const startY = useRef(0)
+  const startH = useRef(0)
+
+  const onResizePointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault()
+      dragging.current = true
+      startY.current = e.clientY
+      startH.current = logPanelExpandedHeightPx
+      ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+    },
+    [logPanelExpandedHeightPx]
+  )
+
+  const onResizePointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!dragging.current) return
+      // dragging up = smaller clientY = bigger height
+      const newH = Math.min(
+        LOG_MAX_HEIGHT,
+        Math.max(LOG_MIN_HEIGHT, startH.current - (e.clientY - startY.current))
+      )
+      setLogPanelHeight(newH)
+    },
+    [setLogPanelHeight]
+  )
+
+  const onResizePointerUp = useCallback(() => {
+    if (!dragging.current) return
+    dragging.current = false
+    window.editorApi.saveLogPanelHeight(usePanelStore.getState().logPanelExpandedHeightPx)
+  }, [])
 
   const [contextMenu, setContextMenu] = useState<{
     x: number
@@ -239,6 +277,27 @@ export default function LogPanel(): React.ReactElement {
         overflow: 'hidden'
       }}
     >
+      {/* Resize handle — only when expanded */}
+      {logPanelExpanded && (
+        <div
+          onPointerDown={onResizePointerDown}
+          onPointerMove={onResizePointerMove}
+          onPointerUp={onResizePointerUp}
+          style={{
+            height: 4,
+            cursor: 'row-resize',
+            flexShrink: 0,
+            background: dragging.current ? '#007acc' : 'transparent'
+          }}
+          onMouseEnter={(e) => {
+            if (!dragging.current) (e.currentTarget as HTMLElement).style.background = '#007acc'
+          }}
+          onMouseLeave={(e) => {
+            if (!dragging.current) (e.currentTarget as HTMLElement).style.background = 'transparent'
+          }}
+        />
+      )}
+
       {/* Tab strip — always visible */}
       <div
         style={{

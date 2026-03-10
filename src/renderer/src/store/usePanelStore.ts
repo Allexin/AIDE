@@ -22,6 +22,7 @@ interface PanelState extends PanelConfig {
   focusEditor: () => void
   focusTerminal: () => void
   setFileTreeWidth: (width: number) => void
+  setLogPanelHeight: (height: number) => void
   toggleLogPanel: () => void
 }
 
@@ -54,5 +55,6 @@ export const usePanelStore = create<PanelState>((set) => ({
   focusTerminal: () => set({ focusedPanel: 'terminal' }),
 
   setFileTreeWidth: (width: number) => set({ fileTreeWidthPx: width }),
+  setLogPanelHeight: (height: number) => set({ logPanelExpandedHeightPx: height }),
   toggleLogPanel: () => set((state) => ({ logPanelExpanded: !state.logPanelExpanded }))
 }))
