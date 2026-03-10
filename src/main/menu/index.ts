@@ -9,7 +9,7 @@ import { createSettingsWindow } from '../windows/settings'
 import { getRunningCount, killAllProcesses } from '../toolbar/processManager'
 import { registerCommand } from './commandRegistry'
 import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
-import { listAccounts } from '../config/accountStorage'
+import { listAccounts, updateAccount as updateStoredAccount } from '../config/accountStorage'
 import { restartToolSessions } from '../pty/registry'
 
 // Injected by setupMenu — avoids circular dep with windows/editor.ts
@@ -176,6 +176,23 @@ async function handleOpenRecent(projectPath: string): Promise<void> {
   }
 }
 
+async function autoSaveCurrentCredentials(toolId: string): Promise<void> {
+  const t = getToolById(toolId)
+  if (!t?.exportCredentials || !t?.getLoginIdentifier || !t?.credentialsMatch) return
+  const [creds, identifier] = await Promise.all([
+    t.exportCredentials(),
+    t.getLoginIdentifier()
+  ])
+  if (!creds || !identifier) return
+  const saved = listAccounts(toolId)
+  for (const acc of saved) {
+    if (await t.credentialsMatch(acc.credentials)) {
+      updateStoredAccount(toolId, acc.id, identifier, creds)
+      break
+    }
+  }
+}
+
 function broadcastAccountsChanged(): void {
   if (!openProjectsRef) return
   for (const win of openProjectsRef.values()) {
@@ -234,6 +251,8 @@ export function rebuildMenu(): void {
             if (!t?.importCredentials) return
             const stored = listAccounts(tool.id).find((a) => a.id === acc.id)
             if (!stored) return
+            // Auto-save current account's latest tokens before switching away
+            await autoSaveCurrentCredentials(tool.id)
             await t.importCredentials(stored.credentials)
             restartToolSessions(tool.id)
             broadcastAccountsChanged()

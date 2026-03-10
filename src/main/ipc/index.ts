@@ -714,6 +714,24 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     return tool.getLoginIdentifier()
   })
 
+  /** Re-export current credentials into the matching saved account so tokens stay fresh. */
+  async function autoSaveCurrentCredentials(toolId: string): Promise<void> {
+    const tool = getToolById(toolId)
+    if (!tool?.exportCredentials || !tool?.getLoginIdentifier || !tool?.credentialsMatch) return
+    const [creds, identifier] = await Promise.all([
+      tool.exportCredentials(),
+      tool.getLoginIdentifier()
+    ])
+    if (!creds || !identifier) return
+    const saved = listAccounts(toolId)
+    for (const acc of saved) {
+      if (await tool.credentialsMatch(acc.credentials)) {
+        updateStoredAccount(toolId, acc.id, identifier, creds)
+        break
+      }
+    }
+  }
+
   /** Notify all editor windows that accounts changed so sensors refresh. */
   function broadcastAccountsChanged(): void {
     for (const win of openProjects.values()) {
@@ -768,6 +786,8 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     if (!tool?.importCredentials) return false
     const stored = listAccounts(toolId).find((a) => a.id === accountId)
     if (!stored) return false
+    // Auto-save current account's latest tokens before switching away
+    await autoSaveCurrentCredentials(toolId)
     await tool.importCredentials(stored.credentials)
     broadcastAccountsChanged()
     return true
