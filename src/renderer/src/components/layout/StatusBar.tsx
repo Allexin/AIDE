@@ -62,6 +62,18 @@ export default function StatusBar(): React.ReactElement {
   const [accountLabel, setAccountLabel] = useState<string | null>(null)
   const [accountSaved, setAccountSaved] = useState(true)
 
+  // ── Usage limits sensor (left, next to account) ────────────────────────────
+  const [usageInfo, setUsageInfo] = useState<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number } | null>(null)
+  const lastUsageFetch = useRef(0)
+  const [usageAge, setUsageAge] = useState('')
+
+  const fetchUsage = useCallback(() => {
+    lastUsageFetch.current = Date.now()
+    window.editorApi.getUsageInfo('claude-code').then((info) => {
+      setUsageInfo(info)
+    })
+  }, [])
+
   const refreshAccount = React.useCallback(() => {
     const toolId = 'claude-code'
     window.editorApi.getAccountCurrentInfo(toolId).then((info) => {
@@ -77,24 +89,12 @@ export default function StatusBar(): React.ReactElement {
   useEffect(() => {
     refreshAccount()
     const unsubs = [
-      window.editorApi.onAccountsChanged(refreshAccount),
+      window.editorApi.onAccountsChanged(() => { refreshAccount(); fetchUsage() }),
       window.editorApi.onTerminalSwitchTab(refreshAccount),
       window.editorApi.onTerminalNewTab(refreshAccount)
     ]
     return () => unsubs.forEach((u) => u())
-  }, [refreshAccount])
-
-  // ── Usage limits sensor (left, next to account) ────────────────────────────
-  const [usageInfo, setUsageInfo] = useState<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number } | null>(null)
-  const lastUsageFetch = useRef(0)
-  const [usageAge, setUsageAge] = useState('')
-
-  const fetchUsage = useCallback(() => {
-    lastUsageFetch.current = Date.now()
-    window.editorApi.getUsageInfo('claude-code').then((info) => {
-      setUsageInfo(info)
-    })
-  }, [])
+  }, [refreshAccount, fetchUsage])
 
   // Update age label every second based on fetchedAt from the data itself
   useEffect(() => {

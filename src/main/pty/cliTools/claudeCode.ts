@@ -64,6 +64,10 @@ const CREDENTIALS_JSON = join(homedir(), '.claude', '.credentials.json')
 /** Exponential backoff state for usage API 429 responses. */
 const usageBackoff = { delay: 60_000, until: 0 }
 
+/** When true, getUsageInfo returns a placeholder without hitting the API.
+ *  Starts true (app launch) and is set true again on importCredentials (account switch). */
+let usageSuppressed = true
+
 function usageFromCache(cached: Record<string, unknown>): UsageInfo {
   const s = (cached.session as Record<string, unknown>)?.percent as number ?? 0
   const w = (cached.week as Record<string, unknown>)?.percent as number ?? 0
@@ -173,6 +177,7 @@ export const claudeCodeTool: CliTool = {
   },
 
   async importCredentials(credentials: Record<string, unknown>): Promise<void> {
+    usageSuppressed = true
     let root: Record<string, unknown> = {}
     if (existsSync(CLAUDE_JSON)) {
       try {
@@ -215,23 +220,38 @@ export const claudeCodeTool: CliTool = {
     const CACHE_MAX_AGE = 7 * 60 * 1000 // 7 minutes
     const cachePath = join(homedir(), '.aide', 'usage.json')
 
+    // Resolve current account for cache ownership check
+    let currentAccount: string | null = null
+    try {
+      if (existsSync(CLAUDE_JSON)) {
+        const root = JSON.parse(readFileSync(CLAUDE_JSON, 'utf-8'))
+        currentAccount = root.oauthAccount?.emailAddress ?? null
+      }
+    } catch { /* ignore */ }
+
     // ── Try cached file first (shared across multiple AIDE instances) ──
     try {
       if (existsSync(cachePath)) {
         const cached = JSON.parse(readFileSync(cachePath, 'utf-8'))
-        if (cached.updatedAt && Date.now() - cached.updatedAt < CACHE_MAX_AGE) {
-          // If we're in a backoff period, always use cache
-          if (usageBackoff.until > Date.now()) {
-            return usageFromCache(cached)
-          }
+        // If cache has an account field and it doesn't match current → cache miss
+        const cacheAccount = cached.account as string | undefined
+        const accountMatch = !cacheAccount || !currentAccount || cacheAccount === currentAccount
+        if (accountMatch && cached.updatedAt && Date.now() - cached.updatedAt < CACHE_MAX_AGE) {
+          if (usageSuppressed) usageSuppressed = false
           return usageFromCache(cached)
         }
-        // Cache expired but we're in backoff — still use stale cache
-        if (usageBackoff.until > Date.now()) {
+        // Cache expired but we're in backoff and account matches — still use stale cache
+        if (accountMatch && usageBackoff.until > Date.now()) {
           return usageFromCache(cached)
         }
       }
     } catch { /* cache miss — proceed to API */ }
+
+    // After app start or account switch, skip API call (cache miss is fine — just show placeholder)
+    if (usageSuppressed) {
+      usageSuppressed = false
+      return { summary: '–', tooltip: 'not available yet', level: 'normal', fetchedAt: Date.now() }
+    }
 
     // If in backoff period and no cache, skip
     if (usageBackoff.until > Date.now()) return null
@@ -345,6 +365,7 @@ export const claudeCodeTool: CliTool = {
         })
 
         const cacheData = {
+          account: currentAccount ?? undefined,
           session: toCache(bucketEntries[0]),
           week: toCache(bucketEntries[1]),
           updatedAt: Date.now()
