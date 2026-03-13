@@ -14,6 +14,7 @@ export interface ToolbarButton {
   command: string
   cwd?: string
   autoClear?: boolean
+  sound?: boolean
   channels?: {
     stdout?: ToolbarChannel
     stderr?: ToolbarChannel
@@ -79,9 +80,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Build project',
         command: 'npm run build',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'Build Output' },
-          stderr: { name: 'Build Errors', attention: true }
+          stdout: { name: 'Build Output', flash: true },
+          stderr: { name: 'Build Errors', attention: true, flash: true }
         }
       },
       {
@@ -90,9 +92,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Run dev server',
         command: 'npm run dev',
         cwd: '${projectRoot}',
+        autoClear: false,
         channels: {
-          stdout: { name: 'Dev Server' },
-          stderr: { name: 'Dev Errors', attention: true }
+          stdout: { name: 'Dev Server', flash: true },
+          stderr: { name: 'Dev Errors', attention: true, flash: true }
         }
       },
       {
@@ -101,9 +104,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Run tests',
         command: 'npm test',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'Test Output' },
-          stderr: { name: 'Test Errors', attention: true }
+          stdout: { name: 'Test Output', flash: true },
+          stderr: { name: 'Test Errors', attention: true, flash: true }
         }
       },
       {
@@ -112,9 +116,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Install dependencies',
         command: 'npm install',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'npm install' },
-          stderr: { name: 'npm install errors', attention: true }
+          stdout: { name: 'npm install', flash: true },
+          stderr: { name: 'npm install errors', attention: true, flash: true }
         }
       }
     ]
@@ -139,9 +144,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         command:
           'cmd /c for %f in ("*.uproject") do "${unrealEngine}\\Engine\\Binaries\\DotNET\\UnrealBuildTool\\UnrealBuildTool.exe" "%~nfEditor" Win64 Development "%~ff" -rocket',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'UE Build' },
-          stderr: { name: 'UE Build Errors', attention: true }
+          stdout: { name: 'UE Build', flash: true },
+          stderr: { name: 'UE Build Errors', attention: true, flash: true }
         }
       },
       {
@@ -160,9 +166,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         command:
           "powershell -NoProfile -Command \"$dirs = @('Intermediate','DerivedDataCache','Saved','Binaries','.vs','Build','Script'); foreach ($d in $dirs) { if (Test-Path $d) { Remove-Item -Recurse -Force $d } }; if (Test-Path 'Plugins') { Get-ChildItem 'Plugins' -Directory | ForEach-Object { $i = Join-Path $_.FullName 'Intermediate'; if (Test-Path $i) { Remove-Item -Recurse -Force $i } } }; Get-ChildItem '*.sln' -ErrorAction SilentlyContinue | Remove-Item -Force\"",
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'Clear Intermediate' },
-          stderr: { name: 'Clear Intermediate Errors', attention: true }
+          stdout: { name: 'Clear Intermediate', flash: true },
+          stderr: { name: 'Clear Intermediate Errors', attention: true, flash: true }
         }
       },
       {
@@ -172,9 +179,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         command:
           'cmd /c for %f in ("*.uproject") do "${unrealEngine}\\Build\\BatchFiles\\GenerateProjectFiles.bat" -project="%~ff" -game -rocket',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'Generate VS Files' },
-          stderr: { name: 'Generate VS Files Errors', attention: true }
+          stdout: { name: 'Generate VS Files', flash: true },
+          stderr: { name: 'Generate VS Files Errors', attention: true, flash: true }
         }
       }
     ]
@@ -202,9 +210,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Run main.py',
         command: 'python main.py',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'Python Output' },
-          stderr: { name: 'Python Errors', attention: true }
+          stdout: { name: 'Python Output', flash: true },
+          stderr: { name: 'Python Errors', attention: true, flash: true }
         }
       },
       {
@@ -213,9 +222,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Install requirements',
         command: 'pip install -r requirements.txt',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'pip install' },
-          stderr: { name: 'pip errors', attention: true }
+          stdout: { name: 'pip install', flash: true },
+          stderr: { name: 'pip errors', attention: true, flash: true }
         }
       },
       {
@@ -224,9 +234,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Run pytest',
         command: 'pytest',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'pytest' },
-          stderr: { name: 'pytest errors', attention: true }
+          stdout: { name: 'pytest', flash: true },
+          stderr: { name: 'pytest errors', attention: true, flash: true }
         }
       }
     ]
@@ -241,9 +252,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Cargo build',
         command: 'cargo build',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'cargo build' },
-          stderr: { name: 'cargo build errors', attention: true }
+          stdout: { name: 'cargo build', flash: true },
+          stderr: { name: 'cargo build errors', attention: true, flash: true }
         }
       },
       {
@@ -252,9 +264,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Cargo run',
         command: 'cargo run',
         cwd: '${projectRoot}',
+        autoClear: false,
         channels: {
-          stdout: { name: 'cargo run' },
-          stderr: { name: 'cargo run errors', attention: true }
+          stdout: { name: 'cargo run', flash: true },
+          stderr: { name: 'cargo run errors', attention: true, flash: true }
         }
       },
       {
@@ -263,9 +276,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Cargo test',
         command: 'cargo test',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'cargo test' },
-          stderr: { name: 'cargo test errors', attention: true }
+          stdout: { name: 'cargo test', flash: true },
+          stderr: { name: 'cargo test errors', attention: true, flash: true }
         }
       },
       {
@@ -274,9 +288,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Cargo check',
         command: 'cargo check',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'cargo check' },
-          stderr: { name: 'cargo check errors', attention: true }
+          stdout: { name: 'cargo check', flash: true },
+          stderr: { name: 'cargo check errors', attention: true, flash: true }
         }
       }
     ]
@@ -291,9 +306,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Go build',
         command: 'go build ./...',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'go build' },
-          stderr: { name: 'go build errors', attention: true }
+          stdout: { name: 'go build', flash: true },
+          stderr: { name: 'go build errors', attention: true, flash: true }
         }
       },
       {
@@ -302,9 +318,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Go run',
         command: 'go run .',
         cwd: '${projectRoot}',
+        autoClear: false,
         channels: {
-          stdout: { name: 'go run' },
-          stderr: { name: 'go run errors', attention: true }
+          stdout: { name: 'go run', flash: true },
+          stderr: { name: 'go run errors', attention: true, flash: true }
         }
       },
       {
@@ -313,9 +330,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Go test',
         command: 'go test ./...',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'go test' },
-          stderr: { name: 'go test errors', attention: true }
+          stdout: { name: 'go test', flash: true },
+          stderr: { name: 'go test errors', attention: true, flash: true }
         }
       }
     ]
@@ -330,9 +348,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Docker build',
         command: 'docker build -t app .',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'docker build' },
-          stderr: { name: 'docker build errors', attention: true }
+          stdout: { name: 'docker build', flash: true },
+          stderr: { name: 'docker build errors', attention: true, flash: true }
         }
       },
       {
@@ -341,9 +360,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Docker Compose up',
         command: 'docker compose up',
         cwd: '${projectRoot}',
+        autoClear: false,
         channels: {
-          stdout: { name: 'docker compose up' },
-          stderr: { name: 'docker compose errors', attention: true }
+          stdout: { name: 'docker compose up', flash: true },
+          stderr: { name: 'docker compose errors', attention: true, flash: true }
         }
       },
       {
@@ -352,9 +372,10 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Docker Compose down',
         command: 'docker compose down',
         cwd: '${projectRoot}',
+        sound: true,
         channels: {
-          stdout: { name: 'docker compose down' },
-          stderr: { name: 'docker down errors', attention: true }
+          stdout: { name: 'docker compose down', flash: true },
+          stderr: { name: 'docker down errors', attention: true, flash: true }
         }
       }
     ]

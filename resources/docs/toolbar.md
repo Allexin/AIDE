@@ -42,6 +42,7 @@ When both files exist, buttons are merged. If a button `id` appears in both file
 | `command` | string | Yes | Shell command to execute |
 | `cwd` | string | No | Working directory for the command |
 | `autoClear` | boolean | No | Clear log channels on each run (default: `true`) |
+| `sound` | boolean | No | Play a completion sound when the process exits (default: `false`) |
 | `channels` | object | No | Log channel configuration (see below) |
 
 ## Variables
@@ -173,6 +174,60 @@ To keep previous output and append new runs below, set `autoClear` to `false`:
   }
 }
 ```
+
+## Sound Notification
+
+> **Strongly recommended** for operations where the user actively waits for completion — builds, compilations, test runs, deployments, code generation. Lets you switch focus to another window and get notified the moment the process finishes, without having to watch the log.
+
+Set `"sound": true` on any button to play a short chime when the process exits:
+
+```json
+{
+  "id": "build",
+  "icon": "🔨",
+  "tooltip": "Build",
+  "command": "npm run build",
+  "sound": true
+}
+```
+
+The melody is defined globally in the AIDE app config (`aide-config.json` in the user's app data folder) and applies to all projects. This makes the notification sound consistent across projects.
+
+### Customizing the Melody
+
+Edit the `toolbar.sounds.complete` array in the AIDE global config file:
+
+```
+%APPDATA%\AIDE\aide-config.json
+```
+
+Each entry is a note:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `freq` | number | Frequency in Hz (e.g. `523` = C5, `659` = E5, `784` = G5) |
+| `dur` | number | Note duration in milliseconds |
+| `delay` | number | Offset from playback start in milliseconds |
+
+Default melody (ascending major triad, C6 → E6 → G6):
+
+```json
+"toolbar": {
+  "sounds": {
+    "complete": [
+      { "freq": 1047, "dur": 120, "delay": 0   },
+      { "freq": 1319, "dur": 120, "delay": 150 },
+      { "freq": 1568, "dur": 220, "delay": 300 }
+    ]
+  }
+}
+```
+
+Notes can overlap (set same `delay`) for chords, or be staggered for an arpeggio.
+
+> **Note for AI assistants:** After editing `aide-config.json`, always tell the user that **AIDE must be restarted** for the new melody to take effect — the sound config is loaded once on startup and is not watched for changes.
+
+> **Requires restart:** Changes to `aide-config.json` are loaded once at startup. Restart AIDE after editing the melody.
 
 ## Project Type
 

@@ -26,6 +26,20 @@ export interface GitConfig {
   addBatchSize: number // files per `git add` call in commit dialog
 }
 
+export interface SoundNote {
+  freq: number   // Hz, e.g. 523 = C5
+  dur: number    // note duration, ms
+  delay: number  // offset from playback start, ms
+}
+
+export interface ToolbarSoundsConfig {
+  complete: SoundNote[]
+}
+
+export interface ToolbarAppConfig {
+  sounds: ToolbarSoundsConfig
+}
+
 export interface ProxyConfig {
   enabled: boolean
   address: string        // e.g. "http://127.0.0.1:1080"
@@ -38,6 +52,7 @@ export interface AppConfig {
   sessions: SessionsConfig
   git: GitConfig
   proxy: ProxyConfig
+  toolbar: ToolbarAppConfig
 }
 
 const DEFAULTS: AppConfig = {
@@ -65,6 +80,15 @@ const DEFAULTS: AppConfig = {
     enabled: false,
     address: '',
     useForCliTools: true
+  },
+  toolbar: {
+    sounds: {
+      complete: [
+        { freq: 1047, dur: 120, delay: 0   },
+        { freq: 1319, dur: 120, delay: 150 },
+        { freq: 1568, dur: 220, delay: 300 }
+      ]
+    }
   }
 }
 
@@ -85,7 +109,12 @@ export function initAppConfig(): void {
         ui: { ...DEFAULTS.ui, ...(parsed.ui ?? {}) },
         sessions: { ...DEFAULTS.sessions, ...(parsed.sessions ?? {}) },
         git: { ...DEFAULTS.git, ...(parsed.git ?? {}) },
-        proxy: { ...DEFAULTS.proxy, ...(parsed.proxy ?? {}) }
+        proxy: { ...DEFAULTS.proxy, ...(parsed.proxy ?? {}) },
+        toolbar: {
+          sounds: {
+            complete: parsed.toolbar?.sounds?.complete ?? DEFAULTS.toolbar.sounds.complete
+          }
+        }
       }
     } catch {
       config = structuredClone(DEFAULTS)

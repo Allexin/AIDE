@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { useToolbarStore } from '../../store/useToolbarStore'
 import { logManager } from '../../store/useLogStore'
+import { playMelody } from '../../utils/sound'
+import type { SoundNote } from '../../utils/sound'
 
 // Helper to check if an item is a splitter
 function isSplitter(item: ToolbarItem): item is ToolbarSplitter {
@@ -791,6 +793,13 @@ export default function MainToolbar(): React.ReactElement {
   const [canScrollLeft, setCanScrollLeft] = useState(false)
   const [canScrollRight, setCanScrollRight] = useState(false)
   const dragIndexRef = useRef<number | null>(null)
+  const buttonsRef = useRef<ToolbarItem[]>(buttons)
+  const completeSoundsRef = useRef<SoundNote[]>([])
+
+  // Keep buttonsRef current for use inside stable useEffect callbacks
+  useEffect(() => {
+    buttonsRef.current = buttons
+  }, [buttons])
 
   // ── Style injection ──
   useEffect(() => {
@@ -818,6 +827,10 @@ export default function MainToolbar(): React.ReactElement {
       }
     })
 
+    window.editorApi.getConfig().then((cfg) => {
+      completeSoundsRef.current = cfg.toolbar?.sounds?.complete ?? []
+    })
+
     window.editorApi.getToolbarPresets().then(setPresetGroups)
 
     const unsubConfigUpdated = window.editorApi.onToolbarConfigUpdated((newButtons) => {
@@ -835,6 +848,12 @@ export default function MainToolbar(): React.ReactElement {
     })
     const unsubExited = window.editorApi.onToolbarProcessExited(({ buttonId }) => {
       markStopped(buttonId)
+      const btn = buttonsRef.current.find(
+        (item): item is ToolbarButton => !isSplitter(item) && item.id === buttonId
+      )
+      if (btn?.sound && completeSoundsRef.current.length > 0) {
+        playMelody(completeSoundsRef.current)
+      }
     })
 
     return () => {

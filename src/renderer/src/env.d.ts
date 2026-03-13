@@ -70,6 +70,7 @@ interface EditorConfig {
 interface ToolbarChannel {
   name: string
   attention?: boolean
+  flash?: boolean
 }
 
 interface ToolbarButton {
@@ -78,6 +79,8 @@ interface ToolbarButton {
   tooltip: string
   command: string
   cwd?: string
+  autoClear?: boolean
+  sound?: boolean
   channels?: {
     stdout?: ToolbarChannel
     stderr?: ToolbarChannel
@@ -114,6 +117,7 @@ interface EditorAPI {
   getConfig: () => Promise<{
     editor: EditorConfig
     ui: { fileTreeWidthPx: number; logPanelExpandedHeightPx: number }
+    toolbar: { sounds: { complete: Array<{ freq: number; dur: number; delay: number }> } }
   }>
 
   // File tree
