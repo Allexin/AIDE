@@ -795,6 +795,7 @@ export default function MainToolbar(): React.ReactElement {
   const dragIndexRef = useRef<number | null>(null)
   const buttonsRef = useRef<ToolbarItem[]>(buttons)
   const completeSoundsRef = useRef<SoundNote[]>([])
+  const errorSoundsRef = useRef<SoundNote[]>([])
 
   // Keep buttonsRef current for use inside stable useEffect callbacks
   useEffect(() => {
@@ -829,6 +830,7 @@ export default function MainToolbar(): React.ReactElement {
 
     window.editorApi.getConfig().then((cfg) => {
       completeSoundsRef.current = cfg.toolbar?.sounds?.complete ?? []
+      errorSoundsRef.current = cfg.toolbar?.sounds?.error ?? []
     })
 
     window.editorApi.getToolbarPresets().then(setPresetGroups)
@@ -846,13 +848,15 @@ export default function MainToolbar(): React.ReactElement {
         for (const ch of clearChannels) logManager.clear(ch)
       }
     })
-    const unsubExited = window.editorApi.onToolbarProcessExited(({ buttonId }) => {
+    const unsubExited = window.editorApi.onToolbarProcessExited(({ buttonId, exitCode }) => {
       markStopped(buttonId)
       const btn = buttonsRef.current.find(
         (item): item is ToolbarButton => !isSplitter(item) && item.id === buttonId
       )
-      if (btn?.sound && completeSoundsRef.current.length > 0) {
-        playMelody(completeSoundsRef.current)
+      if (btn?.sound) {
+        const failed = exitCode !== null && exitCode !== 0
+        const notes = failed ? errorSoundsRef.current : completeSoundsRef.current
+        if (notes.length > 0) playMelody(notes)
       }
     })
 

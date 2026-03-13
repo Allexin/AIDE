@@ -85,7 +85,7 @@ export interface EditorAPI {
   getConfig: () => Promise<{
     editor: EditorConfig
     ui: { fileTreeWidthPx: number; logPanelExpandedHeightPx: number }
-    toolbar: { sounds: { complete: Array<{ freq: number; dur: number; delay: number }> } }
+    toolbar: { sounds: { complete: Array<{ freq: number; dur: number; delay: number }>; error: Array<{ freq: number; dur: number; delay: number }> } }
   }>
 
   // File tree

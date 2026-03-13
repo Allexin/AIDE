@@ -209,7 +209,14 @@ Each entry is a note:
 | `dur` | number | Note duration in milliseconds |
 | `delay` | number | Offset from playback start in milliseconds |
 
-Default melody (ascending major triad, C6 → E6 → G6):
+Two melodies are defined — one for success (exit code 0) and one for failure (non-zero exit code):
+
+| Key | When played |
+|-----|-------------|
+| `complete` | Process exited with code `0` |
+| `error` | Process exited with non-zero code or was killed |
+
+Default melodies:
 
 ```json
 "toolbar": {
@@ -218,6 +225,10 @@ Default melody (ascending major triad, C6 → E6 → G6):
       { "freq": 1047, "dur": 120, "delay": 0   },
       { "freq": 1319, "dur": 120, "delay": 150 },
       { "freq": 1568, "dur": 220, "delay": 300 }
+    ],
+    "error": [
+      { "freq": 880, "dur": 180, "delay": 0   },
+      { "freq": 698, "dur": 300, "delay": 200 }
     ]
   }
 }
