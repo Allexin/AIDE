@@ -4,6 +4,7 @@ import { join } from 'path'
 export interface ToolbarChannel {
   name: string
   attention?: boolean
+  flash?: boolean
 }
 
 export interface ToolbarButton {
@@ -12,6 +13,7 @@ export interface ToolbarButton {
   tooltip: string
   command: string
   cwd?: string
+  autoClear?: boolean
   channels?: {
     stdout?: ToolbarChannel
     stderr?: ToolbarChannel

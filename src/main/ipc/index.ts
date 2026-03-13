@@ -2,7 +2,7 @@ import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { existsSync, readdirSync, readFileSync, writeFileSync, statSync, promises as fsAsync } from 'fs'
 import { join } from 'path'
 import { spawn } from 'child_process'
-import { removeRecentProject, getAppState, saveOpenSessions, loadOpenSessions } from '../config/appState'
+import { removeRecentProject, getAppState, loadOpenSessions, clearOpenSessions } from '../config/appState'
 import { getAppConfig, updateAppConfig } from '../config/appConfig'
 import type { ProxyConfig } from '../config/appConfig'
 import { readProjectSettings, writeProjectSettings } from '../config/projectConfig'
@@ -221,12 +221,14 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
       if (win === senderWin) { projectPath = p; break }
     }
     const saved = projectPath ? loadOpenSessions(projectPath) : null
-    return ptyMgr.createInitialTabs(saved?.tabs ?? undefined)
-  })
+    const result = await ptyMgr.createInitialTabs(saved?.tabs ?? undefined, saved?.activeSessionId ?? null)
 
-  // ── State: save open sessions for a project ────────────────────────────────
-  ipcMain.on('state:save-open-sessions', (_event, data: { projectPath: string; tabs: Array<{ sessionId: string; title: string }>; activeSessionId: string | null }) => {
-    saveOpenSessions(data.projectPath, { tabs: data.tabs, activeSessionId: data.activeSessionId })
+    // Clear saved sessions after restore (they're now live in PtyManager)
+    if (projectPath && saved) {
+      clearOpenSessions(projectPath)
+    }
+
+    return result
   })
 
   // ── Terminal: create new session tab ─────────────────────────────────────────

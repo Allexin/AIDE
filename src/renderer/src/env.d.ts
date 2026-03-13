@@ -156,9 +156,9 @@ interface EditorAPI {
   toolbarKillButton: (buttonId: string) => Promise<void>
   toolbarKillRestartButton: (buttonId: string) => Promise<void>
   onToolbarOutput: (
-    cb: (payload: { channelName: string; line: string; attention: boolean }) => void
+    cb: (payload: { channelName: string; line: string; attention: boolean; flash: boolean }) => void
   ) => () => void
-  onToolbarProcessStarted: (cb: (payload: { buttonId: string }) => void) => () => void
+  onToolbarProcessStarted: (cb: (payload: { buttonId: string; clearChannels?: string[] }) => void) => () => void
   onToolbarProcessExited: (
     cb: (payload: { buttonId: string; exitCode: number | null }) => void
   ) => () => void

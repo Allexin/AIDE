@@ -41,6 +41,7 @@ When both files exist, buttons are merged. If a button `id` appears in both file
 | `tooltip` | string | Yes | Text shown on hover |
 | `command` | string | Yes | Shell command to execute |
 | `cwd` | string | No | Working directory for the command |
+| `autoClear` | boolean | No | Clear log channels on each run (default: `true`) |
 | `channels` | object | No | Log channel configuration (see below) |
 
 ## Variables
@@ -149,8 +150,29 @@ The `channels` object controls how process output appears in the log panel:
 |-------|------|-------------|
 | `name` | string | Display name of the log channel |
 | `attention` | boolean | If true, the log panel auto-expands when output arrives |
+| `flash` | boolean | If true, the log tab briefly flashes when new output arrives (default: `false`) |
 
 If `channels` is omitted, output is not routed to the log panel.
+
+## Auto-Clear
+
+By default (`autoClear: true`), both stdout and stderr log channels are cleared each time a button process starts. This keeps the log panel showing only the output from the latest run.
+
+To keep previous output and append new runs below, set `autoClear` to `false`:
+
+```json
+{
+  "id": "dev-server",
+  "icon": "▶",
+  "tooltip": "Dev Server",
+  "command": "npm run dev",
+  "autoClear": false,
+  "channels": {
+    "stdout": { "name": "Dev Server" },
+    "stderr": { "name": "Dev Errors", "attention": true }
+  }
+}
+```
 
 ## Project Type
 

@@ -74,3 +74,8 @@ export function saveOpenSessions(projectPath: string, data: ProjectOpenSessions)
 export function loadOpenSessions(projectPath: string): ProjectOpenSessions | null {
   return state.openSessions[projectPath] ?? null
 }
+
+export function clearOpenSessions(projectPath: string): void {
+  delete state.openSessions[projectPath]
+  saveAppState()
+}

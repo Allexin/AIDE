@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, renameSync } from 'fs'
+import { execFile } from 'child_process'
 import { homedir } from 'os'
 import { join } from 'path'
 import { net, session } from 'electron'
@@ -381,6 +382,43 @@ export const claudeCodeTool: CliTool = {
       return result
     } catch (e) {
       cliLog(LOG_CH, `[usage] fetch error: ${e}`)
+      return null
+    }
+  },
+
+  async resolveOwnerPid(candidatePids: number[]): Promise<number | null> {
+    if (candidatePids.length === 0) return null
+    try {
+      const json = await new Promise<string>((resolve, reject) => {
+        execFile(
+          'powershell.exe',
+          [
+            '-NoProfile',
+            '-Command',
+            'Get-CimInstance Win32_Process -Filter "name=\'claude.exe\'" | Select-Object ProcessId,ParentProcessId | ConvertTo-Json'
+          ],
+          { timeout: 5000 },
+          (err, stdout) => {
+            if (err) reject(err)
+            else resolve(stdout.trim())
+          }
+        )
+      })
+      if (!json) return null
+      const parsed = JSON.parse(json)
+      // PowerShell returns a single object (not array) when there's only one match
+      const procs: Array<{ ProcessId: number; ParentProcessId: number }> = Array.isArray(parsed)
+        ? parsed
+        : [parsed]
+      const pidSet = new Set(candidatePids)
+      for (const proc of procs) {
+        if (pidSet.has(proc.ParentProcessId)) {
+          return proc.ParentProcessId
+        }
+      }
+      return null
+    } catch (e) {
+      cliLog(LOG_CH, `[resolveOwnerPid] failed: ${e}`)
       return null
     }
   },

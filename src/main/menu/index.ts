@@ -112,9 +112,13 @@ async function handleOpenFolder(): Promise<void> {
   const focused = BrowserWindow.getFocusedWindow()
   if (!focused) return
 
-  const editorWin = getEditorWindow()
-  if (editorWin) {
-    const result = await dialog.showOpenDialog(editorWin, { properties: ['openDirectory'] })
+  // Find focused editor window (not just the first one in the map)
+  const focusedEditorWin = openProjectsRef
+    ? [...openProjectsRef.values()].find((w) => w.id === focused.id) ?? null
+    : null
+
+  if (focusedEditorWin) {
+    const result = await dialog.showOpenDialog(focusedEditorWin, { properties: ['openDirectory'] })
     if (result.canceled || !result.filePaths[0]) return
     const newPath = result.filePaths[0]
     // Already open → just focus
@@ -122,13 +126,13 @@ async function handleOpenFolder(): Promise<void> {
       openProjectsRef.get(newPath)!.focus()
       return
     }
-    const choice = await askWhereToOpen(editorWin)
+    const choice = await askWhereToOpen(focusedEditorWin)
     if (!choice) return
     if (choice === 'new') {
       openInNewWindow(newPath)
     } else {
-      await checkRunningAndProceed(editorWin, async () => {
-        switchProject(newPath, editorWin)
+      await checkRunningAndProceed(focusedEditorWin, async () => {
+        switchProject(newPath, focusedEditorWin)
       })
     }
   } else {
@@ -159,15 +163,19 @@ async function handleOpenRecent(projectPath: string): Promise<void> {
   const focused = BrowserWindow.getFocusedWindow()
   if (!focused) return
 
-  const editorWin = getEditorWindow()
-  if (editorWin) {
-    const choice = await askWhereToOpen(editorWin)
+  // Find focused editor window (not just the first one in the map)
+  const focusedEditorWin = openProjectsRef
+    ? [...openProjectsRef.values()].find((w) => w.id === focused.id) ?? null
+    : null
+
+  if (focusedEditorWin) {
+    const choice = await askWhereToOpen(focusedEditorWin)
     if (!choice) return
     if (choice === 'new') {
       openInNewWindow(projectPath)
     } else {
-      await checkRunningAndProceed(editorWin, async () => {
-        switchProject(projectPath, editorWin)
+      await checkRunningAndProceed(focusedEditorWin, async () => {
+        switchProject(projectPath, focusedEditorWin)
       })
     }
   } else {

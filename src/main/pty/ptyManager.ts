@@ -1,5 +1,7 @@
 import * as nodePty from 'node-pty'
 import { BrowserWindow } from 'electron'
+import { join } from 'path'
+import { appendFileSync } from 'fs'
 import { getAppConfig } from '../config/appConfig'
 import type { CliTool } from './cliTools/types'
 import { claudeCodeTool } from './cliTools/claudeCode'
@@ -15,7 +17,6 @@ export interface SessionTabInfo {
 
 interface PtyTab extends SessionTabInfo {
   pty: nodePty.IPty
-  stopDirWatch?: () => void
 }
 
 interface HealthCheck {
@@ -40,6 +41,10 @@ export class PtyManager {
   // Per-tab buffer for incomplete OSC sequences split across PTY data chunks
   private titleBufs = new Map<string, string>()
   private healthChecks = new Map<string, HealthCheck>()
+  // Shared watcher for new session files (lives for the lifetime of PtyManager)
+  private sharedWatcher: (() => void) | null = null
+  // Cache of titles extracted from OSC sequences (main process source of truth)
+  private titleCache = new Map<string, string>()
 
   constructor(win: BrowserWindow, projectPath: string, tool: CliTool = claudeCodeTool) {
     this.win = win
@@ -47,17 +52,29 @@ export class PtyManager {
     this.tool = tool
   }
 
+  private debugLog(msg: string): void {
+    try {
+      const dbg = join(this.projectPath, '.aide', 'session-debug.log')
+      appendFileSync(dbg, `${new Date().toISOString()} ${msg}\n`)
+    } catch {}
+  }
+
   /** Called on project open: restore saved sessions, or resume most recent, or start fresh. */
-  async createInitialTabs(saved?: SavedSessionEntry[]): Promise<{ tabs: SessionTabInfo[]; activeSessionId: string | null }> {
+  async createInitialTabs(saved?: SavedSessionEntry[], activeSessionId?: string | null): Promise<{ tabs: SessionTabInfo[]; activeSessionId: string | null }> {
     await this.tool.prepareProject?.(this.projectPath)
 
     // If we have saved sessions from last run, restore them
     if (saved && saved.length > 0) {
+      this.debugLog(`=== RESTORE: ${saved.length} saved sessions ===`)
+      for (const s of saved) this.debugLog(`  saved: ${s.sessionId} "${s.title}"`)
+      this.debugLog(`  activeSessionId: ${activeSessionId}`)
+
       const tabInfos: SessionTabInfo[] = []
       const restoreTabIds: string[] = []
 
       for (const entry of saved) {
         const info = this.spawnResumeTab(entry.sessionId, true) // silent = true for restore
+        this.debugLog(`  spawned ${info.tabId} for session ${entry.sessionId}`)
         tabInfos.push({ ...info, title: entry.title })
         restoreTabIds.push(info.tabId)
       }
@@ -65,7 +82,7 @@ export class PtyManager {
       // Wait for all health checks, then silently close dead tabs
       this.handleRestoreDeadSessions(restoreTabIds)
 
-      return { tabs: tabInfos, activeSessionId: saved[0].sessionId }
+      return { tabs: tabInfos, activeSessionId: activeSessionId ?? saved[0].sessionId }
     }
 
     // Fallback: resume most recent session or start fresh
@@ -169,12 +186,12 @@ export class PtyManager {
     } catch {}
   }
 
-  /** Close a single tab: kill PTY, clean up watchers. */
+  /** Close a single tab: kill PTY, clean up caches. */
   closeTab(tabId: string): void {
     const tab = this.tabs.get(tabId)
     if (!tab) return
-    tab.stopDirWatch?.()
     this.titleBufs.delete(tabId)
+    this.titleCache.delete(tabId)
     this.healthChecks.delete(tabId)
     try {
       tab.pty.kill()
@@ -213,8 +230,9 @@ export class PtyManager {
   }
 
   disposeAll(): void {
+    this.sharedWatcher?.()
+    this.sharedWatcher = null
     for (const tab of this.tabs.values()) {
-      tab.stopDirWatch?.()
       this.titleBufs.delete(tab.tabId)
       this.healthChecks.delete(tab.tabId)
       try {
@@ -222,6 +240,47 @@ export class PtyManager {
       } catch {}
     }
     this.tabs.clear()
+    this.titleCache.clear()
+  }
+
+  /** Return ordered list of active sessions (for save-on-close and reset). */
+  getActiveSessions(): { tabId: string; sessionId: string | null; title: string }[] {
+    return Array.from(this.tabs.values()).map((t) => ({
+      tabId: t.tabId,
+      sessionId: t.sessionId,
+      title: this.titleCache.get(t.tabId) ?? 'Claude Code'
+    }))
+  }
+
+  /** Ensure the shared session-file watcher is running. */
+  private ensureSharedWatcher(): void {
+    if (this.sharedWatcher) return
+    this.sharedWatcher = this.tool.watchForNewSessions(this.projectPath, (session) => {
+      this.assignNewSession(session.sessionId)
+    })
+  }
+
+  /** Assign a newly appeared sessionId to the correct tab.
+   *  Always uses PID verification to avoid capturing sessions from external claude processes.
+   */
+  private async assignNewSession(sessionId: string): Promise<void> {
+    const tabsArr = Array.from(this.tabs.values())
+    if (tabsArr.length === 0) return
+
+    if (this.tool.resolveOwnerPid) {
+      const candidatePids = tabsArr.map((t) => t.pty.pid)
+      const ownerPid = await this.tool.resolveOwnerPid(candidatePids)
+      if (ownerPid !== null) {
+        const tab = tabsArr.find((t) => t.pty.pid === ownerPid)
+        if (tab) {
+          this.debugLog(`assignNewSession: ${sessionId} → ${tab.tabId} (pid ${ownerPid})`)
+          tab.sessionId = sessionId
+          this.send('terminal:tab-session-id', { tabId: tab.tabId, sessionId })
+        }
+      } else {
+        this.debugLog(`assignNewSession: ${sessionId} — no owner found among our PIDs, ignoring (external claude?)`)
+      }
+    }
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
@@ -232,22 +291,11 @@ export class PtyManager {
     const tab: PtyTab = { tabId, sessionId: null, pty }
     this.tabs.set(tabId, tab)
 
+    this.ensureSharedWatcher()
+
     setTimeout(() => {
       if (!this.tabs.has(tabId)) return
       pty.write(`${this.tool.newSessionCommand()}\r`)
-
-      // Watch for the new session file (gives us the session ID)
-      tab.stopDirWatch = this.tool.watchForNewSessions(this.projectPath, (session) => {
-        const t = this.tabs.get(tabId)
-        if (!t || t.sessionId) return // already registered
-
-        t.sessionId = session.sessionId
-        this.send('terminal:tab-session-id', { tabId, sessionId: session.sessionId })
-
-        // Stop watching — we got our session
-        t.stopDirWatch?.()
-        t.stopDirWatch = undefined
-      })
     }, 500)
 
     this.startHealthCheck(tabId)
@@ -260,6 +308,8 @@ export class PtyManager {
     const pty = this.spawnPty(tabId)
     const tab: PtyTab = { tabId, sessionId, pty }
     this.tabs.set(tabId, tab)
+
+    this.ensureSharedWatcher()
 
     setTimeout(() => {
       if (!this.tabs.has(tabId)) return
@@ -285,6 +335,7 @@ export class PtyManager {
     if (m?.[1]) {
       const title = m[1].trim()
       if (title) {
+        this.titleCache.set(tabId, title)
         this.send('terminal:tab-title', { tabId, title })
       }
       this.titleBufs.delete(tabId)
@@ -350,6 +401,11 @@ const result = this.tool.checkStartupHealth(hc.buf, elapsed)
     if (result === 'pending') return
 
     hc.resolved = true
+    this.debugLog(`  healthCheck ${tabId}: ${result} (elapsed=${elapsed}ms, silent=${hc.silent})`)
+    if (result === 'dead') {
+      const tab = this.tabs.get(tabId)
+      this.debugLog(`  DEAD session: tabId=${tabId} sessionId=${tab?.sessionId} buf_start="${hc.buf.slice(0, 200).replace(/\n/g, '\\n')}"`)
+    }
     if (result === 'ok') {
       this.send('terminal:tab-ready', { tabId })
     } else if (!hc.silent) {

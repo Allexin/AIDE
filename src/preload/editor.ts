@@ -127,9 +127,9 @@ export interface EditorAPI {
   toolbarKillButton: (buttonId: string) => Promise<void>
   toolbarKillRestartButton: (buttonId: string) => Promise<void>
   onToolbarOutput: (
-    cb: (payload: { channelName: string; line: string; attention: boolean }) => void
+    cb: (payload: { channelName: string; line: string; attention: boolean; flash: boolean }) => void
   ) => () => void
-  onToolbarProcessStarted: (cb: (payload: { buttonId: string }) => void) => () => void
+  onToolbarProcessStarted: (cb: (payload: { buttonId: string; clearChannels?: string[] }) => void) => () => void
   onToolbarProcessExited: (
     cb: (payload: { buttonId: string; exitCode: number | null }) => void
   ) => () => void
@@ -298,14 +298,14 @@ const editorApi: EditorAPI = {
   onToolbarOutput: (cb) => {
     const handler = (
       _: unknown,
-      payload: { channelName: string; line: string; attention: boolean }
+      payload: { channelName: string; line: string; attention: boolean; flash: boolean }
     ): void => cb(payload)
     ipcRenderer.on('toolbar:output', handler)
     return () => ipcRenderer.removeListener('toolbar:output', handler)
   },
 
   onToolbarProcessStarted: (cb) => {
-    const handler = (_: unknown, payload: { buttonId: string }): void => cb(payload)
+    const handler = (_: unknown, payload: { buttonId: string; clearChannels?: string[] }): void => cb(payload)
     ipcRenderer.on('toolbar:process-started', handler)
     return () => ipcRenderer.removeListener('toolbar:process-started', handler)
   },

@@ -824,11 +824,14 @@ export default function MainToolbar(): React.ReactElement {
       setButtons(newButtons)
     })
 
-    const unsubOutput = window.editorApi.onToolbarOutput(({ channelName, line, attention }) => {
-      logManager.append(channelName, line, attention)
+    const unsubOutput = window.editorApi.onToolbarOutput(({ channelName, line, attention, flash }) => {
+      logManager.append(channelName, line, attention, flash)
     })
-    const unsubStarted = window.editorApi.onToolbarProcessStarted(({ buttonId }) => {
+    const unsubStarted = window.editorApi.onToolbarProcessStarted(({ buttonId, clearChannels }) => {
       markRunning(buttonId)
+      if (clearChannels) {
+        for (const ch of clearChannels) logManager.clear(ch)
+      }
     })
     const unsubExited = window.editorApi.onToolbarProcessExited(({ buttonId }) => {
       markStopped(buttonId)

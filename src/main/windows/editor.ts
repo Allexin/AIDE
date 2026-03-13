@@ -1,11 +1,11 @@
 import { BrowserWindow, shell, dialog } from 'electron'
 import { join, basename } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, appendFileSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { checkAndAcquireLock, releaseLock } from '../lock'
 import { ensureAideDirectory } from '../config/projectConfig'
 import { ensureDefaultToolbar, deployToolbarDocs } from '../config/toolbarConfig'
-import { addRecentProject } from '../config/appState'
+import { addRecentProject, saveOpenSessions } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { startProjectWatcher, stopProjectWatcher } from '../filetree/watcher'
 import { PtyManager } from '../pty/ptyManager'
@@ -127,6 +127,25 @@ export function openProjectAndTrack(
   })
 
   editorWin.on('closed', () => {
+    // Save active sessions before disposing (must be before disposeAll clears tabs)
+    const sessions = ptyMgr.getActiveSessions()
+    const toSave = sessions
+      .filter((s) => s.sessionId)
+      .map((s) => ({ sessionId: s.sessionId!, title: s.title }))
+
+    // DEBUG: log what we're saving
+    const dbg = join(projectPath, '.aide', 'session-debug.log')
+    try {
+      appendFileSync(dbg, `\n=== SAVE ${new Date().toISOString()} ===\nall tabs: ${JSON.stringify(sessions, null, 2)}\ntoSave: ${JSON.stringify(toSave, null, 2)}\n`)
+    } catch {}
+
+    if (toSave.length > 0) {
+      saveOpenSessions(projectPath, {
+        tabs: toSave,
+        activeSessionId: toSave[0]?.sessionId ?? null
+      })
+    }
+
     stopToolbarWatcher()
     disposeProcessManager(editorWin)
     ptyMgr.disposeAll()

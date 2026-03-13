@@ -48,6 +48,13 @@ export interface CliTool {
     elapsedMs: number
   ): 'ok' | 'dead' | 'pending'
 
+  /** Given a set of candidate PTY PIDs (powershell), resolve which one
+   *  is the parent of a currently running CLI process.
+   *  Used when multiple tabs exist and a new session file appears.
+   *  Returns the matching PTY PID or null.
+   */
+  resolveOwnerPid?(candidatePids: number[]): Promise<number | null>
+
   /** Check if the user is currently logged in to this CLI tool. */
   isLoggedIn?(): Promise<boolean>
 

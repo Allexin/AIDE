@@ -9,13 +9,15 @@ export interface LogChannel {
   lines: string[]
   attention: boolean  // true → blink tab when new content arrives
   blinking: boolean   // currently blinking (stops when user clicks the tab)
+  flashEnabled: boolean // true → brief tab flash on new content
+  flashKey: number      // incremented on each append — drives brief tab flash
 }
 
 interface LogState {
   channels: LogChannel[]
   activeChannelId: string | null
 
-  append: (channelId: string, line: string, attention?: boolean) => void
+  append: (channelId: string, line: string, attention?: boolean, flash?: boolean) => void
   clear: (channelId: string) => void
   close: (channelId: string) => void
   setActive: (channelId: string) => void
@@ -26,7 +28,7 @@ export const useLogStore = create<LogState>((set) => ({
   channels: [],
   activeChannelId: null,
 
-  append: (channelId: string, line: string, attention = false) => {
+  append: (channelId: string, line: string, attention = false, flash = false) => {
     const incoming = stripAnsi(line).split('\n')
     set((state) => {
       const idx = state.channels.findIndex((c) => c.id === channelId)
@@ -34,7 +36,11 @@ export const useLogStore = create<LogState>((set) => ({
       if (idx >= 0) {
         // Existing channel — append lines, enforce buffer cap
         const ch = state.channels[idx]
-        let newLines = [...ch.lines, ...incoming]
+        // Timestamp header when first line arrives into an empty channel
+        const prefix = ch.lines.length === 0
+          ? [`[${new Date().toLocaleString()}]`]
+          : []
+        let newLines = [...ch.lines, ...prefix, ...incoming]
 
         if (newLines.length > MAX_LINES) {
           // Drop oldest entries to stay at limit
@@ -49,16 +55,19 @@ export const useLogStore = create<LogState>((set) => ({
           ...ch,
           lines: newLines,
           // Trigger blink only if this channel has attention:true
-          blinking: ch.attention ? true : ch.blinking
+          blinking: ch.attention ? true : ch.blinking,
+          flashKey: ch.flashKey + 1
         }
         return { channels: state.channels.map((c, i) => (i === idx ? updated : c)) }
       } else {
         // New channel — auto-create on first append
         const newChannel: LogChannel = {
           id: channelId,
-          lines: incoming,
+          lines: [`[${new Date().toLocaleString()}]`, ...incoming],
           attention,
-          blinking: attention // blink immediately if attention channel
+          blinking: attention, // blink immediately if attention channel
+          flashEnabled: flash,
+          flashKey: 1
         }
         return { channels: [...state.channels, newChannel] }
       }
@@ -97,8 +106,8 @@ export const useLogStore = create<LogState>((set) => ({
 
 // Convenience singleton for non-component code (stores, IPC handlers, etc.)
 export const logManager = {
-  append: (channelId: string, line: string, attention = false): void => {
-    useLogStore.getState().append(channelId, line, attention)
+  append: (channelId: string, line: string, attention = false, flash = false): void => {
+    useLogStore.getState().append(channelId, line, attention, flash)
   },
   clear: (channelId: string): void => {
     useLogStore.getState().clear(channelId)

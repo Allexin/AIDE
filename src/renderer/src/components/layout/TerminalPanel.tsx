@@ -286,22 +286,8 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
     })
   }, [initialized, initWithTab, initWithTabs])
 
-  // Persist open sessions on tab changes (debounced)
-  useEffect(() => {
-    if (!initialized || !projectPath) return
-    const timer = setTimeout(() => {
-      const currentTabs = useSessionStore.getState().tabs
-      const currentActive = useSessionStore.getState().activeTabId
-      const toSave = currentTabs
-        .filter((t) => t.sessionId)
-        .map((t) => ({ sessionId: t.sessionId!, title: t.slug }))
-      if (toSave.length > 0) {
-        const activeSession = currentTabs.find((t) => t.tabId === currentActive)?.sessionId ?? null
-        window.editorApi.saveOpenSessions(projectPath, toSave, activeSession)
-      }
-    }, 500)
-    return () => clearTimeout(timer)
-  }, [initialized, projectPath, tabs, activeTabId])
+  // Sessions are now saved on window close from the main process (editor.ts)
+  // No debounced persistence needed here
 
   // Listen for push events from main process
   useEffect(() => {
@@ -557,7 +543,7 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 // ── TabButton ─────────────────────────────────────────────────────────────────
 
 interface TabButtonProps {
-  tab: { tabId: string; slug: string; exited: boolean; attention: boolean }
+  tab: { tabId: string; sessionId: string | null; slug: string; exited: boolean; attention: boolean }
   isActive: boolean
   canClose: boolean
   onSelect: () => void
@@ -590,7 +576,7 @@ function TabButton({ tab, isActive, canClose, onSelect, onClose }: TabButtonProp
       onClick={onSelect}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      title={tab.slug}
+      title={tab.sessionId ? `${tab.slug}\n[${tab.sessionId}]` : tab.slug}
       style={{
         background: isActive ? '#1e1e1e' : '#2d2d2d',
         color,
@@ -639,7 +625,7 @@ function TabButton({ tab, isActive, canClose, onSelect, onClose }: TabButtonProp
 // ── TabStrip ─────────────────────────────────────────────────────────────────
 
 interface TabStripProps {
-  tabs: Array<{ tabId: string; slug: string; exited: boolean; attention: boolean }>
+  tabs: Array<{ tabId: string; sessionId: string | null; slug: string; exited: boolean; attention: boolean }>
   activeTabId: string | null
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void

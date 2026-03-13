@@ -77,13 +77,39 @@ function VirtualLogList({
 interface TabButtonProps {
   channel: LogChannel
   isActive: boolean
+  expanded: boolean
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
 }
 
-function TabButton({ channel, isActive, onClick, onContextMenu }: TabButtonProps): React.ReactElement {
-  const [dim, setDim] = useState(false)
+// Lerp between two hex colors by t (0..1)
+function lerpColor(a: string, b: string, t: number): string {
+  const pa = [parseInt(a.slice(1, 3), 16), parseInt(a.slice(3, 5), 16), parseInt(a.slice(5, 7), 16)]
+  const pb = [parseInt(b.slice(1, 3), 16), parseInt(b.slice(3, 5), 16), parseInt(b.slice(5, 7), 16)]
+  const r = Math.round(pa[0] + (pb[0] - pa[0]) * t)
+  const g = Math.round(pa[1] + (pb[1] - pa[1]) * t)
+  const bl = Math.round(pa[2] + (pb[2] - pa[2]) * t)
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${bl.toString(16).padStart(2, '0')}`
+}
 
+// Two-phase decay: 0→1s fade 50%, 1→11s fade remaining 50%
+function flashIntensity(elapsed: number): number {
+  if (elapsed <= 0) return 1
+  if (elapsed < 1000) return 1 - 0.5 * (elapsed / 1000)
+  if (elapsed < 11000) return 0.5 * (1 - (elapsed - 1000) / 10000)
+  return 0
+}
+
+const FLASH_COLOR = '#f0a500'
+const REST_COLOR = '#858585'
+
+function TabButton({ channel, isActive, expanded, onClick, onContextMenu }: TabButtonProps): React.ReactElement {
+  const [dim, setDim] = useState(false)
+  const [flashColor, setFlashColor] = useState<string | null>(null)
+  const prevFlashKey = useRef(channel.flashKey)
+  const rafRef = useRef(0)
+
+  // Persistent attention blink (for channels with attention: true)
   useEffect(() => {
     if (!channel.blinking) {
       setDim(false)
@@ -92,6 +118,41 @@ function TabButton({ channel, isActive, onClick, onContextMenu }: TabButtonProps
     const id = setInterval(() => setDim((d) => !d), 500)
     return () => clearInterval(id)
   }, [channel.blinking])
+
+  // Gradual flash decay on new content
+  useEffect(() => {
+    if (channel.flashKey === prevFlashKey.current) return
+    prevFlashKey.current = channel.flashKey
+    if (!channel.flashEnabled || (isActive && expanded)) return
+
+    const start = performance.now()
+    const tick = (now: number): void => {
+      const elapsed = now - start
+      const intensity = flashIntensity(elapsed)
+      if (intensity <= 0) {
+        setFlashColor(null)
+        return
+      }
+      setFlashColor(lerpColor(REST_COLOR, FLASH_COLOR, intensity))
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    // Kick off immediately with full brightness
+    setFlashColor(FLASH_COLOR)
+    rafRef.current = requestAnimationFrame(tick)
+
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [channel.flashKey, channel.flashEnabled, isActive, expanded])
+
+  let color: string
+  if (channel.blinking) {
+    color = dim ? '#555' : '#f0a500'
+  } else if (flashColor) {
+    color = flashColor
+  } else if (isActive) {
+    color = '#cccccc'
+  } else {
+    color = '#858585'
+  }
 
   return (
     <button
@@ -102,20 +163,13 @@ function TabButton({ channel, isActive, onClick, onContextMenu }: TabButtonProps
         background: isActive ? '#1e1e1e' : 'none',
         border: 'none',
         borderTop: isActive ? '1px solid #007acc' : '1px solid transparent',
-        color: channel.blinking
-          ? dim
-            ? '#555'
-            : '#f0a500'  // amber blink for attention
-          : isActive
-            ? '#cccccc'
-            : '#858585',
+        color,
         cursor: 'pointer',
         fontSize: 12,
         padding: '0 12px',
         height: 28,
         flexShrink: 0,
-        whiteSpace: 'nowrap',
-        transition: 'color 0.05s'
+        whiteSpace: 'nowrap'
       }}
     >
       {channel.id}
@@ -315,6 +369,7 @@ export default function LogPanel(): React.ReactElement {
             key={ch.id}
             channel={ch}
             isActive={ch.id === effectiveActiveId}
+            expanded={logPanelExpanded}
             onClick={() => handleTabClick(ch.id)}
             onContextMenu={(e) => handleTabContextMenu(e, ch.id)}
           />

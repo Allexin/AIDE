@@ -61,7 +61,13 @@ export function spawnButtonProcess(
 
   map.set(button.id, { proc, button })
   if (!win.isDestroyed()) {
-    win.webContents.send('toolbar:process-started', { buttonId: button.id })
+    // Collect channel names to clear (autoClear defaults to true)
+    const clearChannels: string[] = []
+    if (button.autoClear !== false && button.channels) {
+      if (button.channels.stdout) clearChannels.push(button.channels.stdout.name)
+      if (button.channels.stderr) clearChannels.push(button.channels.stderr.name)
+    }
+    win.webContents.send('toolbar:process-started', { buttonId: button.id, clearChannels })
   }
 
   // Pipe stdout to log channel
@@ -74,7 +80,7 @@ export function spawnButtonProcess(
         .forEach((line) => {
           const t = line.replace(/\r$/, '')
           if (t && !win.isDestroyed()) {
-            win.webContents.send('toolbar:output', { channelName, line: t, attention: false })
+            win.webContents.send('toolbar:output', { channelName, line: t, attention: false, flash: button.channels!.stdout!.flash ?? false })
           }
         })
     })
@@ -84,6 +90,7 @@ export function spawnButtonProcess(
   if (proc.stderr && button.channels?.stderr) {
     const channelName = button.channels.stderr.name
     const attention = button.channels.stderr.attention ?? false
+    const stderrFlash = button.channels.stderr.flash ?? false
     proc.stderr.on('data', (chunk: Buffer) => {
       chunk
         .toString()
@@ -91,7 +98,7 @@ export function spawnButtonProcess(
         .forEach((line) => {
           const t = line.replace(/\r$/, '')
           if (t && !win.isDestroyed()) {
-            win.webContents.send('toolbar:output', { channelName, line: t, attention })
+            win.webContents.send('toolbar:output', { channelName, line: t, attention, flash: stderrFlash })
           }
         })
     })
@@ -117,7 +124,8 @@ export function spawnButtonProcess(
         win.webContents.send('toolbar:output', {
           channelName: button.channels.stderr.name,
           line: `[Error: ${err.message}]`,
-          attention: button.channels.stderr.attention ?? false
+          attention: button.channels.stderr.attention ?? false,
+          flash: button.channels.stderr.flash ?? false
         })
       }
     }
