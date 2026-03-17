@@ -45,6 +45,8 @@ export class PtyManager {
   private sharedWatcher: (() => void) | null = null
   // Cache of titles extracted from OSC sequences (main process source of truth)
   private titleCache = new Map<string, string>()
+  // Previous title per tab — used to detect notable transitions via tool.detectTitleEvent
+  private prevTitleCache = new Map<string, string>()
 
   constructor(win: BrowserWindow, projectPath: string, tool: CliTool = claudeCodeTool) {
     this.win = win
@@ -192,6 +194,7 @@ export class PtyManager {
     if (!tab) return
     this.titleBufs.delete(tabId)
     this.titleCache.delete(tabId)
+    this.prevTitleCache.delete(tabId)
     this.healthChecks.delete(tabId)
     try {
       tab.pty.kill()
@@ -234,6 +237,7 @@ export class PtyManager {
     this.sharedWatcher = null
     for (const tab of this.tabs.values()) {
       this.titleBufs.delete(tab.tabId)
+      this.prevTitleCache.delete(tab.tabId)
       this.healthChecks.delete(tab.tabId)
       try {
         tab.pty.kill()
@@ -335,8 +339,12 @@ export class PtyManager {
     if (m?.[1]) {
       const title = m[1].trim()
       if (title) {
+        const prev = this.prevTitleCache.get(tabId) ?? null
+        this.prevTitleCache.set(tabId, title)
         this.titleCache.set(tabId, title)
         this.send('terminal:tab-title', { tabId, title })
+        const event = this.tool.detectTitleEvent?.(prev, title)
+        if (event) this.send('terminal:tab-event', { tabId, event })
       }
       this.titleBufs.delete(tabId)
     } else {

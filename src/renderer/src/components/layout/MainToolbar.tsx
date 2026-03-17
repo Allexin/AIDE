@@ -796,6 +796,7 @@ export default function MainToolbar(): React.ReactElement {
   const buttonsRef = useRef<ToolbarItem[]>(buttons)
   const completeSoundsRef = useRef<SoundNote[]>([])
   const errorSoundsRef = useRef<SoundNote[]>([])
+  const completeAndWaitSoundsRef = useRef<SoundNote[]>([])
 
   // Keep buttonsRef current for use inside stable useEffect callbacks
   useEffect(() => {
@@ -831,6 +832,7 @@ export default function MainToolbar(): React.ReactElement {
     window.editorApi.getConfig().then((cfg) => {
       completeSoundsRef.current = cfg.toolbar?.sounds?.complete ?? []
       errorSoundsRef.current = cfg.toolbar?.sounds?.error ?? []
+      completeAndWaitSoundsRef.current = cfg.toolbar?.sounds?.completeAndWait ?? []
     })
 
     window.editorApi.getToolbarPresets().then(setPresetGroups)
@@ -853,9 +855,16 @@ export default function MainToolbar(): React.ReactElement {
       const btn = buttonsRef.current.find(
         (item): item is ToolbarButton => !isSplitter(item) && item.id === buttonId
       )
-      if (btn?.sound) {
+      if (btn?.sound !== false) {
         const failed = exitCode !== null && exitCode !== 0
         const notes = failed ? errorSoundsRef.current : completeSoundsRef.current
+        if (notes.length > 0) playMelody(notes)
+      }
+    })
+
+    const unsubTabEvent = window.editorApi.onTerminalTabEvent((_tabId, event) => {
+      if (event === 'completeAndWait') {
+        const notes = completeAndWaitSoundsRef.current
         if (notes.length > 0) playMelody(notes)
       }
     })
@@ -865,6 +874,7 @@ export default function MainToolbar(): React.ReactElement {
       unsubOutput()
       unsubStarted()
       unsubExited()
+      unsubTabEvent()
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 

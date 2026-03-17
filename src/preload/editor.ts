@@ -85,7 +85,7 @@ export interface EditorAPI {
   getConfig: () => Promise<{
     editor: EditorConfig
     ui: { fileTreeWidthPx: number; logPanelExpandedHeightPx: number }
-    toolbar: { sounds: { complete: Array<{ freq: number; dur: number; delay: number }>; error: Array<{ freq: number; dur: number; delay: number }> } }
+    toolbar: { sounds: { complete: Array<{ freq: number; dur: number; delay: number }>; error: Array<{ freq: number; dur: number; delay: number }>; completeAndWait: Array<{ freq: number; dur: number; delay: number }> } }
   }>
 
   // File tree
@@ -118,6 +118,7 @@ export interface EditorAPI {
   onTerminalNewTab: (cb: (tab: SessionTabInfo) => void) => () => void
   onTerminalTabClosed: (cb: (tabId: string) => void) => () => void
   onTerminalResetTabs: (cb: (tabs: { tabId: string; sessionId: string | null }[]) => void) => () => void
+  onTerminalTabEvent: (cb: (tabId: string, event: string) => void) => () => void
 
   // Toolbar
   getToolbarInfo: () => Promise<ToolbarInfo>
@@ -284,6 +285,13 @@ const editorApi: EditorAPI = {
       cb(tabs)
     ipcRenderer.on('terminal:reset-tabs', handler)
     return () => ipcRenderer.removeListener('terminal:reset-tabs', handler)
+  },
+
+  onTerminalTabEvent: (cb: (tabId: string, event: string) => void) => {
+    const handler = (_: unknown, payload: { tabId: string; event: string }): void =>
+      cb(payload.tabId, payload.event)
+    ipcRenderer.on('terminal:tab-event', handler)
+    return () => ipcRenderer.removeListener('terminal:tab-event', handler)
   },
 
   // Toolbar

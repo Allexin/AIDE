@@ -85,6 +85,12 @@ export interface CliTool {
    *  The implementation decides what to show — the caller treats it opaquely.
    */
   getUsageInfo?(): Promise<UsageInfo | null>
+
+  /** Inspect a tab title transition and return a named event string if something notable
+   *  happened, or null if the transition is unremarkable.
+   *  prevTitle is null on the very first title assignment.
+   */
+  detectTitleEvent?(prevTitle: string | null, newTitle: string): string | null
 }
 
 export interface UsageInfo {

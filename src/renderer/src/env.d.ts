@@ -117,7 +117,7 @@ interface EditorAPI {
   getConfig: () => Promise<{
     editor: EditorConfig
     ui: { fileTreeWidthPx: number; logPanelExpandedHeightPx: number }
-    toolbar: { sounds: { complete: Array<{ freq: number; dur: number; delay: number }>; error: Array<{ freq: number; dur: number; delay: number }> } }
+    toolbar: { sounds: { complete: Array<{ freq: number; dur: number; delay: number }>; error: Array<{ freq: number; dur: number; delay: number }>; completeAndWait: Array<{ freq: number; dur: number; delay: number }> } }
   }>
 
   // File tree
@@ -150,6 +150,7 @@ interface EditorAPI {
   onTerminalNewTab: (cb: (tab: SessionTabInfo) => void) => () => void
   onTerminalTabClosed: (cb: (tabId: string) => void) => () => void
   onTerminalResetTabs: (cb: (tabs: { tabId: string; sessionId: string | null }[]) => void) => () => void
+  onTerminalTabEvent: (cb: (tabId: string, event: string) => void) => () => void
 
   // Toolbar
   getToolbarInfo: () => Promise<ToolbarInfo>

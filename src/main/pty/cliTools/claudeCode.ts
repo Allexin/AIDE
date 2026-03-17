@@ -423,6 +423,18 @@ export const claudeCodeTool: CliTool = {
     }
   },
 
+  detectTitleEvent(prevTitle: string | null, newTitle: string): string | null {
+    // Detect transition into CompletedAndWaiting state:
+    // Claude Code sets the title to a string starting with ✳ (U+2733) when it has
+    // finished processing and is waiting for user input.
+    // prevTitle === null means this is the very first title (startup) — skip it.
+    const isWaiting = (t: string): boolean => t.codePointAt(0) === 0x2733
+    if (prevTitle !== null && !isWaiting(prevTitle) && isWaiting(newTitle)) {
+      return 'completeAndWait'
+    }
+    return null
+  },
+
   watchForNewSessions(projectPath: string, onNew: (session: CliSession) => void): () => void {
     const sessionsDir = getSessionsDir(projectPath)
     return watchSessionsDir(sessionsDir, (sessionId: string) => {

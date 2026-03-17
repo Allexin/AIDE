@@ -35,6 +35,7 @@ export interface SoundNote {
 export interface ToolbarSoundsConfig {
   complete: SoundNote[]
   error: SoundNote[]
+  completeAndWait: SoundNote[]
 }
 
 export interface ToolbarAppConfig {
@@ -92,6 +93,10 @@ const DEFAULTS: AppConfig = {
       error: [
         { freq: 880, dur: 180, delay: 0   },
         { freq: 698, dur: 300, delay: 200 }
+      ],
+      completeAndWait: [
+        { freq: 988,  dur: 80,  delay: 0   },
+        { freq: 1319, dur: 150, delay: 110 }
       ]
     }
   }
@@ -118,7 +123,8 @@ export function initAppConfig(): void {
         toolbar: {
           sounds: {
             complete: parsed.toolbar?.sounds?.complete ?? DEFAULTS.toolbar.sounds.complete,
-            error: parsed.toolbar?.sounds?.error ?? DEFAULTS.toolbar.sounds.error
+            error: parsed.toolbar?.sounds?.error ?? DEFAULTS.toolbar.sounds.error,
+            completeAndWait: parsed.toolbar?.sounds?.completeAndWait ?? DEFAULTS.toolbar.sounds.completeAndWait
           }
         }
       }
