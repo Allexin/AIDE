@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { useToolbarStore } from '../../store/useToolbarStore'
+import { useSessionStore } from '../../store/useSessionStore'
 import { logManager } from '../../store/useLogStore'
 import { playMelody } from '../../utils/sound'
 import type { SoundNote } from '../../utils/sound'
@@ -862,8 +863,10 @@ export default function MainToolbar(): React.ReactElement {
       }
     })
 
-    const unsubTabEvent = window.editorApi.onTerminalTabEvent((_tabId, event) => {
+    const unsubTabEvent = window.editorApi.onTerminalTabEvent((tabId, event) => {
       if (event === 'completeAndWait') {
+        const { activeTabId } = useSessionStore.getState()
+        if (document.hasFocus() && tabId === activeTabId) return
         const notes = completeAndWaitSoundsRef.current
         if (notes.length > 0) playMelody(notes)
       }
