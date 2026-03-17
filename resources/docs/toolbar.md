@@ -42,7 +42,7 @@ When both files exist, buttons are merged. If a button `id` appears in both file
 | `command` | string | Yes | Shell command to execute |
 | `cwd` | string | No | Working directory for the command |
 | `autoClear` | boolean | No | Clear log channels on each run (default: `true`) |
-| `sound` | boolean | No | Play a completion sound when the process exits (default: `false`) |
+| `sound` | boolean | No | Play a completion sound when the process exits (default: `true`) |
 | `channels` | object | No | Log channel configuration (see below) |
 
 ## Variables

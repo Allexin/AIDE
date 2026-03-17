@@ -66,7 +66,8 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         icon: '📂',
         tooltip: 'Open project in Explorer',
         command: 'explorer.exe .',
-        cwd: '${projectRoot}'
+        cwd: '${projectRoot}',
+        sound: false
       }
     ]
   },
@@ -92,6 +93,7 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Run dev server',
         command: 'npm run dev',
         cwd: '${projectRoot}',
+        sound: false,
         autoClear: false,
         channels: {
           stdout: { name: 'Dev Server', flash: true },
@@ -134,7 +136,8 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Open in UE Editor',
         // UnrealVersionSelector opens the correct engine version for this project
         command: 'cmd /c for %f in ("*.uproject") do "${unrealVersionSelector}" /editor "%~ff"',
-        cwd: '${projectRoot}'
+        cwd: '${projectRoot}',
+        sound: false
       },
       {
         id: 'unreal-build',
@@ -155,7 +158,8 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         icon: '💻',
         tooltip: 'Open in Visual Studio',
         command: 'cmd /c for %f in ("*.sln") do start "" "%f"',
-        cwd: '${projectRoot}'
+        cwd: '${projectRoot}',
+        sound: false
       },
       {
         id: 'unreal-clear-intermediate',
@@ -196,7 +200,8 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         icon: '🎮',
         tooltip: 'Open in Unity Hub',
         command: 'cmd /c start "" "unityhub://open?projectPath=%cd%"',
-        cwd: '${projectRoot}'
+        cwd: '${projectRoot}',
+        sound: false
       }
     ]
   },
@@ -264,6 +269,7 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Cargo run',
         command: 'cargo run',
         cwd: '${projectRoot}',
+        sound: false,
         autoClear: false,
         channels: {
           stdout: { name: 'cargo run', flash: true },
@@ -318,6 +324,7 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Go run',
         command: 'go run .',
         cwd: '${projectRoot}',
+        sound: false,
         autoClear: false,
         channels: {
           stdout: { name: 'go run', flash: true },
@@ -360,6 +367,7 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
         tooltip: 'Docker Compose up',
         command: 'docker compose up',
         cwd: '${projectRoot}',
+        sound: false,
         autoClear: false,
         channels: {
           stdout: { name: 'docker compose up', flash: true },
