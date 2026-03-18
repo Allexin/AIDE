@@ -5,7 +5,12 @@ import { useLogStore, LogChannel } from '../../store/useLogStore'
 
 // ── Row renderer (defined outside component to avoid re-creation) ─────────────
 
-const LogRow = memo(({ index, style, data }: ListChildComponentProps<string[]>) => (
+interface LogListData {
+  lines: string[]
+  dimmedSet: Set<number> | null
+}
+
+const LogRow = memo(({ index, style, data }: ListChildComponentProps<LogListData>) => (
   <div
     style={{
       ...style,
@@ -15,10 +20,11 @@ const LogRow = memo(({ index, style, data }: ListChildComponentProps<string[]>) 
       whiteSpace: 'pre',
       paddingLeft: 8,
       lineHeight: '20px',
-      userSelect: 'text'
+      userSelect: 'text',
+      opacity: data.dimmedSet?.has(index) ? 0.15 : 1
     }}
   >
-    {data[index]}
+    {data.lines[index]}
   </div>
 ))
 LogRow.displayName = 'LogRow'
@@ -27,13 +33,15 @@ LogRow.displayName = 'LogRow'
 
 function VirtualLogList({
   lines,
+  dimmedSet,
   fallbackHeight
 }: {
   lines: string[]
+  dimmedSet: Set<number> | null
   fallbackHeight: number
 }): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
-  const listRef = useRef<FixedSizeList<string[]>>(null)
+  const listRef = useRef<FixedSizeList<LogListData>>(null)
   const [height, setHeight] = useState(fallbackHeight)
 
   // Measure actual container height via ResizeObserver
@@ -54,15 +62,17 @@ function VirtualLogList({
     }
   }, [lines.length])
 
+  const itemData: LogListData = { lines, dimmedSet }
+
   return (
     <div ref={containerRef} style={{ height: '100%', overflow: 'hidden' }}>
-      <FixedSizeList<string[]>
+      <FixedSizeList<LogListData>
         ref={listRef}
         height={height}
         itemCount={lines.length}
         itemSize={20}
         width="100%"
-        itemData={lines}
+        itemData={itemData}
         overscanCount={8}
         style={{ outline: 'none' }}
       >
@@ -260,6 +270,9 @@ export default function LogPanel(): React.ReactElement {
     usePanelStore()
   const { channels, activeChannelId, setActive, stopBlink, clear, close } = useLogStore()
 
+  const [filter, setFilter] = useState('')
+  const [filterMode, setFilterMode] = useState<'hide' | 'dim'>('hide')
+
   const dragging = useRef(false)
   const startY = useRef(0)
   const startH = useRef(0)
@@ -377,6 +390,65 @@ export default function LogPanel(): React.ReactElement {
 
         <div style={{ flex: 1 }} />
 
+        {/* Filter input — only when expanded */}
+        {logPanelExpanded && (
+          <div style={{ display: 'flex', alignItems: 'center', padding: '0 6px' }}>
+            <input
+              type="text"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter…"
+              style={{
+                background: filter ? '#1e1e1e' : '#2d2d2d',
+                border: `1px solid ${filter ? '#007acc' : '#3d3d3d'}`,
+                borderRadius: 3,
+                color: '#cccccc',
+                fontSize: 12,
+                height: 18,
+                outline: 'none',
+                padding: '0 6px',
+                width: 160,
+                fontFamily: 'Cascadia Code, Consolas, monospace'
+              }}
+            />
+            <button
+              title={filterMode === 'hide' ? 'Switch to dim mode' : 'Switch to hide mode'}
+              onClick={() => setFilterMode((m) => (m === 'hide' ? 'dim' : 'hide'))}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: filter ? '#858585' : '#444',
+                cursor: 'pointer',
+                fontSize: 11,
+                lineHeight: '18px',
+                padding: '0 4px',
+                marginLeft: 2,
+                fontFamily: 'Cascadia Code, Consolas, monospace'
+              }}
+            >
+              {filterMode === 'hide' ? '▼' : '≈'}
+            </button>
+            {filter && (
+              <button
+                title="Clear filter"
+                onClick={() => setFilter('')}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#858585',
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  lineHeight: '18px',
+                  padding: '0 4px',
+                  marginLeft: 0
+                }}
+              >
+                ×
+              </button>
+            )}
+          </div>
+        )}
+
         <button
           title={logPanelExpanded ? 'Collapse log panel' : 'Expand log panel'}
           onClick={toggleLogPanel}
@@ -398,26 +470,50 @@ export default function LogPanel(): React.ReactElement {
       {/* Content area — only rendered when expanded */}
       {logPanelExpanded && (
         <div style={{ flex: 1, overflow: 'hidden', background: '#1e1e1e' }}>
-          {activeChannel && activeChannel.lines.length > 0 ? (
-            <VirtualLogList
-              lines={activeChannel.lines}
-              fallbackHeight={logPanelExpandedHeightPx - 28}
-            />
-          ) : (
-            <div
-              style={{
-                height: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#444',
-                fontSize: 12,
-                fontStyle: 'italic'
-              }}
-            >
-              {activeChannel ? 'No output' : ''}
-            </div>
-          )}
+          {(() => {
+            const rawLines = activeChannel?.lines ?? []
+            const lowerFilter = filter.toLowerCase()
+
+            let visibleLines: string[]
+            let dimmedSet: Set<number> | null = null
+
+            if (!filter) {
+              visibleLines = rawLines
+            } else if (filterMode === 'hide') {
+              visibleLines = rawLines.filter((l) => l.toLowerCase().includes(lowerFilter))
+            } else {
+              // dim mode: show all, dim non-matching
+              visibleLines = rawLines
+              dimmedSet = new Set(
+                rawLines.reduce<number[]>((acc, l, i) => {
+                  if (!l.toLowerCase().includes(lowerFilter)) acc.push(i)
+                  return acc
+                }, [])
+              )
+            }
+
+            return visibleLines.length > 0 ? (
+              <VirtualLogList
+                lines={visibleLines}
+                dimmedSet={dimmedSet}
+                fallbackHeight={logPanelExpandedHeightPx - 28}
+              />
+            ) : (
+              <div
+                style={{
+                  height: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#444',
+                  fontSize: 12,
+                  fontStyle: 'italic'
+                }}
+              >
+                {!activeChannel ? '' : filter ? 'No matching lines' : 'No output'}
+              </div>
+            )
+          })()}
         </div>
       )}
 
