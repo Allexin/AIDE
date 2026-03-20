@@ -811,6 +811,14 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     updateAppConfig({ reasoning })
   })
 
+  ipcMain.on('settings:resize', (event, height: number) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (win) {
+      const [width] = win.getContentSize()
+      win.setContentSize(width, height)
+    }
+  })
+
   // ── Thinking: get one block by index ─────────────────────────────────────────
   ipcMain.handle('thinking:get-block', (event, { tabId, index }: { tabId: string; index: number | 'last' }) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender)

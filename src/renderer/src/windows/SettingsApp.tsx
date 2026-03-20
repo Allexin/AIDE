@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 
 interface ProxyConfig {
   enabled: boolean
@@ -14,10 +14,21 @@ export default function SettingsApp(): React.ReactElement {
   const [config, setConfig] = useState<ProxyConfig>({ enabled: false, address: '', useForCliTools: true })
   const [reasoning, setReasoning] = useState<ReasoningConfig>({ showPanel: false })
   const [saved, setSaved] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     window.settingsApi.getProxyConfig().then(setConfig)
     window.settingsApi.getReasoningConfig().then(setReasoning)
+  }, [])
+
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    const observer = new ResizeObserver(() => {
+      window.settingsApi.resizeWindow(el.offsetHeight)
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
   }, [])
 
   const handleSave = async (): Promise<void> => {
@@ -30,7 +41,7 @@ export default function SettingsApp(): React.ReactElement {
   }
 
   return (
-    <div style={{ padding: 24, color: '#ccc', fontFamily: 'Segoe UI, sans-serif', fontSize: 13 }}>
+    <div ref={rootRef} style={{ padding: 24, color: '#ccc', fontFamily: 'Segoe UI, sans-serif', fontSize: 13 }}>
       <h2 style={{ margin: '0 0 20px', fontSize: 16, color: '#e0e0e0' }}>Settings</h2>
 
       <fieldset style={{ border: '1px solid #444', borderRadius: 4, padding: '12px 16px', margin: 0 }}>

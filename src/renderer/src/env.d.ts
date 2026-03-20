@@ -247,6 +247,7 @@ interface SettingsAPI {
   saveProxyConfig: (config: { enabled: boolean; address: string; useForCliTools: boolean }) => Promise<void>
   getReasoningConfig: () => Promise<{ showPanel: boolean }>
   saveReasoningConfig: (config: { showPanel: boolean }) => Promise<void>
+  resizeWindow: (height: number) => void
 }
 
 declare interface Window {

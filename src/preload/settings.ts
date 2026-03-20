@@ -15,13 +15,15 @@ export interface SettingsAPI {
   saveProxyConfig: (config: ProxyConfig) => Promise<void>
   getReasoningConfig: () => Promise<ReasoningConfig>
   saveReasoningConfig: (config: ReasoningConfig) => Promise<void>
+  resizeWindow: (height: number) => void
 }
 
 const settingsApi: SettingsAPI = {
   getProxyConfig: () => ipcRenderer.invoke('settings:get-proxy'),
   saveProxyConfig: (config) => ipcRenderer.invoke('settings:save-proxy', config),
   getReasoningConfig: () => ipcRenderer.invoke('settings:get-reasoning'),
-  saveReasoningConfig: (config) => ipcRenderer.invoke('settings:save-reasoning', config)
+  saveReasoningConfig: (config) => ipcRenderer.invoke('settings:save-reasoning', config),
+  resizeWindow: (height) => ipcRenderer.send('settings:resize', height)
 }
 
 contextBridge.exposeInMainWorld('settingsApi', settingsApi)
