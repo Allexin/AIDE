@@ -156,3 +156,19 @@ interface ThinkingBlock {
 - The panel shows data for the **active tab** only. Switching tabs while expanded triggers a fresh fetch.
 - If a tab has `sessionId === null` (new session not yet assigned), there are no blocks to show — panel shows empty state.
 - Tail-watch uses byte offset tracking, not full file re-read, to avoid re-parsing the entire session history on every change.
+
+## Current limitation — thinking is redacted by Claude Code
+
+As of 2026-02-12, Claude Code sends the beta flag `redact-thinking-2026-02-12` in
+every request to the Anthropic API. With this flag active, the API strips thinking
+content server-side before transmission: the SSE stream contains a
+`content_block_start` of type `thinking` but its delta is a `signature_delta` only —
+no `thinking_delta` with actual text is ever sent. As a result, Claude Code never
+writes thinking blocks to JSONL, and the panel has nothing to display.
+
+**If the flag is removed from the outgoing request**, the API responds with full
+thinking content, Claude Code writes it to JSONL as normal, and the panel works as
+designed. 
+
+The panel implementation is complete and correct. It is simply waiting for the data
+to exist.
