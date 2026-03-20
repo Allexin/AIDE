@@ -7,7 +7,6 @@ import { ensureAideDirectory } from '../config/projectConfig'
 import { ensureDefaultToolbar, deployToolbarDocs } from '../config/toolbarConfig'
 import { addRecentProject, saveOpenSessions } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
-import { syncGlobalMemory } from '../config/globalMemory'
 import { startProjectWatcher, stopProjectWatcher } from '../filetree/watcher'
 import { PtyManager } from '../pty/ptyManager'
 import { ptyRegistry } from '../pty/registry'
@@ -70,7 +69,6 @@ export function openProjectAndTrack(
   ensureAideDirectory(projectPath)
   ensureDefaultToolbar(projectPath)
   deployToolbarDocs(projectPath)
-  syncGlobalMemory(projectPath)
 
   const lockResult = checkAndAcquireLock(projectPath)
   if (!lockResult.acquired) {
