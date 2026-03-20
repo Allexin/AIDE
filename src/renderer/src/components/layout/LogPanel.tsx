@@ -1,83 +1,288 @@
-import React, { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { FixedSizeList, ListChildComponentProps } from 'react-window'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { usePanelStore } from '../../store/usePanelStore'
 import { useLogStore, LogChannel } from '../../store/useLogStore'
 
-// ── Row renderer (defined outside component to avoid re-creation) ─────────────
+// ── Content context menu ──────────────────────────────────────────────────────
 
-interface LogListData {
-  lines: string[]
-  dimmedSet: Set<number> | null
+interface ContentContextMenuProps {
+  x: number
+  y: number
+  hasSelection: boolean
+  onCopy: () => void
+  onCut: () => void
+  onDelete: () => void
+  onDismiss: () => void
 }
 
-const LogRow = memo(({ index, style, data }: ListChildComponentProps<LogListData>) => (
-  <div
-    style={{
-      ...style,
-      fontFamily: 'Cascadia Code, Consolas, monospace',
-      fontSize: 12,
-      color: '#cccccc',
-      whiteSpace: 'pre',
-      paddingLeft: 8,
-      lineHeight: '20px',
-      userSelect: 'text',
-      opacity: data.dimmedSet?.has(index) ? 0.15 : 1
-    }}
-  >
-    {data.lines[index]}
-  </div>
-))
-LogRow.displayName = 'LogRow'
+function ContentContextMenu({
+  x,
+  y,
+  hasSelection,
+  onCopy,
+  onCut,
+  onDelete,
+  onDismiss
+}: ContentContextMenuProps): React.ReactElement {
+  useEffect(() => {
+    const handler = (): void => onDismiss()
+    window.addEventListener('mousedown', handler)
+    return () => window.removeEventListener('mousedown', handler)
+  }, [onDismiss])
 
-// ── Virtualized list ──────────────────────────────────────────────────────────
+  const itemStyle = (disabled: boolean): React.CSSProperties => ({
+    display: 'block',
+    width: '100%',
+    background: 'none',
+    border: 'none',
+    color: disabled ? '#555' : '#cccccc',
+    cursor: disabled ? 'default' : 'pointer',
+    padding: '6px 12px',
+    textAlign: 'left',
+    fontSize: 13
+  })
 
-function VirtualLogList({
+  const hoverOn = (e: React.MouseEvent, disabled: boolean): void => {
+    if (!disabled) (e.currentTarget as HTMLElement).style.background = '#04395e'
+  }
+  const hoverOff = (e: React.MouseEvent): void => {
+    ;(e.currentTarget as HTMLElement).style.background = 'none'
+  }
+
+  return (
+    <div
+      onMouseDown={(e) => {
+        // prevent focus change so text selection is preserved when clicking menu items
+        e.preventDefault()
+        e.stopPropagation()
+      }}
+      style={{
+        position: 'fixed',
+        top: y,
+        left: x,
+        background: '#252526',
+        border: '1px solid #3d3d3d',
+        borderRadius: 2,
+        zIndex: 9999,
+        minWidth: 100,
+        boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+      }}
+    >
+      <button
+        style={itemStyle(!hasSelection)}
+        onClick={hasSelection ? onCopy : undefined}
+        onMouseEnter={(e) => hoverOn(e, !hasSelection)}
+        onMouseLeave={hoverOff}
+      >
+        Copy
+      </button>
+      <button
+        style={itemStyle(!hasSelection)}
+        onClick={hasSelection ? onCut : undefined}
+        onMouseEnter={(e) => hoverOn(e, !hasSelection)}
+        onMouseLeave={hoverOff}
+      >
+        Cut
+      </button>
+      <button
+        style={itemStyle(!hasSelection)}
+        onClick={hasSelection ? onDelete : undefined}
+        onMouseEnter={(e) => hoverOn(e, !hasSelection)}
+        onMouseLeave={hoverOff}
+      >
+        Delete Lines
+      </button>
+    </div>
+  )
+}
+
+// ── Scrollable log list ───────────────────────────────────────────────────────
+
+const PRE_STYLE: React.CSSProperties = {
+  margin: 0,
+  padding: '2px 8px',
+  fontFamily: 'Cascadia Code, Consolas, monospace',
+  fontSize: 12,
+  lineHeight: '20px',
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-all',
+  color: '#cccccc'
+}
+
+// Map a DOM selection within a <pre> element to [startLineIndex, endLineIndex]
+function getSelectionLineRange(pre: HTMLPreElement): [number, number] | null {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount || sel.isCollapsed) return null
+  const range = sel.getRangeAt(0)
+  if (!pre.contains(range.commonAncestorContainer)) return null
+
+  const charOffset = (container: Node, offset: number): number => {
+    const r = document.createRange()
+    r.setStart(pre, 0)
+    r.setEnd(container, offset)
+    return r.toString().length
+  }
+
+  const startChar = charOffset(range.startContainer, range.startOffset)
+  const endChar = charOffset(range.endContainer, range.endOffset)
+  const text = pre.textContent ?? ''
+
+  let lineIdx = 0
+  let startLine = 0
+  let endLine = 0
+  let foundStart = false
+
+  for (let i = 0; i <= text.length; i++) {
+    if (!foundStart && i >= startChar) {
+      startLine = lineIdx
+      foundStart = true
+    }
+    if (foundStart && i >= endChar) {
+      endLine = lineIdx
+      break
+    }
+    if (i < text.length && text[i] === '\n') lineIdx++
+  }
+
+  return foundStart ? [startLine, endLine] : null
+}
+
+function ScrollableLogList({
+  channelId,
   lines,
-  dimmedSet,
-  fallbackHeight
+  dimmedSet
 }: {
+  channelId: string
   lines: string[]
   dimmedSet: Set<number> | null
-  fallbackHeight: number
 }): React.ReactElement {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const listRef = useRef<FixedSizeList<LogListData>>(null)
-  const [height, setHeight] = useState(fallbackHeight)
+  const removeLines = useLogStore((s) => s.removeLines)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const preRef = useRef<HTMLPreElement>(null)
+  const atBottomRef = useRef(true)
+  // Track what's already written to the DOM to enable incremental appends
+  const renderedCountRef = useRef(0)
+  const firstLineRef = useRef<string | undefined>(undefined)
 
-  // Measure actual container height via ResizeObserver
-  useEffect(() => {
-    const el = containerRef.current
+  const [contentMenu, setContentMenu] = useState<{
+    x: number
+    y: number
+    hasSelection: boolean
+  } | null>(null)
+
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current
     if (!el) return
-    const ro = new ResizeObserver((entries) => {
-      setHeight(entries[0].contentRect.height)
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
+    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
   }, [])
 
-  // Auto-scroll to bottom when lines are appended
+  // Incremental DOM writes for non-dimmed mode — preserves active text selection
   useEffect(() => {
-    if (lines.length > 0) {
-      listRef.current?.scrollToItem(lines.length - 1, 'end')
+    if (dimmedSet !== null) return
+    const pre = preRef.current
+    if (!pre) return
+
+    const needsReset =
+      lines.length < renderedCountRef.current || lines[0] !== firstLineRef.current
+
+    if (needsReset) {
+      pre.textContent = lines.join('\n')
+      renderedCountRef.current = lines.length
+      firstLineRef.current = lines[0]
+    } else if (lines.length > renderedCountRef.current) {
+      const newText =
+        (renderedCountRef.current === 0 ? '' : '\n') +
+        lines.slice(renderedCountRef.current).join('\n')
+      pre.appendChild(document.createTextNode(newText))
+      renderedCountRef.current = lines.length
+      firstLineRef.current = lines[0]
+    }
+  })
+
+  // Reset DOM tracking when switching to/from dim mode or on explicit clear
+  useEffect(() => {
+    renderedCountRef.current = 0
+    firstLineRef.current = undefined
+  }, [dimmedSet])
+
+  // Auto-scroll to bottom when new lines arrive (only if already at bottom)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (atBottomRef.current) {
+      el.scrollTop = el.scrollHeight
     }
   }, [lines.length])
 
-  const itemData: LogListData = { lines, dimmedSet }
+  const getActivePre = (): HTMLPreElement | null =>
+    scrollRef.current?.querySelector('pre') ?? null
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const sel = window.getSelection()
+    const hasSelection = !!(sel && !sel.isCollapsed && sel.toString().length > 0)
+    setContentMenu({ x: e.clientX, y: e.clientY, hasSelection })
+  }, [])
+
+  const handleCopy = (): void => {
+    const text = window.getSelection()?.toString() ?? ''
+    navigator.clipboard.writeText(text)
+    setContentMenu(null)
+  }
+
+  const handleCut = (): void => {
+    const text = window.getSelection()?.toString() ?? ''
+    navigator.clipboard.writeText(text)
+    const pre = getActivePre()
+    if (pre) {
+      const range = getSelectionLineRange(pre)
+      if (range) removeLines(channelId, range[0], range[1])
+    }
+    window.getSelection()?.removeAllRanges()
+    setContentMenu(null)
+  }
+
+  const handleDelete = (): void => {
+    const pre = getActivePre()
+    if (pre) {
+      const range = getSelectionLineRange(pre)
+      if (range) removeLines(channelId, range[0], range[1])
+    }
+    window.getSelection()?.removeAllRanges()
+    setContentMenu(null)
+  }
 
   return (
-    <div ref={containerRef} style={{ height: '100%', overflow: 'hidden' }}>
-      <FixedSizeList<LogListData>
-        ref={listRef}
-        height={height}
-        itemCount={lines.length}
-        itemSize={20}
-        width="100%"
-        itemData={itemData}
-        overscanCount={8}
-        style={{ outline: 'none' }}
-      >
-        {LogRow}
-      </FixedSizeList>
+    <div
+      ref={scrollRef}
+      onScroll={onScroll}
+      onContextMenu={handleContextMenu}
+      style={{ height: '100%', overflow: 'auto', userSelect: 'text' }}
+    >
+      {dimmedSet !== null ? (
+        // Dim mode: React-managed spans, filtering active so selection less critical
+        <pre style={PRE_STYLE}>
+          {lines.map((line, i) => (
+            <span key={i} style={{ opacity: dimmedSet.has(i) ? 0.15 : 1 }}>
+              {line}
+              {'\n'}
+            </span>
+          ))}
+        </pre>
+      ) : (
+        // Normal mode: DOM-managed pre, React never touches its children
+        <pre ref={preRef} style={PRE_STYLE} />
+      )}
+      {contentMenu && (
+        <ContentContextMenu
+          x={contentMenu.x}
+          y={contentMenu.y}
+          hasSelection={contentMenu.hasSelection}
+          onCopy={handleCopy}
+          onCut={handleCut}
+          onDelete={handleDelete}
+          onDismiss={() => setContentMenu(null)}
+        />
+      )}
     </div>
   )
 }
@@ -87,7 +292,6 @@ function VirtualLogList({
 interface TabButtonProps {
   channel: LogChannel
   isActive: boolean
-  expanded: boolean
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
 }
@@ -113,7 +317,7 @@ function flashIntensity(elapsed: number): number {
 const FLASH_COLOR = '#f0a500'
 const REST_COLOR = '#858585'
 
-function TabButton({ channel, isActive, expanded, onClick, onContextMenu }: TabButtonProps): React.ReactElement {
+function TabButton({ channel, isActive, onClick, onContextMenu }: TabButtonProps): React.ReactElement {
   const [dim, setDim] = useState(false)
   const [flashColor, setFlashColor] = useState<string | null>(null)
   const prevFlashKey = useRef(channel.flashKey)
@@ -133,7 +337,7 @@ function TabButton({ channel, isActive, expanded, onClick, onContextMenu }: TabB
   useEffect(() => {
     if (channel.flashKey === prevFlashKey.current) return
     prevFlashKey.current = channel.flashKey
-    if (!channel.flashEnabled || (isActive && expanded)) return
+    if (!channel.flashEnabled) return
 
     const start = performance.now()
     const tick = (now: number): void => {
@@ -151,7 +355,7 @@ function TabButton({ channel, isActive, expanded, onClick, onContextMenu }: TabB
     rafRef.current = requestAnimationFrame(tick)
 
     return () => cancelAnimationFrame(rafRef.current)
-  }, [channel.flashKey, channel.flashEnabled, isActive, expanded])
+  }, [channel.flashKey, channel.flashEnabled, isActive])
 
   let color: string
   if (channel.blinking) {
@@ -382,7 +586,6 @@ export default function LogPanel(): React.ReactElement {
             key={ch.id}
             channel={ch}
             isActive={ch.id === effectiveActiveId}
-            expanded={logPanelExpanded}
             onClick={() => handleTabClick(ch.id)}
             onContextMenu={(e) => handleTabContextMenu(e, ch.id)}
           />
@@ -493,10 +696,10 @@ export default function LogPanel(): React.ReactElement {
             }
 
             return visibleLines.length > 0 ? (
-              <VirtualLogList
+              <ScrollableLogList
+                channelId={effectiveActiveId ?? ''}
                 lines={visibleLines}
                 dimmedSet={dimmedSet}
-                fallbackHeight={logPanelExpandedHeightPx - 28}
               />
             ) : (
               <div

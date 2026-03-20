@@ -22,13 +22,14 @@ interface LogState {
   close: (channelId: string) => void
   setActive: (channelId: string) => void
   stopBlink: (channelId: string) => void
+  removeLines: (channelId: string, start: number, end: number) => void
 }
 
 export const useLogStore = create<LogState>((set) => ({
   channels: [],
   activeChannelId: null,
 
-  append: (channelId: string, line: string, attention = false, flash = false) => {
+  append: (channelId: string, line: string, attention = false, flash = true) => {
     const incoming = stripAnsi(line).split('\n')
     set((state) => {
       const idx = state.channels.findIndex((c) => c.id === channelId)
@@ -66,7 +67,7 @@ export const useLogStore = create<LogState>((set) => ({
           lines: [`[${new Date().toLocaleString()}]`, ...incoming],
           attention,
           blinking: attention, // blink immediately if attention channel
-          flashEnabled: flash,
+          flashEnabled: true,
           flashKey: 1
         }
         return { channels: [...state.channels, newChannel] }
@@ -101,12 +102,22 @@ export const useLogStore = create<LogState>((set) => ({
         c.id === channelId ? { ...c, blinking: false } : c
       )
     }))
+  },
+
+  removeLines: (channelId: string, start: number, end: number) => {
+    set((state) => ({
+      channels: state.channels.map((c) =>
+        c.id === channelId
+          ? { ...c, lines: c.lines.filter((_, i) => i < start || i > end) }
+          : c
+      )
+    }))
   }
 }))
 
 // Convenience singleton for non-component code (stores, IPC handlers, etc.)
 export const logManager = {
-  append: (channelId: string, line: string, attention = false, flash = false): void => {
+  append: (channelId: string, line: string, attention = false, flash = true): void => {
     useLogStore.getState().append(channelId, line, attention, flash)
   },
   clear: (channelId: string): void => {
