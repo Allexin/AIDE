@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -63,9 +63,13 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }: Termi
   // Ref so OSC handler can read current isActive without stale closure
   const isActiveRef = useRef(isActive)
   const onAttentionRef = useRef(onAttention)
+  // Ref so fit calls can check whether the terminal panel currently has focus
+  const focusedPanel = usePanelStore((s) => s.focusedPanel)
+  const focusedPanelRef = useRef(focusedPanel)
 
   useEffect(() => { isActiveRef.current = isActive }, [isActive])
   useEffect(() => { onAttentionRef.current = onAttention }, [onAttention])
+  useEffect(() => { focusedPanelRef.current = focusedPanel }, [focusedPanel])
 
   useEffect(() => {
     const container = containerRef.current
@@ -120,8 +124,8 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }: Termi
 
 
 
-    // Initial fit if active
-    if (isActive) {
+    // Initial fit if active and terminal panel has focus
+    if (isActive && focusedPanelRef.current === 'terminal') {
       requestAnimationFrame(() => {
         try {
           fitAddon.fit()
@@ -140,9 +144,9 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }: Termi
     }
   }, [tabId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fit when becoming the active tab
+  // Fit when becoming the active tab — only if the terminal panel itself has focus
   useEffect(() => {
-    if (isActive && fitAddonRef.current && terminalRef.current) {
+    if (isActive && focusedPanelRef.current === 'terminal' && fitAddonRef.current && terminalRef.current) {
       const t = setTimeout(() => {
         try {
           fitAddonRef.current?.fit()
@@ -193,7 +197,7 @@ interface TerminalPanelProps {
 }
 
 export default function TerminalPanel({ style }: TerminalPanelProps): React.ReactElement {
-  const { terminalCollapsed, collapsedWidthPx, toggleTerminalCollapse, focusTerminal } =
+  const { terminalCollapsed, collapsedWidthPx, toggleTerminalCollapse, focusTerminal, focusedPanel } =
     usePanelStore()
 
   const { tabs, activeTabId, initialized, initWithTab, initWithTabs, addTab, setActiveTab, closeTab, resetTabs, updateSlug, updateSessionId, markExited, setAttention } =
@@ -206,6 +210,18 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   // Map of tabId → fit+focus functions (populated by TerminalTab on mount)
   const fitFunctions = useRef<Map<string, FitFn>>(new Map())
   const containerRef = useRef<HTMLDivElement>(null)
+
+  // Track whether fit() calls are allowed (only when terminal panel has focus).
+  // useLayoutEffect runs synchronously after DOM updates, so the ref is current
+  // before any ResizeObserver callbacks fire for that same DOM change.
+  const shouldFitRef = useRef(focusedPanel === 'terminal')
+  useLayoutEffect(() => {
+    shouldFitRef.current = focusedPanel === 'terminal'
+    // When terminal regains focus, re-fit immediately so it fills the expanded slot
+    if (focusedPanel === 'terminal' && activeTabId) {
+      fitFunctions.current.get(activeTabId)?.fit()
+    }
+  }, [focusedPanel, activeTabId])
 
   const handleMount = useCallback((tabId: string, fitFn: FitFn) => {
     fitFunctions.current.set(tabId, fitFn)
@@ -329,13 +345,16 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
     }
   }, [updateSessionId, markExited, setActiveTab, addTab, updateSlug, closeTab, resetTabs])
 
-  // Resize all terminal on panel container resize
+  // Resize active terminal when the panel container resizes — but only when the
+  // terminal panel has focus. When the editor takes focus the container shrinks,
+  // but we intentionally skip fit() so xterm keeps its cols/rows intact and the
+  // content is merely clipped by overflow:hidden rather than reflown.
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
 
     const observer = new ResizeObserver(() => {
-      if (activeTabId) {
+      if (activeTabId && shouldFitRef.current) {
         fitFunctions.current.get(activeTabId)?.fit()
       }
     })
