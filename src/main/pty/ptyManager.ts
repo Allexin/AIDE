@@ -43,6 +43,8 @@ export class PtyManager {
   private healthChecks = new Map<string, HealthCheck>()
   // Shared watcher for new session files (lives for the lifetime of PtyManager)
   private sharedWatcher: (() => void) | null = null
+  // Serialise concurrent assignNewSession calls so each processes a distinct null-tab
+  private sessionAssignQueue: Promise<void> = Promise.resolve()
   // Cache of titles extracted from OSC sequences (main process source of truth)
   private titleCache = new Map<string, string>()
   // Previous title per tab — used to detect notable transitions via tool.detectTitleEvent
@@ -268,15 +270,21 @@ export class PtyManager {
   private ensureSharedWatcher(): void {
     if (this.sharedWatcher) return
     this.sharedWatcher = this.tool.watchForNewSessions(this.projectPath, (session) => {
-      this.assignNewSession(session.sessionId)
+      this.sessionAssignQueue = this.sessionAssignQueue.then(() =>
+        this.assignNewSession(session.sessionId)
+      )
     })
   }
 
   /** Assign a newly appeared sessionId to the correct tab.
+   *  Only considers tabs still waiting for a session (sessionId === null) to avoid
+   *  re-assigning already-known sessions and incorrectly matching resumed tabs.
    *  Always uses PID verification to avoid capturing sessions from external claude processes.
+   *  Callers must serialise via sessionAssignQueue so each call sees an updated tab list.
    */
   private async assignNewSession(sessionId: string): Promise<void> {
-    const tabsArr = Array.from(this.tabs.values())
+    // Only tabs that don't have a session yet are valid targets
+    const tabsArr = Array.from(this.tabs.values()).filter((t) => t.sessionId === null)
     if (tabsArr.length === 0) return
 
     if (this.tool.resolveOwnerPid) {
