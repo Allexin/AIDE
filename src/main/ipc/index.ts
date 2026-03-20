@@ -4,7 +4,7 @@ import { join } from 'path'
 import { spawn } from 'child_process'
 import { removeRecentProject, getAppState, loadOpenSessions, clearOpenSessions } from '../config/appState'
 import { getAppConfig, updateAppConfig } from '../config/appConfig'
-import type { ProxyConfig } from '../config/appConfig'
+import type { ProxyConfig, ReasoningConfig } from '../config/appConfig'
 import { readProjectSettings, writeProjectSettings } from '../config/projectConfig'
 import {
   readToolbarButtons,
@@ -802,6 +802,13 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   // ── Settings: save proxy config ────────────────────────────────────────────
   ipcMain.handle('settings:save-proxy', (_event, proxy: ProxyConfig) => {
     updateAppConfig({ proxy })
+  })
+
+  // ── Settings: get/save reasoning config ──────────────────────────────────────
+  ipcMain.handle('settings:get-reasoning', () => getAppConfig().reasoning)
+
+  ipcMain.handle('settings:save-reasoning', (_event, reasoning: ReasoningConfig) => {
+    updateAppConfig({ reasoning })
   })
 
   // ── Thinking: get one block by index ─────────────────────────────────────────

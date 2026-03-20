@@ -14,6 +14,7 @@ import StatusBar from '../components/layout/StatusBar'
 
 export default function EditorApp(): React.ReactElement {
   const [initialized, setInitialized] = useState(false)
+  const [showReasoningPanel, setShowReasoningPanel] = useState(false)
   const toast = useToastStore((s) => s.message)
   const hideToast = useToastStore((s) => s.hide)
 
@@ -29,11 +30,13 @@ export default function EditorApp(): React.ReactElement {
   // Load config from main process, initialize panel store and file tree store
   useEffect(() => {
     async function init(): Promise<void> {
-      const [projectSettings, appConfig, projectPath] = await Promise.all([
+      const [projectSettings, appConfig, projectPath, reasoningConfig] = await Promise.all([
         window.editorApi.getProjectSettings(),
         window.editorApi.getConfig(),
-        window.editorApi.getProjectPath()
+        window.editorApi.getProjectPath(),
+        window.editorApi.getReasoningConfig()
       ])
+      setShowReasoningPanel(reasoningConfig.showPanel)
       initFromConfig({
         activePanelRatio: projectSettings.activePanelRatio,
         collapsedWidthPx: projectSettings.collapsedWidthPx,
@@ -118,7 +121,7 @@ export default function EditorApp(): React.ReactElement {
         </div>
       </div>
 
-      <ThinkingPanel />
+      {showReasoningPanel && <ThinkingPanel />}
       <LogPanel />
       <StatusBar />
 

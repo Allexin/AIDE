@@ -6,16 +6,25 @@ interface ProxyConfig {
   useForCliTools: boolean
 }
 
+interface ReasoningConfig {
+  showPanel: boolean
+}
+
 export default function SettingsApp(): React.ReactElement {
   const [config, setConfig] = useState<ProxyConfig>({ enabled: false, address: '', useForCliTools: true })
+  const [reasoning, setReasoning] = useState<ReasoningConfig>({ showPanel: false })
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
     window.settingsApi.getProxyConfig().then(setConfig)
+    window.settingsApi.getReasoningConfig().then(setReasoning)
   }, [])
 
   const handleSave = async (): Promise<void> => {
-    await window.settingsApi.saveProxyConfig(config)
+    await Promise.all([
+      window.settingsApi.saveProxyConfig(config),
+      window.settingsApi.saveReasoningConfig(reasoning)
+    ])
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
@@ -65,6 +74,24 @@ export default function SettingsApp(): React.ReactElement {
           />
           Use for CLI tools (Claude Code)
         </label>
+      </fieldset>
+
+      <fieldset style={{ border: '1px solid #444', borderRadius: 4, padding: '12px 16px', margin: '16px 0 0' }}>
+        <legend style={{ color: '#aaa', fontSize: 12, padding: '0 6px' }}>Reasoning</legend>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
+          <input
+            type="checkbox"
+            checked={reasoning.showPanel}
+            onChange={(e) => setReasoning({ ...reasoning, showPanel: e.target.checked })}
+          />
+          Show reasoning panel
+        </label>
+
+        <p style={{ margin: 0, fontSize: 11, color: '#777', lineHeight: 1.5 }}>
+          Displays Claude's internal reasoning blocks above the log panel.<br />
+          Data may be absent if your client requests responses with reasoning disabled.
+        </p>
       </fieldset>
 
       <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 12 }}>

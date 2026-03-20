@@ -114,6 +114,7 @@ interface EditorAPI {
   getProjectSettings: () => Promise<ProjectSettings>
   saveFileTreeWidth: (width: number) => Promise<void>
   saveLogPanelHeight: (height: number) => Promise<void>
+  getReasoningConfig: () => Promise<{ showPanel: boolean }>
   getConfig: () => Promise<{
     editor: EditorConfig
     ui: { fileTreeWidthPx: number; logPanelExpandedHeightPx: number }
@@ -244,6 +245,8 @@ interface AccountManagerAPI {
 interface SettingsAPI {
   getProxyConfig: () => Promise<{ enabled: boolean; address: string; useForCliTools: boolean }>
   saveProxyConfig: (config: { enabled: boolean; address: string; useForCliTools: boolean }) => Promise<void>
+  getReasoningConfig: () => Promise<{ showPanel: boolean }>
+  saveReasoningConfig: (config: { showPanel: boolean }) => Promise<void>
 }
 
 declare interface Window {
