@@ -114,6 +114,7 @@ interface EditorAPI {
   getProjectSettings: () => Promise<ProjectSettings>
   saveFileTreeWidth: (width: number) => Promise<void>
   saveLogPanelHeight: (height: number) => Promise<void>
+  getReasoningConfig: () => Promise<{ showPanel: boolean }>
   getConfig: () => Promise<{
     editor: EditorConfig
     ui: { fileTreeWidthPx: number; logPanelExpandedHeightPx: number }
@@ -191,6 +192,11 @@ interface EditorAPI {
   fsRenameFile: (oldPath: string, newPath: string) => Promise<void>
   fsCopyFile: (src: string, dest: string) => Promise<void>
 
+  // Thinking panel
+  thinkingGetBlock: (tabId: string, index: number | 'last') => Promise<{ thinking: string; index: number; total: number } | null>
+  onThinkingUpdate: (cb: (tabId: string, total: number) => void) => () => void
+  setPtyRawLog: (enabled: boolean) => Promise<void>
+
   // Git commit
   gitGetCommitFiles: () => Promise<{
     available: boolean
@@ -239,6 +245,9 @@ interface AccountManagerAPI {
 interface SettingsAPI {
   getProxyConfig: () => Promise<{ enabled: boolean; address: string; useForCliTools: boolean }>
   saveProxyConfig: (config: { enabled: boolean; address: string; useForCliTools: boolean }) => Promise<void>
+  getReasoningConfig: () => Promise<{ showPanel: boolean }>
+  saveReasoningConfig: (config: { showPanel: boolean }) => Promise<void>
+  resizeWindow: (height: number) => void
 }
 
 declare interface Window {

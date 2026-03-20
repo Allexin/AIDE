@@ -48,6 +48,10 @@ export interface ProxyConfig {
   useForCliTools: boolean // inject into PTY env
 }
 
+export interface ReasoningConfig {
+  showPanel: boolean
+}
+
 export interface AppConfig {
   editor: EditorConfig
   ui: UiConfig
@@ -55,6 +59,7 @@ export interface AppConfig {
   git: GitConfig
   proxy: ProxyConfig
   toolbar: ToolbarAppConfig
+  reasoning: ReasoningConfig
 }
 
 const DEFAULTS: AppConfig = {
@@ -82,6 +87,9 @@ const DEFAULTS: AppConfig = {
     enabled: false,
     address: '',
     useForCliTools: true
+  },
+  reasoning: {
+    showPanel: false
   },
   toolbar: {
     sounds: {
@@ -120,6 +128,7 @@ export function initAppConfig(): void {
         sessions: { ...DEFAULTS.sessions, ...(parsed.sessions ?? {}) },
         git: { ...DEFAULTS.git, ...(parsed.git ?? {}) },
         proxy: { ...DEFAULTS.proxy, ...(parsed.proxy ?? {}) },
+        reasoning: { ...DEFAULTS.reasoning, ...(parsed.reasoning ?? {}) },
         toolbar: {
           sounds: {
             complete: parsed.toolbar?.sounds?.complete ?? DEFAULTS.toolbar.sounds.complete,

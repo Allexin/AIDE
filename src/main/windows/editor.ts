@@ -10,6 +10,8 @@ import { getAppConfig } from '../config/appConfig'
 import { startProjectWatcher, stopProjectWatcher } from '../filetree/watcher'
 import { PtyManager } from '../pty/ptyManager'
 import { ptyRegistry } from '../pty/registry'
+import { ThinkingWatcher } from '../thinking/thinkingWatcher'
+import { thinkingRegistry } from '../thinking/thinkingRegistry'
 import { getRunningCount, killAllProcesses, disposeProcessManager } from '../toolbar/processManager'
 import { startToolbarWatcher } from '../toolbar/toolbarWatcher'
 import { rebuildMenu, removeEditorWindow } from '../menu'
@@ -89,6 +91,12 @@ export function openProjectAndTrack(
   const ptyMgr = new PtyManager(editorWin, projectPath)
   ptyRegistry.set(editorWin, ptyMgr)
 
+  // Create thinking watcher and wire it to PTY manager session lifecycle
+  const thinkingWatcher = new ThinkingWatcher(editorWin, projectPath)
+  thinkingRegistry.set(editorWin, thinkingWatcher)
+  ptyMgr.onSessionAssigned = (tabId, sessionId) => thinkingWatcher.startWatching(tabId, sessionId)
+  ptyMgr.onTabClosed = (tabId) => thinkingWatcher.stopWatching(tabId)
+
   // Start filesystem watcher after the window is ready to receive IPC events
   editorWin.webContents.once('did-finish-load', () => {
     startProjectWatcher(projectPath, editorWin)
@@ -150,6 +158,8 @@ export function openProjectAndTrack(
     disposeProcessManager(editorWin)
     ptyMgr.disposeAll()
     ptyRegistry.delete(editorWin)
+    thinkingWatcher.disposeAll()
+    thinkingRegistry.delete(editorWin)
     stopProjectWatcher(projectPath)
     releaseLock(projectPath)
     openProjects.delete(projectPath)

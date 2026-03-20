@@ -48,6 +48,13 @@ export class PtyManager {
   // Previous title per tab — used to detect notable transitions via tool.detectTitleEvent
   private prevTitleCache = new Map<string, string>()
 
+  /** Called when a tab receives a sessionId (either on resume or when a new session file appears). */
+  onSessionAssigned?: (tabId: string, sessionId: string) => void
+  /** Called when a tab is closed (PTY killed, tab removed from registry). */
+  onTabClosed?: (tabId: string) => void
+  /** When true, raw PTY data is logged to cli:log under pty-raw[tabId] channels. */
+  rawLogEnabled = false
+
   constructor(win: BrowserWindow, projectPath: string, tool: CliTool = claudeCodeTool) {
     this.win = win
     this.projectPath = projectPath
@@ -200,6 +207,7 @@ export class PtyManager {
       tab.pty.kill()
     } catch {}
     this.tabs.delete(tabId)
+    this.onTabClosed?.(tabId)
   }
 
   /** Close all tabs and reopen the same sessions. Used after credential/account changes. */
@@ -280,6 +288,7 @@ export class PtyManager {
           this.debugLog(`assignNewSession: ${sessionId} → ${tab.tabId} (pid ${ownerPid})`)
           tab.sessionId = sessionId
           this.send('terminal:tab-session-id', { tabId: tab.tabId, sessionId })
+          this.onSessionAssigned?.(tab.tabId, sessionId)
         }
       } else {
         this.debugLog(`assignNewSession: ${sessionId} — no owner found among our PIDs, ignoring (external claude?)`)
@@ -314,6 +323,7 @@ export class PtyManager {
     this.tabs.set(tabId, tab)
 
     this.ensureSharedWatcher()
+    this.onSessionAssigned?.(tabId, sessionId)
 
     setTimeout(() => {
       if (!this.tabs.has(tabId)) return
@@ -381,6 +391,10 @@ export class PtyManager {
       this.feedHealthCheck(tabId, data)
       this.extractTitle(tabId, data)
       this.send('terminal:data', { tabId, data })
+      if (this.rawLogEnabled) {
+        const escaped = data.replace(/[^\x20-\x7e\t\n]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`)
+        this.send('cli:log', { channel: `pty-raw[${tabId}]`, message: escaped })
+      }
     })
     pty.onExit(() => this.send('terminal:tab-exited', { tabId }))
 
