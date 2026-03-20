@@ -9,6 +9,7 @@ import FileTreeColumn from '../components/layout/FileTreeColumn'
 import EditorPanel from '../components/layout/EditorPanel'
 import TerminalPanel from '../components/layout/TerminalPanel'
 import LogPanel from '../components/layout/LogPanel'
+import ThinkingPanel from '../components/thinking/ThinkingPanel'
 import StatusBar from '../components/layout/StatusBar'
 
 export default function EditorApp(): React.ReactElement {
@@ -117,6 +118,7 @@ export default function EditorApp(): React.ReactElement {
         </div>
       </div>
 
+      <ThinkingPanel />
       <LogPanel />
       <StatusBar />
 

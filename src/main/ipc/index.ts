@@ -34,6 +34,7 @@ import {
   killButtonProcess
 } from '../toolbar/processManager'
 import { setEditorFileOpen, rebuildMenu } from '../menu'
+import { thinkingRegistry } from '../thinking/thinkingRegistry'
 
 // Helper: spawn one git subcommand, stream stdout/stderr lines, return success/error.
 function runGitSubcommand(
@@ -801,6 +802,21 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   // ── Settings: save proxy config ────────────────────────────────────────────
   ipcMain.handle('settings:save-proxy', (_event, proxy: ProxyConfig) => {
     updateAppConfig({ proxy })
+  })
+
+  // ── Thinking: get one block by index ─────────────────────────────────────────
+  ipcMain.handle('thinking:get-block', (event, { tabId, index }: { tabId: string; index: number | 'last' }) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return null
+    return thinkingRegistry.get(senderWin)?.getBlock(tabId, index) ?? null
+  })
+
+  // ── PTY raw log toggle ────────────────────────────────────────────────────────
+  ipcMain.handle('pty:set-raw-log', (event, enabled: boolean) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return
+    const ptyMgr = ptyRegistry.get(senderWin)
+    if (ptyMgr) ptyMgr.rawLogEnabled = enabled
   })
 
   // ── Session picker: new session ───────────────────────────────────────────────

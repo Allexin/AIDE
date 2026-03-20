@@ -159,6 +159,11 @@ export interface EditorAPI {
   fsRenameFile: (oldPath: string, newPath: string) => Promise<void>
   fsCopyFile: (src: string, dest: string) => Promise<void>
 
+  // Thinking panel
+  thinkingGetBlock: (tabId: string, index: number | 'last') => Promise<{ thinking: string; index: number; total: number } | null>
+  onThinkingUpdate: (cb: (tabId: string, total: number) => void) => () => void
+  setPtyRawLog: (enabled: boolean) => Promise<void>
+
   // Git commit
   gitGetCommitFiles: () => Promise<{
     available: boolean
@@ -366,6 +371,16 @@ const editorApi: EditorAPI = {
   fsTrashFile: (filePath) => ipcRenderer.invoke('fs:trash-file', filePath),
   fsRenameFile: (oldPath, newPath) => ipcRenderer.invoke('fs:rename-file', oldPath, newPath),
   fsCopyFile: (src, dest) => ipcRenderer.invoke('fs:copy-file', src, dest),
+
+  // Thinking panel
+  thinkingGetBlock: (tabId, index) => ipcRenderer.invoke('thinking:get-block', { tabId, index }),
+  onThinkingUpdate: (cb) => {
+    const handler = (_: unknown, payload: { tabId: string; total: number }): void =>
+      cb(payload.tabId, payload.total)
+    ipcRenderer.on('thinking:update', handler)
+    return () => ipcRenderer.removeListener('thinking:update', handler)
+  },
+  setPtyRawLog: (enabled) => ipcRenderer.invoke('pty:set-raw-log', enabled),
 
   // Git commit
   gitGetCommitFiles: () => ipcRenderer.invoke('git:get-commit-files'),

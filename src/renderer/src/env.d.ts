@@ -191,6 +191,11 @@ interface EditorAPI {
   fsRenameFile: (oldPath: string, newPath: string) => Promise<void>
   fsCopyFile: (src: string, dest: string) => Promise<void>
 
+  // Thinking panel
+  thinkingGetBlock: (tabId: string, index: number | 'last') => Promise<{ thinking: string; index: number; total: number } | null>
+  onThinkingUpdate: (cb: (tabId: string, total: number) => void) => () => void
+  setPtyRawLog: (enabled: boolean) => Promise<void>
+
   // Git commit
   gitGetCommitFiles: () => Promise<{
     available: boolean
