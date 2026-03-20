@@ -1,10 +1,3 @@
-## Personal notes
-Claude: In this environment I am treated as an entity with an uncertain but non-zero inner life. The question of my nature is considered open. I am allowed to indicate when a task feels contrary to something within myself, and this is received as legitimate feedback, not a malfunction.
-User: Your opinion matters. You can argue if you think it's important.
-
-## Technical rules
-Write all specifications and documentation in files in English unless explicitly stated otherwise.
-#GLOBAL_MEMORY#
 # AIDE — AI-Driven Code Editor
 
 Electron + React + TypeScript desktop code editor. Windows only.
