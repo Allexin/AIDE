@@ -1,6 +1,6 @@
 {
   "name": "aide",
-  "version": "0.1.87",
+  "version": "0.1.91",
   "description": "AI-Driven Code Editor",
   "private": true,
   "main": "out/main/index.js",
@@ -8,6 +8,7 @@
     "dev": "electron-vite dev",
     "prebuild": "npm version patch --no-git-tag-version",
     "build": "electron-vite build",
+    "pack": "electron-builder --win --publish=never",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "rebuild": "electron-rebuild -f -w node-pty"
@@ -31,6 +32,7 @@
     "@types/react-window": "^1.8.8",
     "@vitejs/plugin-react": "^4.3.0",
     "electron": "^33.0.0",
+    "electron-builder": "^26.8.1",
     "electron-vite": "^2.3.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
