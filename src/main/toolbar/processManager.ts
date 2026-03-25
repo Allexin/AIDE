@@ -164,6 +164,16 @@ export function killAllProcesses(win: BrowserWindow): void {
 }
 
 /**
+ * Detaches all running processes from the window registry without killing them.
+ * Processes continue running in the background after the window closes.
+ */
+export function detachAllProcesses(win: BrowserWindow): void {
+  const map = getMap(win)
+  map.clear()
+  // Processes keep running; their close/error handlers check win.isDestroyed() before sending IPC
+}
+
+/**
  * Kill all processes and remove window from registry. Called on window 'closed'.
  */
 export function disposeProcessManager(win: BrowserWindow): void {

@@ -12,7 +12,7 @@ import { PtyManager } from '../pty/ptyManager'
 import { ptyRegistry } from '../pty/registry'
 import { ThinkingWatcher } from '../thinking/thinkingWatcher'
 import { thinkingRegistry } from '../thinking/thinkingRegistry'
-import { getRunningCount, killAllProcesses, disposeProcessManager } from '../toolbar/processManager'
+import { getRunningCount, killAllProcesses, detachAllProcesses, disposeProcessManager } from '../toolbar/processManager'
 import { startToolbarWatcher } from '../toolbar/toolbarWatcher'
 import { rebuildMenu, removeEditorWindow } from '../menu'
 
@@ -120,14 +120,17 @@ export function openProjectAndTrack(
           type: 'question',
           title: 'AIDE',
           message: `${count} process${count !== 1 ? 'es are' : ' is'} still running.`,
-          detail: 'Close AIDE anyway?',
-          buttons: ['Yes', 'No'],
-          defaultId: 1,
-          cancelId: 1
+          detail: 'What would you like to do?',
+          buttons: ['Close everything', 'Close editor only', 'Cancel'],
+          defaultId: 2,
+          cancelId: 2
         })
         .then(({ response }) => {
           if (response === 0) {
             killAllProcesses(editorWin)
+            editorWin.destroy()
+          } else if (response === 1) {
+            detachAllProcesses(editorWin)
             editorWin.destroy()
           }
         })
