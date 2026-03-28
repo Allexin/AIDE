@@ -96,7 +96,7 @@ export interface EditorAPI {
   onFsChanged: (cb: (event: { path: string }) => void) => () => void
 
   // Editor file operations (sync)
-  readFile: (filePath: string) => { content: string; mtime: number; size: number } | { error: string }
+  readFile: (filePath: string) => { content: string; mtime: number; size: number; isBinary?: boolean } | { error: string }
   writeFile: (filePath: string, content: string) => { mtime: number } | { error: string }
   gitShowHead: (relPath: string) => Promise<{ content: string } | { error: 'untracked' | 'other' }>
 
@@ -155,6 +155,7 @@ export interface EditorAPI {
 
   // Shell / FS operations
   shellShowItemInFolder: (filePath: string) => Promise<void>
+  shellOpenPath: (filePath: string) => Promise<void>
   fsDeleteFile: (filePath: string) => Promise<void>
   fsTrashFile: (filePath: string) => Promise<void>
   fsRenameFile: (oldPath: string, newPath: string) => Promise<void>
@@ -369,6 +370,7 @@ const editorApi: EditorAPI = {
 
   // Shell / FS operations
   shellShowItemInFolder: (filePath) => ipcRenderer.invoke('shell:show-item-in-folder', filePath),
+  shellOpenPath: (filePath) => ipcRenderer.invoke('shell:open-path', filePath),
   fsDeleteFile: (filePath) => ipcRenderer.invoke('fs:delete-file', filePath),
   fsTrashFile: (filePath) => ipcRenderer.invoke('fs:trash-file', filePath),
   fsRenameFile: (oldPath, newPath) => ipcRenderer.invoke('fs:rename-file', oldPath, newPath),

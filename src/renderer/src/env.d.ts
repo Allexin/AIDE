@@ -128,7 +128,7 @@ interface EditorAPI {
   onFsChanged: (cb: (event: { path: string }) => void) => () => void
 
   // Editor file operations
-  readFile: (filePath: string) => { content: string; mtime: number; size: number } | { error: string }
+  readFile: (filePath: string) => { content: string; mtime: number; size: number; isBinary?: boolean } | { error: string }
   writeFile: (filePath: string, content: string) => { mtime: number } | { error: string }
   gitShowHead: (relPath: string) => Promise<{ content: string } | { error: 'untracked' | 'other' }>
 
@@ -187,6 +187,7 @@ interface EditorAPI {
 
   // Shell / FS operations
   shellShowItemInFolder: (filePath: string) => Promise<void>
+  shellOpenPath: (filePath: string) => Promise<void>
   fsDeleteFile: (filePath: string) => Promise<void>
   fsTrashFile: (filePath: string) => Promise<void>
   fsRenameFile: (oldPath: string, newPath: string) => Promise<void>

@@ -1,9 +1,18 @@
 appId: com.aide.editor
 productName: AIDE
 
+directories:
+  output: release
+
 win:
   icon: app_icon.ico
+  artifactName: AIDE-${version}-portable.7z
+  signAndEditExecutable: false
   target:
-    - target: nsis
+    - target: 7z
       arch:
         - x64
+
+compression: maximum
+
+npmRebuild: false

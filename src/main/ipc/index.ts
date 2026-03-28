@@ -374,9 +374,13 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   // ── Editor: read file sync (content + mtime + size) ────────────────────────────
   ipcMain.on('editor:read-file-sync', (event, filePath: string) => {
     try {
-      const content = readFileSync(filePath, 'utf-8')
+      const buf = readFileSync(filePath)
       const stat = statSync(filePath)
-      event.returnValue = { content, mtime: stat.mtimeMs, size: stat.size }
+      // Detect binary: null byte anywhere in first 512 bytes
+      const probe = buf.subarray(0, 512)
+      const isBinary = probe.includes(0)
+      const content = isBinary ? '' : buf.toString('utf-8')
+      event.returnValue = { content, mtime: stat.mtimeMs, size: stat.size, isBinary }
     } catch (err) {
       event.returnValue = { error: (err as Error).message }
     }
@@ -644,6 +648,11 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   // ── Shell: reveal file in Explorer ────────────────────────────────────────────
   ipcMain.handle('shell:show-item-in-folder', (_event, filePath: string) => {
     shell.showItemInFolder(filePath)
+  })
+
+  // ── Shell: open with default application (file) or Explorer (folder) ──────────
+  ipcMain.handle('shell:open-path', (_event, filePath: string) => {
+    shell.openPath(filePath)
   })
 
   // ── FS: delete file permanently ───────────────────────────────────────────────

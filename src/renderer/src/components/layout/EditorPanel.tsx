@@ -65,6 +65,37 @@ function getLanguage(filePath: string): string {
   return LANG_MAP[ext] ?? 'plaintext'
 }
 
+// ── Dialog cooldown hook ──────────────────────────────────────────────────────
+
+function useDialogCooldown(ms = 1000): boolean {
+  const [ready, setReady] = React.useState(false)
+  React.useEffect(() => {
+    const id = setTimeout(() => setReady(true), ms)
+    return () => clearTimeout(id)
+  }, [ms])
+  return ready
+}
+
+// ── Notification beep ─────────────────────────────────────────────────────────
+
+function playBeep(): void {
+  try {
+    const ctx = new AudioContext()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.type = 'sine'
+    osc.frequency.value = 880
+    gain.gain.setValueAtTime(0.18, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18)
+    osc.start()
+    osc.stop(ctx.currentTime + 0.18)
+  } catch {
+    // AudioContext unavailable
+  }
+}
+
 // ── Modal overlay ─────────────────────────────────────────────────────────────
 
 function Modal({ children }: { children: React.ReactNode }): React.ReactElement {
@@ -151,6 +182,7 @@ function ConflictDialog({
   onKeepMine: () => void
   onBackup: () => void
 }): React.ReactElement {
+  const ready = useDialogCooldown()
   const name = filePath.split(/[/\\]/).pop() ?? filePath
   return (
     <Modal>
@@ -160,14 +192,54 @@ function ConflictDialog({
         were editing it.
       </p>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <button style={dialogBtnBase} onClick={onReload}>
+        <button style={{ ...dialogBtnBase, opacity: ready ? 1 : 0.4 }} disabled={!ready} onClick={onReload}>
           Reload <span style={{ color: '#7a7a7a', fontSize: 11 }}>(Discard my changes)</span>
         </button>
-        <button style={dialogBtnBase} onClick={onKeepMine}>
+        <button style={{ ...dialogBtnBase, opacity: ready ? 1 : 0.4 }} disabled={!ready} onClick={onKeepMine}>
           Keep mine <span style={{ color: '#7a7a7a', fontSize: 11 }}>(Discard external edit)</span>
         </button>
-        <button style={dialogBtnBase} onClick={onBackup}>
+        <button style={{ ...dialogBtnBase, opacity: ready ? 1 : 0.4 }} disabled={!ready} onClick={onBackup}>
           Backup &amp; Open
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+// ── Save dialog ───────────────────────────────────────────────────────────────
+
+function SaveDialog({
+  filePath,
+  onSave,
+  onDiscard,
+  onKeepEditing
+}: {
+  filePath: string
+  onSave: () => void
+  onDiscard: () => void
+  onKeepEditing: () => void
+}): React.ReactElement {
+  const ready = useDialogCooldown()
+  const name = filePath.split(/[/\\]/).pop() ?? filePath
+  return (
+    <Modal>
+      <p style={{ margin: '0 0 6px 0', fontWeight: 600, fontSize: 14 }}>Unsaved changes</p>
+      <p style={{ margin: '0 0 16px 0', color: '#9d9d9d', lineHeight: 1.5 }}>
+        <strong style={{ color: '#cccccc' }}>{name}</strong> has unsaved changes.
+      </p>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button
+          style={{ ...dialogBtnBase, background: '#0e639c', borderColor: '#0e639c', opacity: ready ? 1 : 0.4 }}
+          disabled={!ready}
+          onClick={onSave}
+        >
+          Save
+        </button>
+        <button style={{ ...dialogBtnBase, opacity: ready ? 1 : 0.4 }} disabled={!ready} onClick={onDiscard}>
+          Discard changes
+        </button>
+        <button style={{ ...dialogBtnBase, opacity: ready ? 1 : 0.4 }} disabled={!ready} onClick={onKeepEditing}>
+          Keep editing
         </button>
       </div>
     </Modal>
@@ -265,8 +337,11 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
   // ── Dirty flag ──────────────────────────────────────────────────────────────
   const dirtyRef = useRef(false)
 
-  // ── Conflict refs ───────────────────────────────────────────────────────────
+  // ── Conflict / save-dialog refs ─────────────────────────────────────────────
+  // conflictSuppressedRef: true while any modal dialog is open (save or conflict)
   const conflictSuppressedRef = useRef<boolean>(false)
+  // saveDialogOpenRef: true specifically when the save dialog (not conflict) is showing
+  const saveDialogOpenRef = useRef<boolean>(false)
   const conflictDiskContentRef = useRef<string>('')
   const conflictDiskMtimeRef = useRef<number>(0)
 
@@ -279,6 +354,7 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
   const [headContent, setHeadContent] = useState<string>('')
   const [diffDiskContent, setDiffDiskContent] = useState<string>('')
   const [largeFileSizeMb, setLargeFileSizeMb] = useState<number | null>(null)
+  const [showSaveDialog, setShowSaveDialog] = useState(false)
   const [showConflict, setShowConflict] = useState(false)
   const [noDiffState, setNoDiffState] = useState<{
     reason: 'identical' | 'untracked'
@@ -308,6 +384,9 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
         if (current !== content) {
           editorLog(`setValue len=${content.length} (was ${current.length})`)
           editorRef.current.setValue(content)
+          // setValue fires onDidChangeModelContent synchronously → dirtyRef becomes true.
+          // Reset it here since this change came from disk, not the user.
+          dirtyRef.current = false
           editorRef.current.setScrollPosition({ scrollTop: 0 })
         } else {
           editorLog(`setValue skipped — content identical`)
@@ -362,6 +441,12 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
       const readResult = window.editorApi.readFile(filePath)
       if ('error' in readResult) {
         editorLog(`readFile ERROR for ${filePath}: ${readResult.error}`)
+        return
+      }
+
+      if (readResult.isBinary) {
+        editorLog(`loadFile: binary file detected, not opening in editor`)
+        useEditorStore.getState().closeEditor()
         return
       }
 
@@ -447,11 +532,14 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
   const handleBlurRef = useRef<() => void>(() => {})
   useEffect(() => {
     handleBlurRef.current = () => {
-      if (conflictSuppressedRef.current) return
+      if (conflictSuppressedRef.current) return  // any dialog already open
       if (!dirtyRef.current) return
       const filePath = loadedFileRef.current
       if (!filePath || !editorRef.current) return
-      saveFile(filePath, editorRef.current.getValue())
+      conflictSuppressedRef.current = true
+      saveDialogOpenRef.current = true
+      playBeep()
+      setShowSaveDialog(true)
     }
   })
 
@@ -459,17 +547,31 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
 
   useEffect(() => {
     const unsub = window.editorApi.onFsChanged((event) => {
-      if (conflictSuppressedRef.current) return
       const changedPath = event.path
       if (changedPath !== loadedFileRef.current) return
 
-      editorLog(`onFsChanged path=${changedPath} loadedFile=${loadedFileRef.current}`)
+      editorLog(`onFsChanged path=${changedPath} suppressed=${conflictSuppressedRef.current} saveDialog=${saveDialogOpenRef.current}`)
       const result = window.editorApi.readFile(changedPath)
       if ('error' in result) return // File deleted — FileTreeStore will close the editor
 
       // Ignore if mtime hasn't advanced (means this was triggered by our own save)
       if (result.mtime <= diskMtimeRef.current) {
         editorLog(`onFsChanged ignored — mtime not advanced (${result.mtime} <= ${diskMtimeRef.current})`)
+        return
+      }
+
+      if (conflictSuppressedRef.current) {
+        if (saveDialogOpenRef.current) {
+          // FS change arrived while save dialog is open → transition to conflict dialog
+          editorLog(`onFsChanged: save dialog open, transitioning to conflict dialog`)
+          conflictDiskContentRef.current = result.content
+          conflictDiskMtimeRef.current = result.mtime
+          saveDialogOpenRef.current = false
+          setShowSaveDialog(false)
+          setShowConflict(true)
+          // conflictSuppressedRef stays true (conflict dialog now owns it)
+        }
+        // else: conflict dialog already open, ignore further FS changes
         return
       }
 
@@ -520,6 +622,38 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
     conflictSuppressedRef.current = false
     setShowConflict(false)
     openFileInEditor(backupAbsPath, backupRelPath)
+  }
+
+  // ── Save dialog handlers ────────────────────────────────────────────────────
+
+  const closeSaveDialog = (): void => {
+    saveDialogOpenRef.current = false
+    conflictSuppressedRef.current = false
+    setShowSaveDialog(false)
+  }
+
+  const handleSaveDialogSave = (): void => {
+    const filePath = loadedFileRef.current
+    if (filePath && editorRef.current) {
+      saveFile(filePath, editorRef.current.getValue())
+    }
+    closeSaveDialog()
+  }
+
+  const handleSaveDialogDiscard = (): void => {
+    const filePath = loadedFileRef.current
+    if (filePath) {
+      const result = window.editorApi.readFile(filePath)
+      if (!('error' in result)) {
+        applyFileToEditor(filePath, result.content, result.mtime)
+      }
+    }
+    closeSaveDialog()
+  }
+
+  const handleSaveDialogKeepEditing = (): void => {
+    closeSaveDialog()
+    // dirtyRef stays true; user will be prompted again on next blur if still dirty
   }
 
   // ── Diff toggle ─────────────────────────────────────────────────────────────
@@ -597,6 +731,8 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
     }
 
     editor.onDidChangeModelContent(() => { dirtyRef.current = true })
+    // Reset dirty after mount — setValue above (pendingContent path) may have set it prematurely.
+    dirtyRef.current = false
     editor.onDidBlurEditorText(() => handleBlurRef.current())
 
     // Track cursor position for status bar
@@ -771,6 +907,15 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
           sizeMb={largeFileSizeMb}
           onOpen={handleLargeFileOpen}
           onCancel={handleLargeFileCancel}
+        />
+      )}
+
+      {showSaveDialog && loadedFileRef.current && (
+        <SaveDialog
+          filePath={loadedFileRef.current}
+          onSave={handleSaveDialogSave}
+          onDiscard={handleSaveDialogDiscard}
+          onKeepEditing={handleSaveDialogKeepEditing}
         />
       )}
 

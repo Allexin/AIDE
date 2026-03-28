@@ -509,6 +509,10 @@ function NodeItem({
     }
   }
 
+  const handleDoubleClick = (): void => {
+    window.editorApi.shellOpenPath(node.path)
+  }
+
   const handleContextMenu = (e: React.MouseEvent): void => {
     if (!isDir) {
       e.preventDefault()
@@ -538,6 +542,7 @@ function NodeItem({
           e.dataTransfer.effectAllowed = 'copy'
         } : undefined}
         onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
