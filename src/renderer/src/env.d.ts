@@ -38,11 +38,12 @@ interface GitStatusResult {
   branch: string | null // current branch name; null if git unavailable
 }
 
-// A Claude Code session as stored on disk.
+// A CLI session as stored on disk.
 interface DiskSession {
   sessionId: string
-  title: string // from .aide/Titles/{id}.txt, defaults to 'Claude Code'
-  mtime: number // ms since epoch
+  summary: string // session summary (type:"summary" JSONL entry), or empty
+  title: string   // last user message, or empty
+  mtime: number   // ms since epoch
 }
 
 // A terminal session tab (open in the editor).

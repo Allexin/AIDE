@@ -395,7 +395,7 @@ export const claudeCodeTool: CliTool = {
           [
             '-NoProfile',
             '-Command',
-            'Get-CimInstance Win32_Process -Filter "name=\'claude.exe\'" | Select-Object ProcessId,ParentProcessId | ConvertTo-Json'
+            'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress'
           ],
           { timeout: 5000 },
           (err, stdout) => {
@@ -406,17 +406,47 @@ export const claudeCodeTool: CliTool = {
       })
       if (!json) return null
       const parsed = JSON.parse(json)
-      // PowerShell returns a single object (not array) when there's only one match
-      const procs: Array<{ ProcessId: number; ParentProcessId: number }> = Array.isArray(parsed)
+      const allProcs: Array<{ ProcessId: number; ParentProcessId: number; Name: string }> = Array.isArray(parsed)
         ? parsed
         : [parsed]
+
+      // Build parent map for ancestor chain traversal
+      const parentMap = new Map<number, number>()
+      for (const proc of allProcs) {
+        parentMap.set(proc.ProcessId, proc.ParentProcessId)
+      }
+
       const pidSet = new Set(candidatePids)
-      for (const proc of procs) {
-        if (pidSet.has(proc.ParentProcessId)) {
-          return proc.ParentProcessId
+
+      // Walk up from a given PID to find the first ancestor that is one of our candidate PTY PIDs.
+      // This handles multi-hop chains: powershell → cmd.exe (npm shim) → claude.exe
+      const findAncestorInSet = (startPid: number): number | null => {
+        let pid = startPid
+        const visited = new Set<number>()
+        while (pid && pid !== 0 && !visited.has(pid)) {
+          if (pidSet.has(pid)) return pid
+          visited.add(pid)
+          pid = parentMap.get(pid) ?? 0
+        }
+        return null
+      }
+
+      // Collect all claude-related processes descended from one of our candidate PTYs
+      const matches: Array<{ pid: number; ancestor: number }> = []
+      for (const proc of allProcs) {
+        if (!(proc.Name ?? '').toLowerCase().startsWith('claude')) continue
+        const ancestor = findAncestorInSet(proc.ParentProcessId)
+        if (ancestor !== null) {
+          matches.push({ pid: proc.ProcessId, ancestor })
         }
       }
-      return null
+
+      if (matches.length === 0) return null
+
+      // When multiple tabs are waiting: pick the most recently started claude (highest PID)
+      // so that each new session file is matched to the tab that just launched it.
+      matches.sort((a, b) => b.pid - a.pid)
+      return matches[0].ancestor
     } catch (e) {
       cliLog(LOG_CH, `[resolveOwnerPid] failed: ${e}`)
       return null

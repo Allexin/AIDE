@@ -283,8 +283,7 @@ export class PtyManager {
    *  Callers must serialise via sessionAssignQueue so each call sees an updated tab list.
    */
   private async assignNewSession(sessionId: string): Promise<void> {
-    // Only tabs that don't have a session yet are valid targets
-    const tabsArr = Array.from(this.tabs.values()).filter((t) => t.sessionId === null)
+    const tabsArr = Array.from(this.tabs.values())
     if (tabsArr.length === 0) return
 
     if (this.tool.resolveOwnerPid) {

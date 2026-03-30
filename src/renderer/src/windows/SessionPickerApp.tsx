@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 
 interface DiskSession {
   sessionId: string
-  title: string
+  summary: string  // session summary (type:"summary" JSONL entry), or empty
+  title: string    // last user message, or empty
   mtime: number
 }
 
@@ -14,9 +15,10 @@ interface SessionTabInfo {
 
 interface SessionEntry {
   sessionId: string
+  summary: string
   slug: string
   mtime: number
-  openTabId: string | null // non-null if already open as a tab
+  openTabId: string | null
 }
 
 function formatRelativeTime(mtime: number): string {
@@ -50,6 +52,7 @@ export default function SessionPickerApp(): React.ReactElement {
         )
         return {
           sessionId: ds.sessionId,
+          summary: ds.summary ?? '',
           slug: ds.title,
           mtime: ds.mtime,
           openTabId: openTab ? openTab.tabId : null
@@ -105,25 +108,9 @@ export default function SessionPickerApp(): React.ReactElement {
       {/* Session list */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {loading ? (
-          <div
-            style={{
-              padding: 16,
-              color: '#555',
-              fontSize: 12
-            }}
-          >
-            Loading…
-          </div>
+          <div style={{ padding: 16, color: '#555', fontSize: 12 }}>Loading…</div>
         ) : sessions.length === 0 ? (
-          <div
-            style={{
-              padding: 16,
-              color: '#555',
-              fontSize: 12
-            }}
-          >
-            No sessions found
-          </div>
+          <div style={{ padding: 16, color: '#555', fontSize: 12 }}>No sessions found</div>
         ) : (
           sessions.map((entry) => (
             <SessionRow
@@ -179,31 +166,39 @@ interface SessionRowProps {
 
 function SessionRow({ entry, onSelect, disabled }: SessionRowProps): React.ReactElement {
   const [hovered, setHovered] = useState(false)
-  const [expanded, setExpanded] = useState(false)
   const [preview, setPreview] = useState<PreviewMessage[] | null>(null)
   const [loadingPreview, setLoadingPreview] = useState(false)
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const togglePreview = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (expanded) {
-      setExpanded(false)
-      return
-    }
-    setExpanded(true)
-    if (preview === null) {
-      setLoadingPreview(true)
-      window.sessionPickerApi.getPreview(entry.sessionId).then((msgs) => {
-        setPreview(msgs)
-        setLoadingPreview(false)
-      })
+  const handleMouseEnter = () => {
+    setHovered(true)
+    // Small delay before loading/showing preview to avoid flicker on fast mouse-overs
+    hoverTimer.current = setTimeout(() => {
+      if (preview === null && !loadingPreview) {
+        setLoadingPreview(true)
+        window.sessionPickerApi.getPreview(entry.sessionId).then((msgs) => {
+          setPreview(msgs)
+          setLoadingPreview(false)
+        })
+      }
+    }, 200)
+  }
+
+  const handleMouseLeave = () => {
+    setHovered(false)
+    if (hoverTimer.current !== null) {
+      clearTimeout(hoverTimer.current)
+      hoverTimer.current = null
     }
   }
+
+  const showPreview = hovered && (loadingPreview || (preview !== null && preview.length > 0))
 
   return (
     <div style={{ borderBottom: '1px solid #2d2d2d' }}>
       <div
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
         onClick={() => !disabled && onSelect(entry)}
         style={{
           display: 'flex',
@@ -214,22 +209,6 @@ function SessionRow({ entry, onSelect, disabled }: SessionRowProps): React.React
           background: hovered && !disabled ? '#2a2d2e' : 'transparent'
         }}
       >
-        {/* Expand/collapse toggle */}
-        <span
-          onClick={togglePreview}
-          style={{
-            fontSize: 10,
-            color: '#888',
-            flexShrink: 0,
-            width: 14,
-            cursor: 'pointer',
-            textAlign: 'center',
-            userSelect: 'none'
-          }}
-        >
-          {expanded ? '▾' : '▸'}
-        </span>
-
         {/* Running indicator */}
         <span
           style={{
@@ -242,17 +221,44 @@ function SessionRow({ entry, onSelect, disabled }: SessionRowProps): React.React
           ●
         </span>
 
-        {/* Slug / session ID */}
-        <span
-          style={{
-            flex: 1,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            color: entry.openTabId ? '#d4d4d4' : '#9d9d9d'
-          }}
-        >
-          {entry.slug}
+        {/* Title block: CC summary + last user message */}
+        <span style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {entry.summary ? (
+            <>
+              <span
+                style={{
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  color: entry.openTabId ? '#d4d4d4' : '#b0b0b0'
+                }}
+              >
+                {entry.summary}
+              </span>
+              <span
+                style={{
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: 11,
+                  color: '#666'
+                }}
+              >
+                {entry.slug || '—'}
+              </span>
+            </>
+          ) : (
+            <span
+              style={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                color: entry.openTabId ? '#d4d4d4' : '#9d9d9d'
+              }}
+            >
+              {entry.slug || 'Claude Code'}
+            </span>
+          )}
         </span>
 
         {/* Relative time */}
@@ -268,22 +274,25 @@ function SessionRow({ entry, onSelect, disabled }: SessionRowProps): React.React
         </span>
       </div>
 
-      {/* Preview panel */}
-      {expanded && (
+      {/* Hover preview panel */}
+      {showPreview && (
         <div
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
           style={{
-            padding: '4px 16px 8px 40px',
-            background: '#1a1a1a',
-            maxHeight: 200,
+            padding: '4px 16px 8px 26px',
+            background: '#181818',
+            maxHeight: 220,
             overflowY: 'auto',
             fontSize: 11,
-            lineHeight: '1.5'
+            lineHeight: '1.5',
+            borderTop: '1px solid #2a2a2a'
           }}
         >
-          {loadingPreview ? (
+          {loadingPreview && preview === null ? (
             <span style={{ color: '#555' }}>Loading…</span>
           ) : preview && preview.length > 0 ? (
-            preview.map((msg, i) => (
+            preview.slice(-8).map((msg, i) => (
               <div key={i} style={{ marginBottom: 4 }}>
                 <span
                   style={{
@@ -300,13 +309,11 @@ function SessionRow({ entry, onSelect, disabled }: SessionRowProps): React.React
                     wordBreak: 'break-word'
                   }}
                 >
-                  {msg.text.length > 500 ? msg.text.slice(0, 500) + '…' : msg.text}
+                  {msg.text.length > 300 ? msg.text.slice(0, 300) + '…' : msg.text}
                 </span>
               </div>
             ))
-          ) : (
-            <span style={{ color: '#555' }}>No messages</span>
-          )}
+          ) : null}
         </div>
       )}
     </div>

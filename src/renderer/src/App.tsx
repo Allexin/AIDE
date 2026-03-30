@@ -1,9 +1,10 @@
-import React from 'react'
-import PickerApp from './windows/PickerApp'
-import EditorApp from './windows/EditorApp'
-import SessionPickerApp from './windows/SessionPickerApp'
-import AccountManagerApp from './windows/AccountManagerApp'
-import SettingsApp from './windows/SettingsApp'
+import React, { Suspense } from 'react'
+
+const PickerApp = React.lazy(() => import('./windows/PickerApp'))
+const EditorApp = React.lazy(() => import('./windows/EditorApp'))
+const SessionPickerApp = React.lazy(() => import('./windows/SessionPickerApp'))
+const AccountManagerApp = React.lazy(() => import('./windows/AccountManagerApp'))
+const SettingsApp = React.lazy(() => import('./windows/SettingsApp'))
 
 function getWindowType(): 'picker' | 'editor' | 'session-picker' | 'account-manager' | 'settings' {
   const params = new URLSearchParams(window.location.search)
@@ -17,9 +18,13 @@ function getWindowType(): 'picker' | 'editor' | 'session-picker' | 'account-mana
 
 export default function App(): React.ReactElement {
   const windowType = getWindowType()
-  if (windowType === 'editor') return <EditorApp />
-  if (windowType === 'session-picker') return <SessionPickerApp />
-  if (windowType === 'account-manager') return <AccountManagerApp />
-  if (windowType === 'settings') return <SettingsApp />
-  return <PickerApp />
+  return (
+    <Suspense fallback={null}>
+      {windowType === 'editor' && <EditorApp />}
+      {windowType === 'session-picker' && <SessionPickerApp />}
+      {windowType === 'account-manager' && <AccountManagerApp />}
+      {windowType === 'settings' && <SettingsApp />}
+      {windowType === 'picker' && <PickerApp />}
+    </Suspense>
+  )
 }

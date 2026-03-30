@@ -2,7 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 interface DiskSession {
   sessionId: string
-  slug: string | null
+  summary: string
+  title: string
   mtime: number
 }
 
