@@ -25,6 +25,8 @@ interface SessionTabInfo {
   tabId: string
   sessionId: string | null
   title?: string
+  toolId: string
+  toolName: string
 }
 
 interface InitialTabsResult {
@@ -103,8 +105,8 @@ export interface EditorAPI {
   // Terminal
   terminalCreateInitial: () => Promise<InitialTabsResult | null>
   saveOpenSessions: (projectPath: string, tabs: Array<{ sessionId: string; title: string }>, activeSessionId: string | null) => void
-  terminalCreateNew: () => Promise<SessionTabInfo | null>
-  terminalResumeSession: (sessionId: string) => Promise<SessionTabInfo | null>
+  terminalCreateNew: (toolId?: string) => Promise<SessionTabInfo | null>
+  terminalResumeSession: (sessionId: string, toolId?: string) => Promise<SessionTabInfo | null>
   terminalWrite: (tabId: string, data: string) => void
   terminalResize: (tabId: string, cols: number, rows: number) => void
   terminalCloseTab: (tabId: string) => void
@@ -118,7 +120,7 @@ export interface EditorAPI {
   onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void
   onTerminalNewTab: (cb: (tab: SessionTabInfo) => void) => () => void
   onTerminalTabClosed: (cb: (tabId: string) => void) => () => void
-  onTerminalResetTabs: (cb: (tabs: { tabId: string; sessionId: string | null }[]) => void) => () => void
+  onTerminalResetTabs: (cb: (tabs: SessionTabInfo[]) => void) => () => void
   onTerminalTabEvent: (cb: (tabId: string, event: string) => void) => () => void
 
   // Toolbar
@@ -140,10 +142,14 @@ export interface EditorAPI {
 
   // CLI tools
   getCliTools: () => Promise<{ id: string; name: string }[]>
+  getActivatedTools: () => Promise<string[]>
+  getDefaultToolId: () => Promise<string | null>
+  setDefaultToolId: (toolId: string) => Promise<void>
 
   // Accounts
   getAccountCurrentInfo: (toolId: string) => Promise<{ label: string; saved: boolean } | null>
   getUsageInfo: (toolId: string) => Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number } | null>
+  getContextInsertText: (toolId: string, relPath: string) => Promise<string | null>
   onCliLog: (cb: (channel: string, message: string) => void) => () => void
   onAccountsChanged: (cb: () => void) => () => void
 
@@ -223,8 +229,8 @@ const editorApi: EditorAPI = {
   terminalCreateInitial: () => ipcRenderer.invoke('terminal:create-initial'),
   saveOpenSessions: (projectPath: string, tabs: Array<{ sessionId: string; title: string }>, activeSessionId: string | null) =>
     ipcRenderer.send('state:save-open-sessions', { projectPath, tabs, activeSessionId }),
-  terminalCreateNew: () => ipcRenderer.invoke('terminal:create-new'),
-  terminalResumeSession: (sessionId) => ipcRenderer.invoke('terminal:resume-session', sessionId),
+  terminalCreateNew: (toolId?: string) => ipcRenderer.invoke('terminal:create-new', toolId),
+  terminalResumeSession: (sessionId, toolId?) => ipcRenderer.invoke('terminal:resume-session', sessionId, toolId),
   terminalWrite: (tabId, data) => ipcRenderer.send('terminal:write', tabId, data),
   terminalResize: (tabId, cols, rows) => ipcRenderer.send('terminal:resize', tabId, cols, rows),
   terminalCloseTab: (tabId) => ipcRenderer.send('terminal:close-tab', tabId),
@@ -288,9 +294,8 @@ const editorApi: EditorAPI = {
     return () => ipcRenderer.removeListener('terminal:tab-closed', handler)
   },
 
-  onTerminalResetTabs: (cb: (tabs: { tabId: string; sessionId: string | null }[]) => void) => {
-    const handler = (_: unknown, tabs: { tabId: string; sessionId: string | null }[]): void =>
-      cb(tabs)
+  onTerminalResetTabs: (cb: (tabs: SessionTabInfo[]) => void) => {
+    const handler = (_: unknown, tabs: SessionTabInfo[]): void => cb(tabs)
     ipcRenderer.on('terminal:reset-tabs', handler)
     return () => ipcRenderer.removeListener('terminal:reset-tabs', handler)
   },
@@ -344,12 +349,17 @@ const editorApi: EditorAPI = {
 
   // CLI tools
   getCliTools: () => ipcRenderer.invoke('cli-tools:list'),
+  getActivatedTools: () => ipcRenderer.invoke('cli-tools:get-activated'),
+  getDefaultToolId: () => ipcRenderer.invoke('project-settings:get-default-tool'),
+  setDefaultToolId: (toolId: string) => ipcRenderer.invoke('project-settings:set-default-tool', toolId),
 
   // Accounts
   getAccountCurrentInfo: (toolId: string) =>
     ipcRenderer.invoke('accounts:get-current-info', toolId) as Promise<{ label: string; saved: boolean } | null>,
   getUsageInfo: (toolId: string) =>
     ipcRenderer.invoke('usage:get-info', toolId) as Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number } | null>,
+  getContextInsertText: (toolId: string, relPath: string) =>
+    ipcRenderer.invoke('editor:context-insert', toolId, relPath) as Promise<string | null>,
   onCliLog: (cb: (channel: string, message: string) => void): (() => void) => {
     const handler = (_e: unknown, data: { channel: string; message: string }): void =>
       cb(data.channel, data.message)

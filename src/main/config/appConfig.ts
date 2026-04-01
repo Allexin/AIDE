@@ -42,12 +42,6 @@ export interface ToolbarAppConfig {
   sounds: ToolbarSoundsConfig
 }
 
-export interface ProxyConfig {
-  enabled: boolean
-  address: string        // e.g. "http://127.0.0.1:1080"
-  useForCliTools: boolean // inject into PTY env
-}
-
 export interface ReasoningConfig {
   showPanel: boolean
 }
@@ -57,9 +51,9 @@ export interface AppConfig {
   ui: UiConfig
   sessions: SessionsConfig
   git: GitConfig
-  proxy: ProxyConfig
   toolbar: ToolbarAppConfig
   reasoning: ReasoningConfig
+  toolConfigs: Record<string, Record<string, unknown>>
 }
 
 const DEFAULTS: AppConfig = {
@@ -83,14 +77,10 @@ const DEFAULTS: AppConfig = {
   git: {
     addBatchSize: 10
   },
-  proxy: {
-    enabled: false,
-    address: '',
-    useForCliTools: true
-  },
   reasoning: {
     showPanel: false
   },
+  toolConfigs: {},
   toolbar: {
     sounds: {
       complete: [
@@ -127,8 +117,8 @@ export function initAppConfig(): void {
         ui: { ...DEFAULTS.ui, ...(parsed.ui ?? {}) },
         sessions: { ...DEFAULTS.sessions, ...(parsed.sessions ?? {}) },
         git: { ...DEFAULTS.git, ...(parsed.git ?? {}) },
-        proxy: { ...DEFAULTS.proxy, ...(parsed.proxy ?? {}) },
         reasoning: { ...DEFAULTS.reasoning, ...(parsed.reasoning ?? {}) },
+        toolConfigs: { ...DEFAULTS.toolConfigs, ...(parsed.toolConfigs ?? {}) },
         toolbar: {
           sounds: {
             complete: parsed.toolbar?.sounds?.complete ?? DEFAULTS.toolbar.sounds.complete,
@@ -149,6 +139,15 @@ export function getAppConfig(): AppConfig {
 
 export function updateAppConfig(partial: Partial<AppConfig>): void {
   config = { ...config, ...partial }
+  writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
+}
+
+export function getToolConfig(toolId: string): Record<string, unknown> {
+  return config.toolConfigs[toolId] ?? {}
+}
+
+export function updateToolConfig(toolId: string, values: Record<string, unknown>): void {
+  config.toolConfigs = { ...config.toolConfigs, [toolId]: values }
   writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
 }
 

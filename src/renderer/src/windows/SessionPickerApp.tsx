@@ -1,10 +1,11 @@
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 
-interface DiskSession {
+interface PickerSession {
   sessionId: string
-  summary: string  // session summary (type:"summary" JSONL entry), or empty
-  title: string    // last user message, or empty
+  summary: string
+  title: string
   mtime: number
+  toolId: string
 }
 
 interface SessionTabInfo {
@@ -18,6 +19,7 @@ interface SessionEntry {
   summary: string
   slug: string
   mtime: number
+  toolId: string
   openTabId: string | null
 }
 
@@ -44,40 +46,67 @@ export default function SessionPickerApp(): React.ReactElement {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
 
+  // Tool selector state
+  const [activatedTools, setActivatedTools] = useState<{ id: string; name: string }[]>([])
+  const [defaultToolId, setDefaultToolId] = useState<string | null>(null)
+  const [toolDropdownOpen, setToolDropdownOpen] = useState(false)
+
   useEffect(() => {
-    window.sessionPickerApi.getSessions().then(({ diskSessions, openTabs }) => {
-      const entries: SessionEntry[] = diskSessions.map((ds: DiskSession) => {
+    window.sessionPickerApi.getSessions().then(({ sessions, openTabs }) => {
+      const entries: SessionEntry[] = sessions.map((ps: PickerSession) => {
         const openTab = openTabs.find(
-          (t: SessionTabInfo) => t.sessionId === ds.sessionId
+          (t: SessionTabInfo) => t.sessionId === ps.sessionId
         )
         return {
-          sessionId: ds.sessionId,
-          summary: ds.summary ?? '',
-          slug: ds.title,
-          mtime: ds.mtime,
+          sessionId: ps.sessionId,
+          summary: ps.summary ?? '',
+          slug: ps.title,
+          mtime: ps.mtime,
+          toolId: ps.toolId,
           openTabId: openTab ? openTab.tabId : null
         }
       })
       setSessions(entries)
       setLoading(false)
     })
+
+    Promise.all([
+      window.sessionPickerApi.getActivatedTools(),
+      window.sessionPickerApi.getCliTools(),
+      window.sessionPickerApi.getDefaultToolId()
+    ]).then(([activated, allTools, defaultId]) => {
+      const active = allTools.filter((t) => activated.includes(t.id))
+      setActivatedTools(active)
+      const effectiveId = (defaultId && activated.includes(defaultId))
+        ? defaultId
+        : active[0]?.id ?? null
+      setDefaultToolId(effectiveId)
+    })
   }, [])
 
-  const handleSelect = (entry: SessionEntry) => {
+  const handleSelect = (entry: SessionEntry): void => {
     if (busy) return
     setBusy(true)
     if (entry.openTabId) {
       window.sessionPickerApi.switchTab(entry.openTabId)
     } else {
-      window.sessionPickerApi.resumeSession(entry.sessionId)
+      window.sessionPickerApi.resumeSession(entry.sessionId, entry.toolId)
     }
   }
 
-  const handleNewSession = () => {
+  const handleNewSession = useCallback((toolId?: string): void => {
     if (busy) return
     setBusy(true)
-    window.sessionPickerApi.newSession()
-  }
+    window.sessionPickerApi.newSession(toolId ?? defaultToolId ?? undefined)
+  }, [busy, defaultToolId])
+
+  const handleSelectTool = useCallback((toolId: string): void => {
+    setDefaultToolId(toolId)
+    setToolDropdownOpen(false)
+    window.sessionPickerApi.setDefaultToolId(toolId)
+  }, [])
+
+  const currentToolName = activatedTools.find((t) => t.id === defaultToolId)?.name
 
   return (
     <div
@@ -116,6 +145,7 @@ export default function SessionPickerApp(): React.ReactElement {
             <SessionRow
               key={entry.sessionId}
               entry={entry}
+              toolName={activatedTools.find((t) => t.id === entry.toolId)?.name ?? entry.toolId}
               onSelect={handleSelect}
               disabled={busy}
             />
@@ -123,31 +153,105 @@ export default function SessionPickerApp(): React.ReactElement {
         )}
       </div>
 
-      {/* Footer: New session button */}
+      {/* Footer: New session button with tool selector */}
       <div
         style={{
           padding: '8px 16px 12px',
           borderTop: '1px solid #3d3d3d',
           display: 'flex',
-          justifyContent: 'flex-end'
+          justifyContent: 'flex-end',
+          alignItems: 'center',
+          gap: 6
         }}
+        onClick={() => setToolDropdownOpen(false)}
       >
-        <button
-          onClick={handleNewSession}
-          disabled={busy}
-          style={{
-            background: '#0e639c',
-            color: '#ffffff',
-            border: 'none',
-            borderRadius: 3,
-            padding: '5px 14px',
-            fontSize: 12,
-            cursor: busy ? 'default' : 'pointer',
-            opacity: busy ? 0.6 : 1
-          }}
-        >
-          New session
-        </button>
+        {currentToolName && (
+          <span style={{ fontSize: 11, color: '#666', marginRight: 2 }}>
+            {currentToolName}
+          </span>
+        )}
+
+        <div style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ display: 'flex', alignItems: 'stretch' }}>
+            <button
+              onClick={() => handleNewSession()}
+              disabled={busy}
+              style={{
+                background: '#0e639c',
+                color: '#ffffff',
+                border: 'none',
+                borderRight: activatedTools.length > 1 ? '1px solid #0a5080' : 'none',
+                borderRadius: activatedTools.length > 1 ? '3px 0 0 3px' : 3,
+                padding: '5px 14px',
+                fontSize: 12,
+                cursor: busy ? 'default' : 'pointer',
+                opacity: busy ? 0.6 : 1
+              }}
+            >
+              New session
+            </button>
+
+            {activatedTools.length > 1 && (
+              <button
+                onClick={() => setToolDropdownOpen((o) => !o)}
+                disabled={busy}
+                title="Select tool"
+                style={{
+                  background: '#0e639c',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '0 3px 3px 0',
+                  padding: '5px 8px',
+                  fontSize: 10,
+                  cursor: busy ? 'default' : 'pointer',
+                  opacity: busy ? 0.6 : 1
+                }}
+              >
+                ▾
+              </button>
+            )}
+          </div>
+
+          {toolDropdownOpen && activatedTools.length > 1 && (
+            <div
+              style={{
+                position: 'absolute',
+                bottom: '100%',
+                right: 0,
+                marginBottom: 4,
+                background: '#252526',
+                border: '1px solid #454545',
+                borderRadius: 3,
+                zIndex: 100,
+                minWidth: 140
+              }}
+            >
+              {activatedTools.map((tool) => (
+                <button
+                  key={tool.id}
+                  onClick={() => handleSelectTool(tool.id)}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    padding: '7px 14px',
+                    background: tool.id === defaultToolId ? '#37373d' : 'none',
+                    border: 'none',
+                    color: '#ccc',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    textAlign: 'left'
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#37373d' }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLElement).style.background = tool.id === defaultToolId ? '#37373d' : 'none'
+                  }}
+                >
+                  {tool.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -160,11 +264,12 @@ interface PreviewMessage {
 
 interface SessionRowProps {
   entry: SessionEntry
+  toolName: string
   onSelect: (entry: SessionEntry) => void
   disabled: boolean
 }
 
-function SessionRow({ entry, onSelect, disabled }: SessionRowProps): React.ReactElement {
+function SessionRow({ entry, toolName, onSelect, disabled }: SessionRowProps): React.ReactElement {
   const [hovered, setHovered] = useState(false)
   const [preview, setPreview] = useState<PreviewMessage[] | null>(null)
   const [loadingPreview, setLoadingPreview] = useState(false)
@@ -176,7 +281,7 @@ function SessionRow({ entry, onSelect, disabled }: SessionRowProps): React.React
     hoverTimer.current = setTimeout(() => {
       if (preview === null && !loadingPreview) {
         setLoadingPreview(true)
-        window.sessionPickerApi.getPreview(entry.sessionId).then((msgs) => {
+        window.sessionPickerApi.getPreview(entry.sessionId, entry.toolId).then((msgs) => {
           setPreview(msgs)
           setLoadingPreview(false)
         })
@@ -256,7 +361,7 @@ function SessionRow({ entry, onSelect, disabled }: SessionRowProps): React.React
                 color: entry.openTabId ? '#d4d4d4' : '#9d9d9d'
               }}
             >
-              {entry.slug || 'Claude Code'}
+              {entry.slug || '—'}
             </span>
           )}
         </span>
@@ -300,7 +405,7 @@ function SessionRow({ entry, onSelect, disabled }: SessionRowProps): React.React
                     fontWeight: 600
                   }}
                 >
-                  {msg.role === 'user' ? 'You' : 'Claude'}:
+                  {msg.role === 'user' ? 'You' : toolName}:
                 </span>{' '}
                 <span
                   style={{

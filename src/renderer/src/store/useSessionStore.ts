@@ -1,17 +1,21 @@
 import { create } from 'zustand'
 
-interface SessionTabInfo {
+export interface SessionTabInfo {
   tabId: string
   sessionId: string | null
   title?: string
+  toolId: string
+  toolName: string
 }
 
 export interface SessionTab {
   tabId: string
   sessionId: string | null
+  toolId: string
+  toolName: string
   slug: string
   exited: boolean
-  attention: boolean  // true → blink tab (Claude is waiting for input)
+  attention: boolean
 }
 
 interface SessionState {
@@ -19,7 +23,6 @@ interface SessionState {
   activeTabId: string | null
   initialized: boolean
 
-  // Actions
   initWithTab: (tab: SessionTabInfo) => void
   initWithTabs: (tabs: SessionTabInfo[], activeTabId: string | null) => void
   addTab: (tab: SessionTabInfo) => void
@@ -32,6 +35,18 @@ interface SessionState {
   setAttention: (tabId: string, attention: boolean) => void
 }
 
+function tabFromInfo(t: SessionTabInfo, slug?: string): SessionTab {
+  return {
+    tabId: t.tabId,
+    sessionId: t.sessionId,
+    toolId: t.toolId,
+    toolName: t.toolName,
+    slug: slug ?? t.title ?? t.toolName ?? t.toolId,
+    exited: false,
+    attention: false
+  }
+}
+
 export const useSessionStore = create<SessionState>((set) => ({
   tabs: [],
   activeTabId: null,
@@ -39,28 +54,27 @@ export const useSessionStore = create<SessionState>((set) => ({
 
   initWithTab: (tab: SessionTabInfo) =>
     set({
-      tabs: [{ tabId: tab.tabId, sessionId: tab.sessionId, slug: tab.title || 'Claude Code', exited: false, attention: false }],
+      tabs: [tabFromInfo(tab)],
       activeTabId: tab.tabId,
       initialized: true
     }),
 
   initWithTabs: (tabs: SessionTabInfo[], activeTabId: string | null) =>
     set({
-      tabs: tabs.map((t) => ({ tabId: t.tabId, sessionId: t.sessionId, slug: t.title || 'Claude Code', exited: false, attention: false })),
+      tabs: tabs.map((t) => tabFromInfo(t)),
       activeTabId: activeTabId ?? tabs[0]?.tabId ?? null,
       initialized: true
     }),
 
   addTab: (tab: SessionTabInfo) =>
     set((state) => ({
-      tabs: [...state.tabs, { tabId: tab.tabId, sessionId: tab.sessionId, slug: 'Claude Code', exited: false, attention: false }],
-      activeTabId: tab.tabId // switch to new tab
+      tabs: [...state.tabs, tabFromInfo(tab)],
+      activeTabId: tab.tabId
     })),
 
   setActiveTab: (tabId: string) =>
     set((state) => ({
       activeTabId: tabId,
-      // Clear attention when user switches to this tab
       tabs: state.tabs.map((t) => (t.tabId === tabId ? { ...t, attention: false } : t))
     })),
 
@@ -82,7 +96,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   closeTab: (tabId: string) =>
     set((state) => {
       const remaining = state.tabs.filter((t) => t.tabId !== tabId)
-      if (remaining.length === 0) return state // can't close the last tab
+      if (remaining.length === 0) return state
       const newActive =
         state.activeTabId === tabId
           ? remaining[Math.max(0, state.tabs.findIndex((t) => t.tabId === tabId) - 1)]?.tabId ?? remaining[0].tabId
@@ -92,7 +106,7 @@ export const useSessionStore = create<SessionState>((set) => ({
 
   resetTabs: (newTabs: SessionTabInfo[]) =>
     set({
-      tabs: newTabs.map((t) => ({ tabId: t.tabId, sessionId: t.sessionId, slug: 'Claude Code', exited: false, attention: false })),
+      tabs: newTabs.map((t) => tabFromInfo(t)),
       activeTabId: newTabs[0]?.tabId ?? null
     }),
 

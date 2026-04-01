@@ -142,12 +142,16 @@ function ContextMenu({
 }): React.ReactElement {
   const { viewDiff } = useEditorStore()
   const activeTabId = useSessionStore((s) => s.activeTabId)
+  const activeToolId = useSessionStore((s) => s.tabs.find((t) => t.tabId === s.activeTabId)?.toolId ?? null)
 
   const handleAddToContext = (): void => {
-    if (activeTabId) {
-      window.editorApi.terminalWrite(activeTabId, `@${relativePath} `)
-      // H2: Focus the terminal after adding to context
-      usePanelStore.getState().focusTerminal()
+    if (activeTabId && activeToolId) {
+      window.editorApi.getContextInsertText(activeToolId, relativePath).then((text) => {
+        if (text) {
+          window.editorApi.terminalWrite(activeTabId, text + ' ')
+          usePanelStore.getState().focusTerminal()
+        }
+      })
     }
     onClose()
   }
@@ -184,7 +188,7 @@ function ContextMenu({
             onClose()
           }}
         />
-        <ContextMenuItem label="Add to Claude context" onClick={handleAddToContext} />
+        <ContextMenuItem label="Add to context" onClick={handleAddToContext} />
         <ContextMenuSeparator />
         <ContextMenuItem
           label="View Diff"

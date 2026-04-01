@@ -2,9 +2,9 @@ import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { existsSync, readdirSync, readFileSync, writeFileSync, statSync, promises as fsAsync } from 'fs'
 import { join } from 'path'
 import { spawn } from 'child_process'
-import { removeRecentProject, getAppState, loadOpenSessions, clearOpenSessions } from '../config/appState'
+import { removeRecentProject, getAppState, loadOpenSessions, clearOpenSessions, getActivatedTools, setActivatedTools } from '../config/appState'
 import { getAppConfig, updateAppConfig } from '../config/appConfig'
-import type { ProxyConfig, ReasoningConfig } from '../config/appConfig'
+import type { ReasoningConfig } from '../config/appConfig'
 import { readProjectSettings, writeProjectSettings } from '../config/projectConfig'
 import {
   readToolbarButtons,
@@ -18,7 +18,7 @@ import {
 import { openProjectAndTrack } from '../windows/editor'
 import { runGitStatus } from '../filetree/gitStatus'
 import { ptyRegistry, pickerEditorMap } from '../pty/registry'
-import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
+import { getRegisteredTools, getToolById, getDefaultTool } from '../pty/cliTools/registry'
 import {
   listAccounts,
   listAccountInfos,
@@ -26,7 +26,6 @@ import {
   deleteAccount as deleteStoredAccount,
   updateAccount as updateStoredAccount
 } from '../config/accountStorage'
-import { scanSessions, readSessionPreview, getSessionsDir } from '../pty/sessionScanner'
 import { initCliLogger } from '../pty/cliTools/cliLogger'
 import { createSessionPickerWindow } from '../windows/sessionPicker'
 import {
@@ -221,10 +220,25 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     for (const [p, win] of openProjects) {
       if (win === senderWin) { projectPath = p; break }
     }
-    const saved = projectPath ? loadOpenSessions(projectPath) : null
-    const result = await ptyMgr.createInitialTabs(saved?.tabs ?? undefined, saved?.activeSessionId ?? null)
 
-    // Clear saved sessions after restore (they're now live in PtyManager)
+    const activatedTools = getActivatedTools()
+    if (activatedTools.length === 0) {
+      const { openCliToolsWindow } = await import('../windows/cliTools')
+      const cliWin = openCliToolsWindow(senderWin)
+      await new Promise<void>((resolve) => {
+        const onIpc = (): void => { cliWin.removeListener('closed', onClose); resolve() }
+        const onClose = (): void => { ipcMain.removeListener('cli-tools:closed', onIpc); resolve() }
+        ipcMain.once('cli-tools:closed', onIpc)
+        cliWin.once('closed', onClose)
+      })
+    }
+
+    const saved = projectPath ? loadOpenSessions(projectPath) : null
+    if (saved) {
+      saved.tabs = saved.tabs.map((t) => ({ ...t, toolId: t.toolId ?? 'claude-code' }))
+    }
+    const result = await ptyMgr.createInitialTabs(saved?.tabs ?? undefined, saved?.activeSessionId ?? null, getActivatedTools())
+
     if (projectPath && saved) {
       clearOpenSessions(projectPath)
     }
@@ -233,21 +247,21 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   })
 
   // ── Terminal: create new session tab ─────────────────────────────────────────
-  ipcMain.handle('terminal:create-new', async (event) => {
+  ipcMain.handle('terminal:create-new', async (event, toolId?: string) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender)
     if (!senderWin) return null
     const ptyMgr = ptyRegistry.get(senderWin)
     if (!ptyMgr) return null
-    return ptyMgr.createNewSessionTab()
+    return ptyMgr.createNewSessionTab(toolId, getActivatedTools())
   })
 
   // ── Terminal: resume a session by ID ─────────────────────────────────────────
-  ipcMain.handle('terminal:resume-session', async (event, sessionId: string) => {
+  ipcMain.handle('terminal:resume-session', async (event, sessionId: string, toolId?: string) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender)
     if (!senderWin) return null
     const ptyMgr = ptyRegistry.get(senderWin)
     if (!ptyMgr) return null
-    return ptyMgr.resumeSessionTab(sessionId)
+    return ptyMgr.resumeSessionTab(sessionId, toolId, getActivatedTools())
   })
 
   // ── Terminal: write data to PTY (fire-and-forget) ─────────────────────────────
@@ -279,18 +293,97 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   })
 
   // ── Terminal: create new session with prompt ──────────────────────────────────
-  ipcMain.handle('terminal:create-with-prompt', async (event, _toolId: string, prompt: string) => {
+  ipcMain.handle('terminal:create-with-prompt', async (event, toolId: string | undefined, prompt: string) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender)
     if (!senderWin) return null
     const ptyMgr = ptyRegistry.get(senderWin)
     if (!ptyMgr) return null
-    const tabInfo = await ptyMgr.createNewSessionWithPrompt(prompt)
+    const tabInfo = await ptyMgr.createNewSessionWithPrompt(prompt, toolId, getActivatedTools())
     senderWin.webContents.send('terminal:new-tab', tabInfo)
     return tabInfo
   })
 
   // ── CLI tools: list registered tools ──────────────────────────────────────────
-  ipcMain.handle('cli-tools:list', () => getRegisteredTools())
+  ipcMain.handle('cli-tools:list', () => getRegisteredTools().map((t) => ({ id: t.id, name: t.name })))
+
+  // ── CLI tools: get activated list ─────────────────────────────────────────────
+  ipcMain.handle('cli-tools:get-activated', () => getActivatedTools())
+
+  // ── CLI tools: get all with activation state ───────────────────────────────────
+  ipcMain.handle('cli-tools:get-all', async () => {
+    const activated = getActivatedTools()
+    return getRegisteredTools().map((t) => ({
+      id: t.id,
+      name: t.name,
+      installUrl: t.installUrl ?? null,
+      activated: activated.includes(t.id)
+    }))
+  })
+
+  // ── CLI tools: activate ───────────────────────────────────────────────────────
+  ipcMain.handle('cli-tools:activate', async (_e, toolId: string) => {
+    const tool = getToolById(toolId)
+    if (!tool) return { ok: false, error: 'Unknown tool' }
+    try {
+      const installed = await tool.isInstalled()
+      if (!installed) return { ok: false, error: 'Not found in PATH' }
+      const current = getActivatedTools()
+      if (!current.includes(toolId)) setActivatedTools([...current, toolId])
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  // ── CLI tools: deactivate ─────────────────────────────────────────────────────
+  ipcMain.handle('cli-tools:deactivate', (_e, toolId: string) => {
+    setActivatedTools(getActivatedTools().filter((id) => id !== toolId))
+  })
+
+  // ── Tool settings: get all ────────────────────────────────────────────────────
+  ipcMain.handle('tool-settings:get-all', async () => {
+    const activated = getActivatedTools()
+    const results = []
+    for (const tool of getRegisteredTools()) {
+      if (!activated.includes(tool.id)) continue
+      if (!tool.settingsFields) continue
+      const fields = tool.settingsFields()
+      const values = tool.getSettings ? await tool.getSettings() : {}
+      results.push({ toolId: tool.id, name: tool.name, fields, values })
+    }
+    return results
+  })
+
+  // ── Tool settings: update ─────────────────────────────────────────────────────
+  ipcMain.handle('tool-settings:update', async (_e, toolId: string, values: Record<string, unknown>) => {
+    const tool = getToolById(toolId)
+    if (tool?.updateSettings) await tool.updateSettings(values)
+  })
+
+  // ── Project settings: get default tool ───────────────────────────────────────
+  ipcMain.handle('project-settings:get-default-tool', (event) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return null
+    for (const [projectPath, win] of openProjects) {
+      if (win === senderWin) {
+        return readProjectSettings(projectPath).defaultToolId ?? null
+      }
+    }
+    return null
+  })
+
+  // ── Project settings: set default tool ───────────────────────────────────────
+  ipcMain.handle('project-settings:set-default-tool', (event, toolId: string) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return
+    for (const [projectPath, win] of openProjects) {
+      if (win === senderWin) {
+        const s = readProjectSettings(projectPath)
+        writeProjectSettings(projectPath, { ...s, defaultToolId: toolId })
+        return
+      }
+    }
+  })
 
   // ── Terminal: open session picker window ──────────────────────────────────────
   ipcMain.on('terminal:open-session-picker', (event) => {
@@ -299,34 +392,52 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     createSessionPickerWindow(senderWin)
   })
 
-  // ── Session picker: get sessions (disk sessions + open tabs) ──────────────────
+  // ── Session picker: get sessions (all activated tools + open tabs) ────────────
   ipcMain.handle('session-picker:get-sessions', async (event) => {
     const pickerWin = BrowserWindow.fromWebContents(event.sender)
-    if (!pickerWin) return { diskSessions: [], openTabs: [] }
+    if (!pickerWin) return { sessions: [], openTabs: [] }
 
     const editorWin = pickerEditorMap.get(pickerWin)
-    if (!editorWin) return { diskSessions: [], openTabs: [] }
+    if (!editorWin) return { sessions: [], openTabs: [] }
 
     const ptyMgr = ptyRegistry.get(editorWin)
     const openTabs = ptyMgr?.getTabs() ?? []
 
-    // Find project path for this editor window
     let projectPath: string | undefined
     for (const [p, w] of openProjects) {
-      if (w === editorWin) {
-        projectPath = p
-        break
-      }
+      if (w === editorWin) { projectPath = p; break }
     }
 
-    const diskSessions = projectPath ? await scanSessions(projectPath) : []
+    if (!projectPath) return { sessions: [], openTabs }
+
+    const activated = getActivatedTools()
+    const allSessions: Array<{ sessionId: string; summary: string; title: string; mtime: number; toolId: string }> = []
+
+    for (const toolId of activated) {
+      const tool = getToolById(toolId)
+      if (!tool) continue
+      try {
+        const toolSessions = await tool.scanSessions(projectPath)
+        for (const s of toolSessions) {
+          allSessions.push({
+            sessionId: s.sessionId,
+            summary: s.summary ?? '',
+            title: s.slug,
+            mtime: s.lastModified.getTime(),
+            toolId: tool.id
+          })
+        }
+      } catch { /* skip tools that fail to scan */ }
+    }
+
+    allSessions.sort((a, b) => b.mtime - a.mtime)
     const maxSessions = getAppConfig().sessions.maxSessionsInPicker
 
-    return { diskSessions: diskSessions.slice(0, maxSessions), openTabs }
+    return { sessions: allSessions.slice(0, maxSessions), openTabs }
   })
 
   // ── Session picker: get session preview messages ──────────────────────────────
-  ipcMain.handle('session-picker:get-preview', async (event, sessionId: string) => {
+  ipcMain.handle('session-picker:get-preview', async (event, sessionId: string, toolId: string) => {
     const pickerWin = BrowserWindow.fromWebContents(event.sender)
     if (!pickerWin) return []
 
@@ -335,14 +446,14 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
 
     let projectPath: string | undefined
     for (const [p, w] of openProjects) {
-      if (w === editorWin) {
-        projectPath = p
-        break
-      }
+      if (w === editorWin) { projectPath = p; break }
     }
     if (!projectPath) return []
 
-    return readSessionPreview(getSessionsDir(projectPath), sessionId)
+    const tool = getToolById(toolId)
+    if (!tool?.getSessionPreview) return []
+
+    return tool.getSessionPreview(projectPath, sessionId)
   })
 
   // ── Session picker: switch to already-open tab ────────────────────────────────
@@ -357,7 +468,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   })
 
   // ── Session picker: resume session (create new tab) ───────────────────────────
-  ipcMain.handle('session-picker:resume-session', async (event, sessionId: string) => {
+  ipcMain.handle('session-picker:resume-session', async (event, sessionId: string, toolId?: string) => {
     const pickerWin = BrowserWindow.fromWebContents(event.sender)
     if (!pickerWin) return
     const editorWin = pickerEditorMap.get(pickerWin)
@@ -366,7 +477,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     const ptyMgr = ptyRegistry.get(editorWin)
     if (!ptyMgr) return
 
-    const tabInfo = await ptyMgr.resumeSessionTab(sessionId)
+    const tabInfo = await ptyMgr.resumeSessionTab(sessionId, toolId, getActivatedTools())
     editorWin.webContents.send('terminal:new-tab', tabInfo)
     pickerWin.close()
   })
@@ -709,8 +820,23 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     return tool.getUsageInfo()
   })
 
+  // ── Context insert: get text to insert for a file path ───────────────────
+  ipcMain.handle('editor:context-insert', (_event, toolId: string, relPath: string) => {
+    const tool = getToolById(toolId)
+    return tool?.contextInsert?.(relPath) ?? null
+  })
+
   // ── Accounts: get tools list ─────────────────────────────────────────────────
-  ipcMain.handle('accounts:get-tools', () => getRegisteredTools())
+  ipcMain.handle('accounts:get-tools', () => {
+    const activated = getActivatedTools()
+    return getRegisteredTools()
+      .filter((t) => activated.includes(t.id))
+      .map((t) => ({
+        id: t.id,
+        name: t.name,
+        hasAccount: typeof t.isLoggedIn === 'function'
+      }))
+  })
 
   // ── Accounts: check if logged in ───────────────────────────────────────────
   ipcMain.handle('accounts:is-logged-in', async (_event, toolId: string) => {
@@ -805,14 +931,6 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     return true
   })
 
-  // ── Settings: get proxy config ──────────────────────────────────────────────
-  ipcMain.handle('settings:get-proxy', () => getAppConfig().proxy)
-
-  // ── Settings: save proxy config ────────────────────────────────────────────
-  ipcMain.handle('settings:save-proxy', (_event, proxy: ProxyConfig) => {
-    updateAppConfig({ proxy })
-  })
-
   // ── Settings: get/save reasoning config ──────────────────────────────────────
   ipcMain.handle('settings:get-reasoning', () => getAppConfig().reasoning)
 
@@ -844,7 +962,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   })
 
   // ── Session picker: new session ───────────────────────────────────────────────
-  ipcMain.handle('session-picker:new-session', async (event) => {
+  ipcMain.handle('session-picker:new-session', async (event, toolId?: string) => {
     const pickerWin = BrowserWindow.fromWebContents(event.sender)
     if (!pickerWin) return
     const editorWin = pickerEditorMap.get(pickerWin)
@@ -853,7 +971,12 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     const ptyMgr = ptyRegistry.get(editorWin)
     if (!ptyMgr) return
 
-    const tabInfo = await ptyMgr.createNewSessionTab()
+    let projectPath: string | undefined
+    for (const [p, w] of openProjects) {
+      if (w === editorWin) { projectPath = p; break }
+    }
+    const effectiveToolId = toolId ?? (projectPath ? readProjectSettings(projectPath).defaultToolId : undefined)
+    const tabInfo = await ptyMgr.createNewSessionTab(effectiveToolId, getActivatedTools())
     editorWin.webContents.send('terminal:new-tab', tabInfo)
     pickerWin.close()
   })

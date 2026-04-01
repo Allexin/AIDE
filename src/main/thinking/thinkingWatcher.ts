@@ -1,8 +1,6 @@
 import { watch, openSync, fstatSync, readSync, closeSync, existsSync } from 'fs'
 import type { FSWatcher } from 'fs'
-import { join } from 'path'
 import type { BrowserWindow } from 'electron'
-import { getSessionsDir } from '../pty/sessionScanner'
 
 interface TabState {
   sessionId: string
@@ -14,19 +12,20 @@ interface TabState {
 
 export class ThinkingWatcher {
   private readonly win: BrowserWindow
-  private readonly projectPath: string
   private tabs = new Map<string, TabState>()
 
-  constructor(win: BrowserWindow, projectPath: string) {
+  constructor(win: BrowserWindow) {
     this.win = win
-    this.projectPath = projectPath
   }
 
-  startWatching(tabId: string, sessionId: string): void {
+  /** Start watching a session file. filePath comes from tool.getSessionFilePath().
+   *  If filePath is null the tool does not support file-based thinking blocks — no-op.
+   */
+  startWatching(tabId: string, sessionId: string, filePath: string | null): void {
     // Stop any existing watcher for this tab first
     this.stopWatching(tabId)
 
-    const filePath = join(getSessionsDir(this.projectPath), `${sessionId}.jsonl`)
+    if (!filePath) return
 
     const state: TabState = {
       sessionId,

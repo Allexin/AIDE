@@ -61,6 +61,7 @@ export default function StatusBar(): React.ReactElement {
   // ── CLI account sensor (left) ───────────────────────────────────────────────
   const [accountLabel, setAccountLabel] = useState<string | null>(null)
   const [accountSaved, setAccountSaved] = useState(true)
+  const activeToolIdRef = useRef<string | null>(null)
 
   // ── Usage limits sensor (left, next to account) ────────────────────────────
   const [usageInfo, setUsageInfo] = useState<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number } | null>(null)
@@ -68,14 +69,17 @@ export default function StatusBar(): React.ReactElement {
   const [usageAge, setUsageAge] = useState('')
 
   const fetchUsage = useCallback(() => {
+    const toolId = activeToolIdRef.current
+    if (!toolId) return
     lastUsageFetch.current = Date.now()
-    window.editorApi.getUsageInfo('claude-code').then((info) => {
+    window.editorApi.getUsageInfo(toolId).then((info) => {
       setUsageInfo(info)
     })
   }, [])
 
-  const refreshAccount = React.useCallback(() => {
-    const toolId = 'claude-code'
+  const refreshAccount = useCallback(() => {
+    const toolId = activeToolIdRef.current
+    if (!toolId) return
     window.editorApi.getAccountCurrentInfo(toolId).then((info) => {
       if (info) {
         setAccountLabel(info.label)
@@ -86,8 +90,22 @@ export default function StatusBar(): React.ReactElement {
     })
   }, [])
 
+  // Load default tool ID once on mount, then kick off initial fetches
   useEffect(() => {
-    refreshAccount()
+    window.editorApi.getDefaultToolId().then(async (id) => {
+      if (!id) {
+        const activated = await window.editorApi.getActivatedTools()
+        id = activated[0] ?? null
+      }
+      activeToolIdRef.current = id
+      if (id) {
+        refreshAccount()
+        fetchUsage()
+      }
+    })
+  }, [refreshAccount, fetchUsage])
+
+  useEffect(() => {
     const unsubs = [
       window.editorApi.onAccountsChanged(() => { refreshAccount(); fetchUsage() }),
       window.editorApi.onTerminalSwitchTab(refreshAccount),
@@ -112,8 +130,6 @@ export default function StatusBar(): React.ReactElement {
   }, [usageInfo?.fetchedAt])
 
   useEffect(() => {
-    fetchUsage()
-
     // Adaptive polling: 5 min focused, 20 min unfocused
     let timerId: ReturnType<typeof setInterval>
 
@@ -126,7 +142,6 @@ export default function StatusBar(): React.ReactElement {
     startInterval()
 
     const onFocus = (): void => {
-      // If >5 min since last fetch, refresh immediately
       if (Date.now() - lastUsageFetch.current > 300_000) fetchUsage()
       startInterval()
     }

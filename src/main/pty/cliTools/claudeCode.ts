@@ -2,13 +2,14 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, renameS
 import { execFile } from 'child_process'
 import { homedir } from 'os'
 import { join } from 'path'
-import { net, session } from 'electron'
-import type { CliTool, CliSession, UsageInfo } from './types'
-import { scanSessions as scanDiskSessions, watchSessionsDir, getSessionsDir } from '../sessionScanner'
-import { getAppConfig } from '../../config/appConfig'
+import { session } from 'electron'
+import type { CliTool, CliSession, SettingsField, UsageInfo } from './types'
+import { scanSessions as scanDiskSessions, watchSessionsDir, getSessionsDir, readSessionPreview } from './sessionScanner'
+import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
 
 const LOG_CH = 'Claude Code Errors'
+const TOOL_NAME = 'Claude Code'
 
 /** Detected CLI version, parsed from the startup banner ("Claude Code vX.Y.Z"). */
 let detectedCliVersion: string | null = null
@@ -62,6 +63,14 @@ const CREDENTIAL_KEYS = ['oauthAccount', 'userID'] as const
 /** Path to the separate credentials file (access/refresh tokens). */
 const CREDENTIALS_JSON = join(homedir(), '.claude', '.credentials.json')
 
+const TOOL_ID = 'claude-code'
+
+/** Returns the configured proxy address, or null if not set. */
+function resolveProxyAddress(): string | null {
+  const addr = (getToolConfig(TOOL_ID).proxy as string) ?? ''
+  return addr || null
+}
+
 /** Exponential backoff state for usage API 429 responses. */
 const usageBackoff = { delay: 60_000, until: 0 }
 
@@ -86,7 +95,46 @@ function usageFromCache(cached: Record<string, unknown>): UsageInfo {
 
 export const claudeCodeTool: CliTool = {
   id: 'claude-code',
-  name: 'Claude Code',
+  name: TOOL_NAME,
+
+  installUrl: 'https://claude.ai/download',
+
+  async isInstalled(): Promise<boolean> {
+    return new Promise((resolve) => {
+      execFile('where', ['claude'], { timeout: 3000 }, (err) => resolve(!err))
+    })
+  },
+
+  settingsFields(): SettingsField[] {
+    return [
+      {
+        key: 'proxy',
+        label: 'Proxy address',
+        description: 'Leave empty to use no proxy (e.g. http://127.0.0.1:1080)',
+        type: 'string',
+        default: ''
+      }
+    ]
+  },
+
+  async getSettings(): Promise<Record<string, unknown>> {
+    return getToolConfig(TOOL_ID)
+  },
+
+  async updateSettings(values: Record<string, unknown>): Promise<void> {
+    updateToolConfig(TOOL_ID, values)
+  },
+
+  getEnvOverrides(): Record<string, string> {
+    const addr = resolveProxyAddress()
+    if (!addr) return {}
+    return {
+      HTTP_PROXY: addr,
+      http_proxy: addr,
+      HTTPS_PROXY: addr,
+      https_proxy: addr
+    }
+  },
 
   async prepareProject(projectPath: string): Promise<void> {
     await ensureProjectTrusted(projectPath)
@@ -97,6 +145,7 @@ export const claudeCodeTool: CliTool = {
     return sessions.map((s) => ({
       sessionId: s.sessionId,
       slug: s.title,
+      summary: s.summary || undefined,
       lastModified: new Date(s.mtime)
     }))
   },
@@ -276,15 +325,12 @@ export const claudeCodeTool: CliTool = {
     }
 
     try {
-      const proxyConfig = getAppConfig().proxy
-      if (proxyConfig.enabled && proxyConfig.address) {
-        await session.defaultSession.setProxy({ proxyRules: proxyConfig.address })
-      } else {
-        await session.defaultSession.setProxy({ proxyRules: '' })
-      }
+      const usageSession = session.fromPartition('claude-usage-api', { cache: false })
+      const proxyAddr = resolveProxyAddress()
+      await usageSession.setProxy({ proxyRules: proxyAddr ?? '' })
 
       const userAgent = `claude-cli/${detectedCliVersion ?? '1.0.0'} (external, cli)`
-      const res = await net.fetch('https://api.anthropic.com/api/oauth/usage', {
+      const res = await usageSession.fetch('https://api.anthropic.com/api/oauth/usage', {
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'User-Agent': userAgent,
@@ -465,12 +511,24 @@ export const claudeCodeTool: CliTool = {
     return null
   },
 
+  getSessionPreview(projectPath: string, sessionId: string): Promise<Array<{ role: 'user' | 'assistant'; text: string }>> {
+    return Promise.resolve(readSessionPreview(getSessionsDir(projectPath), sessionId))
+  },
+
+  getSessionFilePath(projectPath: string, sessionId: string): string {
+    return join(getSessionsDir(projectPath), `${sessionId}.jsonl`)
+  },
+
+  contextInsert(relPath: string): string {
+    return `@${relPath}`
+  },
+
   watchForNewSessions(projectPath: string, onNew: (session: CliSession) => void): () => void {
     const sessionsDir = getSessionsDir(projectPath)
     return watchSessionsDir(sessionsDir, (sessionId: string) => {
       onNew({
         sessionId,
-        slug: 'Claude Code',
+        slug: TOOL_NAME,
         lastModified: new Date()
       })
     })

@@ -1,12 +1,44 @@
+export interface SettingsField {
+  key: string
+  label: string
+  description?: string
+  type: 'string' | 'boolean' | 'number' | 'password' | 'select'
+  options?: Array<{ value: string; label: string }>
+  default?: unknown
+  /** Only render this field when the named sibling key equals the given value. */
+  visibleWhen?: { key: string; value: unknown }
+}
+
 export interface CliSession {
   sessionId: string
   slug: string        // human-readable label (used as tab title until OSC title arrives)
+  summary?: string    // optional AI-generated session title (e.g. from Claude Code custom-title entry)
   lastModified: Date
 }
 
 export interface CliTool {
   readonly id: string
   readonly name: string
+
+  /** URL shown in CLI Tools Manager when the tool is not installed. */
+  readonly installUrl?: string
+
+  /** Returns true if the CLI binary is present on the system. */
+  isInstalled(): Promise<boolean>
+
+  /** Declares configurable fields rendered in Settings UI. */
+  settingsFields?(): SettingsField[]
+
+  /** Load current settings values. */
+  getSettings?(): Promise<Record<string, unknown>>
+
+  /** Persist updated settings values. */
+  updateSettings?(values: Record<string, unknown>): Promise<void>
+
+  /** Return additional environment variables to inject into the PTY shell.
+   *  Called synchronously at spawn time; reads from in-memory config only.
+   */
+  getEnvOverrides?(): Record<string, string>
 
   /** Find existing sessions for a project on disk, sorted newest first. */
   scanSessions(projectPath: string): Promise<CliSession[]>
@@ -91,6 +123,23 @@ export interface CliTool {
    *  prevTitle is null on the very first title assignment.
    */
   detectTitleEvent?(prevTitle: string | null, newTitle: string): string | null
+
+  /** Return the last few conversation messages for a session, for preview in the session picker.
+   *  Returns an empty array if the tool does not support session preview.
+   */
+  getSessionPreview?(projectPath: string, sessionId: string): Promise<Array<{ role: 'user' | 'assistant'; text: string }>>
+
+  /** Return the absolute path to the session data file for the given session.
+   *  Used by ThinkingWatcher and other components that need to read session files directly.
+   *  Returns null if the tool does not use file-based session storage.
+   */
+  getSessionFilePath?(projectPath: string, sessionId: string): string | null
+
+  /** Return the text to insert into the terminal to reference a file in AI context
+   *  (e.g. Claude Code uses "@relativePath").
+   *  Returns null if the tool does not support this feature — the context menu item is hidden.
+   */
+  contextInsert?(relPath: string): string | null
 }
 
 export interface UsageInfo {

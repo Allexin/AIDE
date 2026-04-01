@@ -6,6 +6,7 @@ import { getAppConfig } from '../config/appConfig'
 import { createPickerWindow } from '../windows/picker'
 import { createAccountManagerWindow } from '../windows/accountManager'
 import { createSettingsWindow } from '../windows/settings'
+import { openCliToolsWindow } from '../windows/cliTools'
 import { getRunningCount, killAllProcesses } from '../toolbar/processManager'
 import { registerCommand } from './commandRegistry'
 import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
@@ -297,6 +298,14 @@ export function rebuildMenu(): void {
     {
       label: 'CLI',
       submenu: [
+        {
+          label: 'Manage CLI Tools...',
+          click: (): void => {
+            const parent = getEditorWindow()
+            if (parent) openCliToolsWindow(parent)
+          }
+        },
+        { type: 'separator' },
         {
           label: 'Manage Accounts...',
           click: (): void => {

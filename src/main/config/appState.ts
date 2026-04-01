@@ -10,6 +10,7 @@ export interface RecentProject {
 export interface SavedSessionEntry {
   sessionId: string
   title: string
+  toolId: string
 }
 
 export interface ProjectOpenSessions {
@@ -19,12 +20,14 @@ export interface ProjectOpenSessions {
 
 export interface AppState {
   recentProjects: RecentProject[]
-  openSessions: Record<string, ProjectOpenSessions> // keyed by project path
+  openSessions: Record<string, ProjectOpenSessions>
+  activatedTools: string[]
 }
 
 const DEFAULTS: AppState = {
   recentProjects: [],
-  openSessions: {}
+  openSessions: {},
+  activatedTools: []
 }
 
 let state: AppState = structuredClone(DEFAULTS)
@@ -77,5 +80,14 @@ export function loadOpenSessions(projectPath: string): ProjectOpenSessions | nul
 
 export function clearOpenSessions(projectPath: string): void {
   delete state.openSessions[projectPath]
+  saveAppState()
+}
+
+export function getActivatedTools(): string[] {
+  return state.activatedTools
+}
+
+export function setActivatedTools(ids: string[]): void {
+  state.activatedTools = ids
   saveAppState()
 }

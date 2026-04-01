@@ -92,9 +92,12 @@ export function openProjectAndTrack(
   ptyRegistry.set(editorWin, ptyMgr)
 
   // Create thinking watcher and wire it to PTY manager session lifecycle
-  const thinkingWatcher = new ThinkingWatcher(editorWin, projectPath)
+  const thinkingWatcher = new ThinkingWatcher(editorWin)
   thinkingRegistry.set(editorWin, thinkingWatcher)
-  ptyMgr.onSessionAssigned = (tabId, sessionId) => thinkingWatcher.startWatching(tabId, sessionId)
+  ptyMgr.onSessionAssigned = (tabId, sessionId, tool) => {
+    const filePath = tool.getSessionFilePath?.(projectPath, sessionId) ?? null
+    thinkingWatcher.startWatching(tabId, sessionId, filePath)
+  }
   ptyMgr.onTabClosed = (tabId) => thinkingWatcher.stopWatching(tabId)
 
   // Start filesystem watcher after the window is ready to receive IPC events
@@ -142,7 +145,7 @@ export function openProjectAndTrack(
     const sessions = ptyMgr.getActiveSessions()
     const toSave = sessions
       .filter((s) => s.sessionId)
-      .map((s) => ({ sessionId: s.sessionId!, title: s.title }))
+      .map((s) => ({ sessionId: s.sessionId!, title: s.title, toolId: s.toolId }))
 
     // DEBUG: log what we're saving
     const dbg = join(projectPath, '.aide', 'session-debug.log')

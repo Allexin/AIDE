@@ -207,6 +207,11 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 
   const [deadSessionDialog, setDeadSessionDialog] = useState(false)
 
+  // Tool name for the collapsed label — derived reactively from the active tab
+  const currentToolName = useSessionStore(
+    (s) => s.tabs.find((t) => t.tabId === s.activeTabId)?.toolName ?? 'terminal'
+  )
+
   // Map of tabId → fit+focus functions (populated by TerminalTab on mount)
   const fitFunctions = useRef<Map<string, FitFn>>(new Map())
   const containerRef = useRef<HTMLDivElement>(null)
@@ -395,7 +400,7 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
             whiteSpace: 'nowrap'
           }}
         >
-          Claude Code
+          {currentToolName}
         </span>
       </div>
     )

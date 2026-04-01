@@ -51,6 +51,8 @@ interface SessionTabInfo {
   tabId: string
   sessionId: string | null // null until .jsonl appears (new sessions)
   title?: string // saved title for restore; renderer uses as initial slug
+  toolId: string
+  toolName: string
 }
 
 interface InitialTabsResult {
@@ -136,8 +138,8 @@ interface EditorAPI {
   // Terminal
   terminalCreateInitial: () => Promise<InitialTabsResult | null>
   saveOpenSessions: (projectPath: string, tabs: Array<{ sessionId: string; title: string }>, activeSessionId: string | null) => void
-  terminalCreateNew: () => Promise<SessionTabInfo | null>
-  terminalResumeSession: (sessionId: string) => Promise<SessionTabInfo | null>
+  terminalCreateNew: (toolId?: string) => Promise<SessionTabInfo | null>
+  terminalResumeSession: (sessionId: string, toolId?: string) => Promise<SessionTabInfo | null>
   terminalWrite: (tabId: string, data: string) => void
   terminalResize: (tabId: string, cols: number, rows: number) => void
   terminalCloseTab: (tabId: string) => void
@@ -151,7 +153,7 @@ interface EditorAPI {
   onTerminalSwitchTab: (cb: (tabId: string) => void) => () => void
   onTerminalNewTab: (cb: (tab: SessionTabInfo) => void) => () => void
   onTerminalTabClosed: (cb: (tabId: string) => void) => () => void
-  onTerminalResetTabs: (cb: (tabs: { tabId: string; sessionId: string | null }[]) => void) => () => void
+  onTerminalResetTabs: (cb: (tabs: SessionTabInfo[]) => void) => () => void
   onTerminalTabEvent: (cb: (tabId: string, event: string) => void) => () => void
 
   // Toolbar
@@ -173,10 +175,14 @@ interface EditorAPI {
 
   // CLI tools
   getCliTools: () => Promise<{ id: string; name: string }[]>
+  getActivatedTools: () => Promise<string[]>
+  getDefaultToolId: () => Promise<string | null>
+  setDefaultToolId: (toolId: string) => Promise<void>
 
   // Accounts
   getAccountCurrentInfo: (toolId: string) => Promise<{ label: string; saved: boolean } | null>
   getUsageInfo: (toolId: string) => Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number } | null>
+  getContextInsertText: (toolId: string, relPath: string) => Promise<string | null>
   onCliLog: (cb: (channel: string, message: string) => void) => () => void
   onAccountsChanged: (cb: () => void) => () => void
 
@@ -218,12 +224,24 @@ interface PreviewMessage {
   text: string
 }
 
+interface PickerSession {
+  sessionId: string
+  summary: string
+  title: string
+  mtime: number
+  toolId: string
+}
+
 interface SessionPickerAPI {
-  getSessions: () => Promise<{ diskSessions: DiskSession[]; openTabs: SessionTabInfo[] }>
-  getPreview: (sessionId: string) => Promise<PreviewMessage[]>
+  getSessions: () => Promise<{ sessions: PickerSession[]; openTabs: SessionTabInfo[] }>
+  getPreview: (sessionId: string, toolId: string) => Promise<PreviewMessage[]>
   switchTab: (tabId: string) => void
-  resumeSession: (sessionId: string) => Promise<void>
-  newSession: () => Promise<void>
+  resumeSession: (sessionId: string, toolId: string) => Promise<void>
+  newSession: (toolId?: string) => Promise<void>
+  getActivatedTools: () => Promise<string[]>
+  getCliTools: () => Promise<{ id: string; name: string }[]>
+  getDefaultToolId: () => Promise<string | null>
+  setDefaultToolId: (toolId: string) => Promise<void>
 }
 
 interface CliAccountInfo {
@@ -245,11 +263,37 @@ interface AccountManagerAPI {
 }
 
 interface SettingsAPI {
-  getProxyConfig: () => Promise<{ enabled: boolean; address: string; useForCliTools: boolean }>
-  saveProxyConfig: (config: { enabled: boolean; address: string; useForCliTools: boolean }) => Promise<void>
   getReasoningConfig: () => Promise<{ showPanel: boolean }>
   saveReasoningConfig: (config: { showPanel: boolean }) => Promise<void>
+  getToolSettings: () => Promise<Array<{ toolId: string; name: string; fields: SettingsField[]; values: Record<string, unknown> }>>
+  updateToolSettings: (toolId: string, values: Record<string, unknown>) => Promise<void>
+  getAccountTools: () => Promise<Array<{ id: string; name: string; hasAccount: boolean }>>
+  getLoginIdentifier: (toolId: string) => Promise<string | null>
   resizeWindow: (height: number) => void
+}
+
+interface SettingsField {
+  key: string
+  label: string
+  description?: string
+  type: 'string' | 'boolean' | 'number' | 'password' | 'select'
+  options?: Array<{ value: string; label: string }>
+  default?: unknown
+  visibleWhen?: { key: string; value: unknown }
+}
+
+interface CliToolEntry {
+  id: string
+  name: string
+  installUrl: string | null
+  activated: boolean
+}
+
+interface CliToolsAPI {
+  getAll: () => Promise<CliToolEntry[]>
+  activate: (toolId: string) => Promise<{ ok: boolean; error?: string }>
+  deactivate: (toolId: string) => Promise<void>
+  close: () => void
 }
 
 declare interface Window {
@@ -258,4 +302,5 @@ declare interface Window {
   sessionPickerApi: SessionPickerAPI
   accountManagerApi: AccountManagerAPI
   settingsApi: SettingsAPI
+  cliToolsApi: CliToolsAPI
 }

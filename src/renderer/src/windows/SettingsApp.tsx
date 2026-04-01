@@ -1,24 +1,136 @@
 import React, { useEffect, useRef, useState } from 'react'
 
-interface ProxyConfig {
-  enabled: boolean
-  address: string
-  useForCliTools: boolean
-}
-
 interface ReasoningConfig {
   showPanel: boolean
 }
 
+interface SettingsField {
+  key: string
+  label: string
+  description?: string
+  type: 'string' | 'boolean' | 'number' | 'password' | 'select'
+  options?: Array<{ value: string; label: string }>
+  default?: unknown
+  visibleWhen?: { key: string; value: unknown }
+}
+
+interface ToolSettingsEntry {
+  toolId: string
+  name: string
+  fields: SettingsField[]
+  values: Record<string, unknown>
+}
+
+interface AccountToolEntry {
+  id: string
+  name: string
+  hasAccount: boolean
+}
+
+const fieldsetStyle: React.CSSProperties = {
+  border: '1px solid #444',
+  borderRadius: 4,
+  padding: '12px 16px',
+  margin: '16px 0 0'
+}
+
+const legendStyle: React.CSSProperties = {
+  color: '#aaa',
+  fontSize: 12,
+  padding: '0 6px'
+}
+
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  boxSizing: 'border-box',
+  padding: '6px 8px',
+  background: '#2a2a2a',
+  border: '1px solid #555',
+  borderRadius: 3,
+  color: '#ddd',
+  fontSize: 13,
+  outline: 'none'
+}
+
+function ToolSettingsSection({ entry, onChange }: {
+  entry: ToolSettingsEntry
+  onChange: (values: Record<string, unknown>) => void
+}): React.ReactElement | null {
+  if (entry.fields.length === 0) return null
+
+  return (
+    <fieldset style={fieldsetStyle}>
+      <legend style={legendStyle}>{entry.name}</legend>
+      {entry.fields.map((field) => {
+        if (field.visibleWhen) {
+          const condVal = entry.values[field.visibleWhen.key] ?? entry.fields.find(f => f.key === field.visibleWhen!.key)?.default
+          if (condVal !== field.visibleWhen.value) return null
+        }
+        const val = entry.values[field.key] ?? field.default
+        const update = (v: unknown): void => onChange({ ...entry.values, [field.key]: v })
+
+        if (field.type === 'boolean') {
+          return (
+            <label key={field.key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
+              <input type="checkbox" checked={!!val} onChange={(e) => update(e.target.checked)} />
+              {field.label}
+              {field.description && <span style={{ color: '#777', fontSize: 11 }}>{field.description}</span>}
+            </label>
+          )
+        }
+
+        return (
+          <div key={field.key} style={{ marginBottom: 10 }}>
+            <label style={{ display: 'block', marginBottom: 4, color: '#999', fontSize: 12 }}>{field.label}</label>
+            {field.type === 'select' ? (
+              <select
+                value={String(val ?? '')}
+                onChange={(e) => update(e.target.value)}
+                style={{ ...inputStyle }}
+              >
+                {field.options?.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type={field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text'}
+                value={String(val ?? '')}
+                onChange={(e) => update(field.type === 'number' ? Number(e.target.value) : e.target.value)}
+                style={inputStyle}
+              />
+            )}
+            {field.description && (
+              <p style={{ margin: '4px 0 0', fontSize: 11, color: '#777' }}>{field.description}</p>
+            )}
+          </div>
+        )
+      })}
+    </fieldset>
+  )
+}
+
 export default function SettingsApp(): React.ReactElement {
-  const [config, setConfig] = useState<ProxyConfig>({ enabled: false, address: '', useForCliTools: true })
   const [reasoning, setReasoning] = useState<ReasoningConfig>({ showPanel: false })
+  const [toolSettings, setToolSettings] = useState<ToolSettingsEntry[]>([])
+  const [accountTools, setAccountTools] = useState<AccountToolEntry[]>([])
+  const [accountIdentifiers, setAccountIdentifiers] = useState<Record<string, string | null>>({})
   const [saved, setSaved] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    window.settingsApi.getProxyConfig().then(setConfig)
     window.settingsApi.getReasoningConfig().then(setReasoning)
+    window.settingsApi.getToolSettings().then(setToolSettings)
+    window.settingsApi.getAccountTools().then(async (tools) => {
+      setAccountTools(tools)
+      const ids: Record<string, string | null> = {}
+      for (const t of tools) {
+        if (t.hasAccount) {
+          ids[t.id] = await window.settingsApi.getLoginIdentifier(t.id)
+        }
+      }
+      setAccountIdentifiers(ids)
+    })
   }, [])
 
   useEffect(() => {
@@ -32,63 +144,53 @@ export default function SettingsApp(): React.ReactElement {
   }, [])
 
   const handleSave = async (): Promise<void> => {
-    await Promise.all([
-      window.settingsApi.saveProxyConfig(config),
+    const saves: Promise<void>[] = [
       window.settingsApi.saveReasoningConfig(reasoning)
-    ])
+    ]
+    for (const entry of toolSettings) {
+      saves.push(window.settingsApi.updateToolSettings(entry.toolId, entry.values))
+    }
+    await Promise.all(saves)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
+  }
+
+  const updateToolValues = (toolId: string, values: Record<string, unknown>): void => {
+    setToolSettings((prev) =>
+      prev.map((e) => (e.toolId === toolId ? { ...e, values } : e))
+    )
   }
 
   return (
     <div ref={rootRef} style={{ padding: 24, color: '#ccc', fontFamily: 'Segoe UI, sans-serif', fontSize: 13 }}>
       <h2 style={{ margin: '0 0 20px', fontSize: 16, color: '#e0e0e0' }}>Settings</h2>
 
-      <fieldset style={{ border: '1px solid #444', borderRadius: 4, padding: '12px 16px', margin: 0 }}>
-        <legend style={{ color: '#aaa', fontSize: 12, padding: '0 6px' }}>Proxy</legend>
+      {/* Accounts section */}
+      {accountTools.length > 0 && (
+        <fieldset style={{ ...fieldsetStyle, margin: '0 0 0' }}>
+          <legend style={legendStyle}>Accounts</legend>
+          {accountTools.map((tool) => (
+            <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <span style={{ fontWeight: 600, color: '#d4d4d4' }}>{tool.name}</span>
+              <span style={{ fontSize: 12, color: '#999' }}>
+                {accountIdentifiers[tool.id] ?? 'Not logged in'}
+              </span>
+            </div>
+          ))}
+        </fieldset>
+      )}
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 12 }}>
-          <input
-            type="checkbox"
-            checked={config.enabled}
-            onChange={(e) => setConfig({ ...config, enabled: e.target.checked })}
-          />
-          Enable proxy
-        </label>
+      {/* Per-tool settings */}
+      {toolSettings.map((entry) => (
+        <ToolSettingsSection
+          key={entry.toolId}
+          entry={entry}
+          onChange={(values) => updateToolValues(entry.toolId, values)}
+        />
+      ))}
 
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ display: 'block', marginBottom: 4, color: '#999', fontSize: 12 }}>Proxy address</label>
-          <input
-            type="text"
-            value={config.address}
-            placeholder="http://127.0.0.1:1080"
-            onChange={(e) => setConfig({ ...config, address: e.target.value })}
-            style={{
-              width: '100%',
-              boxSizing: 'border-box',
-              padding: '6px 8px',
-              background: '#2a2a2a',
-              border: '1px solid #555',
-              borderRadius: 3,
-              color: '#ddd',
-              fontSize: 13,
-              outline: 'none'
-            }}
-          />
-        </div>
-
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={config.useForCliTools}
-            onChange={(e) => setConfig({ ...config, useForCliTools: e.target.checked })}
-          />
-          Use for CLI tools (Claude Code)
-        </label>
-      </fieldset>
-
-      <fieldset style={{ border: '1px solid #444', borderRadius: 4, padding: '12px 16px', margin: '16px 0 0' }}>
-        <legend style={{ color: '#aaa', fontSize: 12, padding: '0 6px' }}>Reasoning</legend>
+      <fieldset style={fieldsetStyle}>
+        <legend style={legendStyle}>Reasoning</legend>
 
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
           <input
@@ -100,7 +202,7 @@ export default function SettingsApp(): React.ReactElement {
         </label>
 
         <p style={{ margin: 0, fontSize: 11, color: '#777', lineHeight: 1.5 }}>
-          Displays Claude's internal reasoning blocks above the log panel.<br />
+          Displays AI reasoning blocks above the log panel.<br />
           Data may be absent if your client requests responses with reasoning disabled.
         </p>
       </fieldset>

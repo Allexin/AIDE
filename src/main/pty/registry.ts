@@ -10,7 +10,7 @@ export const pickerEditorMap = new Map<BrowserWindow, BrowserWindow>()
 /** Close all tabs for the given tool and open a fresh session in each window. */
 export function restartToolSessions(toolId: string): void {
   for (const mgr of ptyRegistry.values()) {
-    if (mgr.tool.id === toolId) {
+    if (mgr.hasTool(toolId)) {
       mgr.resetAllTabs()
     }
   }

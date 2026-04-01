@@ -5,6 +5,7 @@ export interface ProjectSettings {
   activePanelRatio: number
   collapsedWidthPx: number
   fileTreeWidth: number
+  defaultToolId?: string
 }
 
 const DEFAULTS: ProjectSettings = {

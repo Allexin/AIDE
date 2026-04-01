@@ -16,7 +16,8 @@ export default defineConfig({
           editor: resolve(__dirname, 'src/preload/editor.ts'),
           sessionPicker: resolve(__dirname, 'src/preload/sessionPicker.ts'),
           accountManager: resolve(__dirname, 'src/preload/accountManager.ts'),
-          settings: resolve(__dirname, 'src/preload/settings.ts')
+          settings: resolve(__dirname, 'src/preload/settings.ts'),
+          cliTools: resolve(__dirname, 'src/preload/cliTools.ts')
         }
       }
     }
