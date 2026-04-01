@@ -1,17 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { SettingsField } from '../shared/settingsTypes'
+
+export type { SettingsField }
 
 export interface ReasoningConfig {
   showPanel: boolean
-}
-
-export interface SettingsField {
-  key: string
-  label: string
-  description?: string
-  type: 'string' | 'boolean' | 'number' | 'password' | 'select'
-  options?: Array<{ value: string; label: string }>
-  default?: unknown
-  visibleWhen?: { key: string; value: unknown }
 }
 
 export interface ToolSettingsEntry {

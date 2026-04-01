@@ -1,17 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
+import type { SettingsField } from '../../../shared/settingsTypes'
 
 interface ReasoningConfig {
   showPanel: boolean
-}
-
-interface SettingsField {
-  key: string
-  label: string
-  description?: string
-  type: 'string' | 'boolean' | 'number' | 'password' | 'select'
-  options?: Array<{ value: string; label: string }>
-  default?: unknown
-  visibleWhen?: { key: string; value: unknown }
 }
 
 interface ToolSettingsEntry {

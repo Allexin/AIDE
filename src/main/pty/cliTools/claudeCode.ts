@@ -4,7 +4,7 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { session } from 'electron'
 import type { CliTool, CliSession, SettingsField, UsageInfo } from './types'
-import { scanSessions as scanDiskSessions, watchSessionsDir, getSessionsDir, readSessionPreview } from './sessionScanner'
+import { scanSessions as scanDiskSessions, watchSessionsDir, getSessionsDir, readSessionPreview } from './claudeCodeScanner'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
 
