@@ -3,8 +3,9 @@ export type { SettingsField }
 
 export interface CliSession {
   sessionId: string
-  slug: string        // human-readable label (used as tab title until OSC title arrives)
-  summary?: string    // optional AI-generated session title (e.g. from Claude Code custom-title entry)
+  slug: string          // human-readable label (used as tab title until OSC title arrives)
+  summary?: string      // optional AI-generated session title (e.g. from Claude Code custom-title entry)
+  firstMessage?: string // first real user message (for session list display)
   lastModified: Date
 }
 
@@ -121,6 +122,11 @@ export interface CliTool {
    */
   getSessionPreview?(projectPath: string, sessionId: string): Promise<Array<{ role: 'user' | 'assistant'; text: string }>>
 
+  /** Return the full conversation history for a session, for display in the history viewer.
+   *  Returns an empty array if the tool does not support session history.
+   */
+  getSessionHistory?(projectPath: string, sessionId: string): Promise<HistoryEntry[]>
+
   /** Return the absolute path to the session data file for the given session.
    *  Used by ThinkingWatcher and other components that need to read session files directly.
    *  Returns null if the tool does not use file-based session storage.
@@ -132,6 +138,17 @@ export interface CliTool {
    *  Returns null if the tool does not support this feature — the context menu item is hidden.
    */
   contextInsert?(relPath: string): string | null
+}
+
+export type HistoryBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; tool_use_id: string; content: string | Array<{ type: string; text?: string }> }
+  | { type: 'thinking'; thinking: string }
+
+export interface HistoryEntry {
+  role: 'user' | 'assistant'
+  blocks: HistoryBlock[]
 }
 
 export interface UsageInfo {

@@ -118,6 +118,7 @@ src/main/pty/cliTools/
 | `detectTitleEvent` | `(prevTitle, newTitle) => string \| null` | Возвращает имя события при смене OSC-заголовка терминала. |
 | `contextInsert` | `(relPath: string) => string \| null` | Возвращает текст для вставки в терминал при добавлении файла в контекст AI. Если `null` — пункт меню скрыт. |
 | `getSessionPreview` | `(projectPath, sessionId) => Promise<[{role, text}]>` | Последние сообщения сессии для предпросмотра в Session Picker. |
+| `getSessionHistory` | `(projectPath, sessionId) => Promise<HistoryEntry[]>` | Полная история переписки для History Viewer (кнопка ☰ в Session Picker). |
 | `getSessionFilePath` | `(projectPath, sessionId) => string \| null` | Путь к файлу данных сессии. Используется `ThinkingWatcher`. |
 
 ### Опциональные методы — настройки
@@ -246,6 +247,7 @@ async scanSessions(projectPath: string): Promise<CliSession[]> {
     sessions.push({
       sessionId,
       slug: TOOL_NAME,           // fallback-заголовок до получения OSC-заголовка
+      // firstMessage: '...',    // опционально: первое сообщение пользователя (строка 1 в Session Picker)
       lastModified: stat.mtime
     })
   }
@@ -284,12 +286,25 @@ watchForNewSessions(projectPath: string, onNew: (session: CliSession) => void): 
 
 ```typescript
 interface CliSession {
-  sessionId: string       // уникальный ID (передаётся в resumeCommand)
-  slug: string            // начальный заголовок вкладки
-  summary?: string        // AI-сгенерированный заголовок (опционально)
-  lastModified: Date      // для сортировки
+  sessionId: string        // уникальный ID (передаётся в resumeCommand)
+  slug: string             // начальный заголовок вкладки; для Claude Code — последнее сообщение пользователя
+  summary?: string         // AI-сгенерированный заголовок (опционально)
+  firstMessage?: string    // первое сообщение пользователя в сессии (опционально)
+  lastModified: Date       // для сортировки
 }
 ```
+
+#### Отображение в Session Picker
+
+Session Picker отображает каждую сессию в три строки:
+
+| Строка | Источник | Описание |
+|--------|----------|----------|
+| 1 (основная) | `firstMessage ?? slug` | Первое сообщение пользователя — идентифицирует тему сессии так же, как в CLI при `--resume` |
+| 2 (мелкий текст) | `slug` (если ≠ `firstMessage`) | Последнее сообщение — показывает, на чём остановились |
+| 3 (ещё мельче) | `toolName` | Название CLI-инструмента сессии |
+
+Если `firstMessage` не задан (инструмент не поддерживает его), строка 1 показывает `slug`, строка 2 скрыта.
 
 ---
 
@@ -447,6 +462,27 @@ async getSessionPreview(
   }
 }
 ```
+
+### `getSessionHistory`
+
+Возвращает **полную историю переписки** сессии для отображения в History Viewer — отдельном окне, открываемом кнопкой ☰ в Session Picker.
+
+Отличие от `getSessionPreview`: preview читает последние ~64 KB для быстрого предпросмотра при наведении; history читает весь файл целиком и возвращает структурированные блоки с поддержкой tool_use, tool_result и thinking.
+
+```typescript
+async getSessionHistory(
+  projectPath: string,
+  sessionId: string
+): Promise<HistoryEntry[]> {
+  // HistoryEntry = { role: 'user' | 'assistant'; blocks: HistoryBlock[] }
+  // HistoryBlock = text | tool_use | tool_result | thinking
+  return readSessionHistory(getSessionsDir(projectPath), sessionId)
+}
+```
+
+Если инструмент не поддерживает просмотр истории — просто не реализуй этот метод. Кнопка ☰ будет видна, но History Viewer откроется пустым.
+
+**Только для Claude Code:** реализация уже есть в `claudeCode.ts` через `readSessionHistory()` из `claudeCodeScanner.ts`. При добавлении нового CLI инструмента реализуй аналогичный парсер для своего формата хранения.
 
 ### `getSessionFilePath`
 

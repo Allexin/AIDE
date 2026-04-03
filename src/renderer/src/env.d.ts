@@ -227,9 +227,36 @@ interface PreviewMessage {
 interface PickerSession {
   sessionId: string
   summary: string
+  firstMessage: string
   title: string
   mtime: number
   toolId: string
+}
+
+interface HistoryBlock {
+  type: 'text' | 'tool_use' | 'tool_result' | 'thinking'
+  text?: string
+  thinking?: string
+  id?: string
+  name?: string
+  input?: Record<string, unknown>
+  tool_use_id?: string
+  content?: string | Array<{ type: string; text?: string }>
+}
+
+interface HistoryEntry {
+  role: 'user' | 'assistant'
+  blocks: HistoryBlock[]
+}
+
+interface HistoryViewerData {
+  title: string
+  toolName: string
+  entries: HistoryEntry[]
+}
+
+interface HistoryViewerAPI {
+  getData: () => Promise<HistoryViewerData>
 }
 
 interface SessionPickerAPI {
@@ -242,6 +269,7 @@ interface SessionPickerAPI {
   getCliTools: () => Promise<{ id: string; name: string }[]>
   getDefaultToolId: () => Promise<string | null>
   setDefaultToolId: (toolId: string) => Promise<void>
+  openHistory: (sessionId: string, toolId: string, sessionTitle: string) => void
 }
 
 interface CliAccountInfo {
@@ -303,4 +331,5 @@ declare interface Window {
   accountManagerApi: AccountManagerAPI
   settingsApi: SettingsAPI
   cliToolsApi: CliToolsAPI
+  historyViewerApi: HistoryViewerAPI
 }

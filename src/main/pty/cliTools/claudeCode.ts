@@ -4,7 +4,7 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { session } from 'electron'
 import type { CliTool, CliSession, SettingsField, UsageInfo } from './types'
-import { scanSessions as scanDiskSessions, watchSessionsDir, getSessionsDir, readSessionPreview } from './claudeCodeScanner'
+import { scanSessions as scanDiskSessions, watchSessionsDir, getSessionsDir, readSessionPreview, readSessionHistory } from './claudeCodeScanner'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
 
@@ -146,6 +146,7 @@ export const claudeCodeTool: CliTool = {
       sessionId: s.sessionId,
       slug: s.title,
       summary: s.summary || undefined,
+      firstMessage: s.firstMessage || undefined,
       lastModified: new Date(s.mtime)
     }))
   },
@@ -513,6 +514,10 @@ export const claudeCodeTool: CliTool = {
 
   getSessionPreview(projectPath: string, sessionId: string): Promise<Array<{ role: 'user' | 'assistant'; text: string }>> {
     return Promise.resolve(readSessionPreview(getSessionsDir(projectPath), sessionId))
+  },
+
+  getSessionHistory(projectPath: string, sessionId: string) {
+    return readSessionHistory(getSessionsDir(projectPath), sessionId)
   },
 
   getSessionFilePath(projectPath: string, sessionId: string): string {

@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 interface PickerSession {
   sessionId: string
   summary: string
+  firstMessage: string
   title: string
   mtime: number
   toolId: string
@@ -29,6 +30,7 @@ interface SessionPickerAPI {
   getCliTools: () => Promise<{ id: string; name: string }[]>
   getDefaultToolId: () => Promise<string | null>
   setDefaultToolId: (toolId: string) => Promise<void>
+  openHistory: (sessionId: string, toolId: string, sessionTitle: string) => void
 }
 
 const sessionPickerApi: SessionPickerAPI = {
@@ -40,7 +42,9 @@ const sessionPickerApi: SessionPickerAPI = {
   getActivatedTools: () => ipcRenderer.invoke('cli-tools:get-activated'),
   getCliTools: () => ipcRenderer.invoke('cli-tools:list'),
   getDefaultToolId: () => ipcRenderer.invoke('project-settings:get-default-tool'),
-  setDefaultToolId: (toolId: string) => ipcRenderer.invoke('project-settings:set-default-tool', toolId)
+  setDefaultToolId: (toolId: string) => ipcRenderer.invoke('project-settings:set-default-tool', toolId),
+  openHistory: (sessionId: string, toolId: string, sessionTitle: string) =>
+    ipcRenderer.send('session-picker:open-history', sessionId, toolId, sessionTitle)
 }
 
 contextBridge.exposeInMainWorld('sessionPickerApi', sessionPickerApi)

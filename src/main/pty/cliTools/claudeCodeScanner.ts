@@ -2,12 +2,14 @@ import { existsSync, readdirSync, watch, FSWatcher, openSync, readSync, fstatSyn
 import { stat as fsStat, readFile } from 'fs/promises'
 import { join } from 'path'
 import { homedir } from 'os'
+import type { HistoryBlock, HistoryEntry } from './types'
 
 export interface DiskSession {
   sessionId: string
-  summary: string // CC-generated session title (from type:"summary" entry), or empty
-  title: string   // last real user message from JSONL, or empty
-  mtime: number   // ms since epoch
+  summary: string       // CC-generated session title (from type:"summary" entry), or empty
+  firstMessage: string  // first real user message from JSONL, or empty
+  title: string         // last real user message from JSONL, or empty
+  mtime: number         // ms since epoch
 }
 
 /** Encode project path for use as ~/.claude/projects/<encoded>/ directory name.
@@ -31,6 +33,31 @@ function extractSummary(lines: string[]): string {
       const obj = JSON.parse(lines[i])
       if (obj.type === 'custom-title' && typeof obj.customTitle === 'string' && obj.customTitle.trim()) {
         return obj.customTitle.trim().slice(0, 100)
+      }
+    } catch {}
+  }
+  return ''
+}
+
+/** Extract the first real user message from parsed JSONL lines. */
+function extractFirstUserMessage(lines: string[]): string {
+  for (let i = 0; i < lines.length; i++) {
+    try {
+      const obj = JSON.parse(lines[i])
+      if (obj.type !== 'user' || obj.isMeta) continue
+      const raw = obj?.message?.content
+      let text = ''
+      if (typeof raw === 'string') {
+        text = raw
+      } else if (Array.isArray(raw)) {
+        text = raw
+          .filter((b: unknown) => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'text')
+          .map((b: unknown) => (b as { text: string }).text)
+          .join(' ')
+      }
+      text = text.trim()
+      if (text && !text.startsWith('<command') && !text.startsWith('<local-command') && !text.startsWith('<tool')) {
+        return text.slice(0, 80)
       }
     } catch {}
   }
@@ -82,6 +109,7 @@ export async function scanSessions(projectPath: string): Promise<DiskSession[]> 
       const fullPath = join(sessionsDir, filename)
       let mtime = 0
       let summary = ''
+      let firstMessage = ''
       let title = ''
       try {
         const [fileStat, content] = await Promise.all([
@@ -91,9 +119,10 @@ export async function scanSessions(projectPath: string): Promise<DiskSession[]> 
         mtime = fileStat.mtimeMs
         const lines = content.split('\n').filter((l) => l.trim())
         summary = extractSummary(lines)
+        firstMessage = extractFirstUserMessage(lines)
         title = extractLastUserMessage(lines)
       } catch {}
-      return { sessionId, summary, title, mtime }
+      return { sessionId, summary, firstMessage, title, mtime }
     })
   )
 
@@ -165,6 +194,68 @@ export function readSessionPreview(sessionsDir: string, sessionId: string): Prev
   } finally {
     closeSync(fd)
   }
+}
+
+function parseHistoryBlocks(content: unknown): HistoryBlock[] {
+  if (typeof content === 'string') {
+    return content.trim() ? [{ type: 'text', text: content }] : []
+  }
+  if (!Array.isArray(content)) return []
+
+  const blocks: HistoryBlock[] = []
+  for (const item of content) {
+    if (!item || typeof item !== 'object') continue
+    const b = item as Record<string, unknown>
+    if (b.type === 'text' && typeof b.text === 'string') {
+      blocks.push({ type: 'text', text: b.text })
+    } else if (b.type === 'tool_use') {
+      blocks.push({
+        type: 'tool_use',
+        id: String(b.id ?? ''),
+        name: String(b.name ?? 'unknown'),
+        input: (b.input as Record<string, unknown>) ?? {}
+      })
+    } else if (b.type === 'tool_result') {
+      blocks.push({
+        type: 'tool_result',
+        tool_use_id: String(b.tool_use_id ?? ''),
+        content: (b.content as string | Array<{ type: string; text?: string }>) ?? ''
+      })
+    } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
+      blocks.push({ type: 'thinking', thinking: b.thinking })
+    }
+  }
+  return blocks
+}
+
+/** Read the full conversation history from a session JSONL file. */
+export async function readSessionHistory(sessionsDir: string, sessionId: string): Promise<HistoryEntry[]> {
+  const filePath = join(sessionsDir, `${sessionId}.jsonl`)
+  let content: string
+  try {
+    content = await readFile(filePath, 'utf-8')
+  } catch {
+    return []
+  }
+
+  const lines = content.split('\n').filter((l) => l.trim())
+  const entries: HistoryEntry[] = []
+
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line)
+      if (obj.type !== 'user' && obj.type !== 'assistant') continue
+      if (obj.isMeta) continue
+      const blocks = parseHistoryBlocks(obj?.message?.content)
+      if (blocks.length > 0) {
+        entries.push({ role: obj.type as 'user' | 'assistant', blocks })
+      }
+    } catch {
+      // skip unparseable lines
+    }
+  }
+
+  return entries
 }
 
 /** Watch a directory for new .jsonl files.

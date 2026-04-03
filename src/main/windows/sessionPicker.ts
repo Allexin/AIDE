@@ -5,7 +5,7 @@ import { pickerEditorMap } from '../pty/registry'
 
 export function createSessionPickerWindow(editorWin: BrowserWindow): BrowserWindow {
   const win = new BrowserWindow({
-    width: 500,
+    width: 1000,
     height: 400,
     resizable: true,
     title: 'Sessions',

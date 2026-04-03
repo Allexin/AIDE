@@ -28,6 +28,7 @@ import {
 } from '../config/accountStorage'
 import { initCliLogger } from '../pty/cliTools/cliLogger'
 import { createSessionPickerWindow } from '../windows/sessionPicker'
+import { createHistoryViewerWindow, historyViewerDataMap } from '../windows/historyViewer'
 import {
   spawnButtonProcess,
   killButtonProcess
@@ -411,7 +412,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     if (!projectPath) return { sessions: [], openTabs }
 
     const activated = getActivatedTools()
-    const allSessions: Array<{ sessionId: string; summary: string; title: string; mtime: number; toolId: string }> = []
+    const allSessions: Array<{ sessionId: string; summary: string; firstMessage: string; title: string; mtime: number; toolId: string }> = []
 
     for (const toolId of activated) {
       const tool = getToolById(toolId)
@@ -422,6 +423,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
           allSessions.push({
             sessionId: s.sessionId,
             summary: s.summary ?? '',
+            firstMessage: s.firstMessage ?? '',
             title: s.slug,
             mtime: s.lastModified.getTime(),
             toolId: tool.id
@@ -454,6 +456,43 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     if (!tool?.getSessionPreview) return []
 
     return tool.getSessionPreview(projectPath, sessionId)
+  })
+
+  // ── Session picker: open history viewer window ───────────────────────────────
+  ipcMain.on('session-picker:open-history', async (event, sessionId: string, toolId: string, sessionTitle: string) => {
+    const pickerWin = BrowserWindow.fromWebContents(event.sender)
+    if (!pickerWin) return
+
+    const editorWin = pickerEditorMap.get(pickerWin)
+    if (!editorWin) return
+
+    let projectPath: string | undefined
+    for (const [p, w] of openProjects) {
+      if (w === editorWin) { projectPath = p; break }
+    }
+    if (!projectPath) return
+
+    const tool = getToolById(toolId)
+    if (!tool?.getSessionHistory) return
+
+    const entries = await tool.getSessionHistory(projectPath, sessionId)
+    createHistoryViewerWindow({
+      projectPath,
+      sessionId,
+      toolId,
+      title: sessionTitle || 'Session History',
+      entries
+    })
+  })
+
+  // ── History viewer: get data ──────────────────────────────────────────────────
+  ipcMain.handle('history-viewer:get-data', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) return { title: '', toolName: '', entries: [] }
+    const ctx = historyViewerDataMap.get(win)
+    if (!ctx) return { title: '', toolName: '', entries: [] }
+    const tool = getToolById(ctx.toolId)
+    return { title: ctx.title, toolName: tool?.name ?? ctx.toolId, entries: ctx.entries }
   })
 
   // ── Session picker: switch to already-open tab ────────────────────────────────

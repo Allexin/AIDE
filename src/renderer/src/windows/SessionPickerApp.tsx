@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 interface PickerSession {
   sessionId: string
   summary: string
+  firstMessage: string
   title: string
   mtime: number
   toolId: string
@@ -17,6 +18,7 @@ interface SessionTabInfo {
 interface SessionEntry {
   sessionId: string
   summary: string
+  firstMessage: string
   slug: string
   mtime: number
   toolId: string
@@ -60,6 +62,7 @@ export default function SessionPickerApp(): React.ReactElement {
         return {
           sessionId: ps.sessionId,
           summary: ps.summary ?? '',
+          firstMessage: ps.firstMessage ?? '',
           slug: ps.title,
           mtime: ps.mtime,
           toolId: ps.toolId,
@@ -93,6 +96,11 @@ export default function SessionPickerApp(): React.ReactElement {
       window.sessionPickerApi.resumeSession(entry.sessionId, entry.toolId)
     }
   }
+
+  const handleOpenHistory = useCallback((entry: SessionEntry): void => {
+    const title = entry.summary || entry.slug || 'Session History'
+    window.sessionPickerApi.openHistory(entry.sessionId, entry.toolId, title)
+  }, [])
 
   const handleNewSession = useCallback((toolId?: string): void => {
     if (busy) return
@@ -147,6 +155,7 @@ export default function SessionPickerApp(): React.ReactElement {
               entry={entry}
               toolName={activatedTools.find((t) => t.id === entry.toolId)?.name ?? entry.toolId}
               onSelect={handleSelect}
+              onOpenHistory={handleOpenHistory}
               disabled={busy}
             />
           ))
@@ -266,10 +275,11 @@ interface SessionRowProps {
   entry: SessionEntry
   toolName: string
   onSelect: (entry: SessionEntry) => void
+  onOpenHistory: (entry: SessionEntry) => void
   disabled: boolean
 }
 
-function SessionRow({ entry, toolName, onSelect, disabled }: SessionRowProps): React.ReactElement {
+function SessionRow({ entry, toolName, onSelect, onOpenHistory, disabled }: SessionRowProps): React.ReactElement {
   const [hovered, setHovered] = useState(false)
   const [preview, setPreview] = useState<PreviewMessage[] | null>(null)
   const [loadingPreview, setLoadingPreview] = useState(false)
@@ -326,44 +336,45 @@ function SessionRow({ entry, toolName, onSelect, disabled }: SessionRowProps): R
           ●
         </span>
 
-        {/* Title block: CC summary + last user message */}
+        {/* Title block: first message / last message / CLI name */}
         <span style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {entry.summary ? (
-            <>
-              <span
-                style={{
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  color: entry.openTabId ? '#d4d4d4' : '#b0b0b0'
-                }}
-              >
-                {entry.summary}
-              </span>
-              <span
-                style={{
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontSize: 11,
-                  color: '#666'
-                }}
-              >
-                {entry.slug || '—'}
-              </span>
-            </>
-          ) : (
+          {/* Line 1: first user message (primary identifier, as shown in CLI) */}
+          <span
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              color: entry.openTabId ? '#d4d4d4' : '#b0b0b0'
+            }}
+          >
+            {entry.firstMessage || entry.slug || '—'}
+          </span>
+          {/* Line 2: last user message (only when different from first) */}
+          {entry.slug && entry.slug !== entry.firstMessage && (
             <span
               style={{
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
-                color: entry.openTabId ? '#d4d4d4' : '#9d9d9d'
+                fontSize: 11,
+                color: '#666'
               }}
             >
-              {entry.slug || '—'}
+              {entry.slug}
             </span>
           )}
+          {/* Line 3: CLI name */}
+          <span
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontSize: 10,
+              color: '#444'
+            }}
+          >
+            {toolName}
+          </span>
         </span>
 
         {/* Relative time */}
@@ -377,6 +388,28 @@ function SessionRow({ entry, toolName, onSelect, disabled }: SessionRowProps): R
         >
           {formatRelativeTime(entry.mtime)}
         </span>
+
+        {/* History button */}
+        <button
+          title="View full history"
+          onClick={(e) => { e.stopPropagation(); onOpenHistory(entry) }}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: '2px 4px',
+            cursor: 'pointer',
+            color: hovered ? '#888' : 'transparent',
+            fontSize: 13,
+            flexShrink: 0,
+            lineHeight: 1,
+            borderRadius: 3,
+            transition: 'color 0.1s'
+          }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#cccccc' }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = hovered ? '#888' : 'transparent' }}
+        >
+          ☰
+        </button>
       </div>
 
       {/* Hover preview panel */}
