@@ -4,6 +4,7 @@ import { existsSync } from 'fs'
 import { initAppConfig } from './config/appConfig'
 import { initAppState } from './config/appState'
 import { initAccountStorage } from './config/accountStorage'
+import { initUpdater } from './updater/updater'
 import { releaseLock } from './lock'
 import { createPickerWindow } from './windows/picker'
 import { openProjectAndTrack } from './windows/editor'
@@ -38,6 +39,7 @@ app.whenReady().then(() => {
   initAppState()
   initAccountStorage()
   setupIpcHandlers(openProjects)
+  initUpdater()
   setupMenu(openProjects, (path) => openProjectAndTrack(path, openProjects))
 
   const startupPath = resolveStartupProject()

@@ -4,7 +4,8 @@ import { join } from 'path'
 import { spawn } from 'child_process'
 import { removeRecentProject, getAppState, loadOpenSessions, clearOpenSessions, getActivatedTools, setActivatedTools } from '../config/appState'
 import { getAppConfig, updateAppConfig } from '../config/appConfig'
-import type { ReasoningConfig } from '../config/appConfig'
+import type { ReasoningConfig, UpdatesConfig } from '../config/appConfig'
+import { getUpdateStatus, skipVersion, dismissNotification, RELEASES_URL } from '../updater/updater'
 import { readProjectSettings, writeProjectSettings } from '../config/projectConfig'
 import {
   readToolbarButtons,
@@ -998,6 +999,16 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     if (!senderWin) return
     const ptyMgr = ptyRegistry.get(senderWin)
     if (ptyMgr) ptyMgr.rawLogEnabled = enabled
+  })
+
+  // ── Updater ───────────────────────────────────────────────────────────────────
+  ipcMain.handle('updater:get-status', () => getUpdateStatus())
+  ipcMain.handle('updater:skip-version', (_, version: string) => { skipVersion(version) })
+  ipcMain.handle('updater:dismiss-notification', () => { dismissNotification() })
+  ipcMain.on('updater:open-releases', () => { void shell.openExternal(RELEASES_URL) })
+  ipcMain.handle('settings:get-updates', () => getAppConfig().updates)
+  ipcMain.handle('settings:save-updates', (_, config: UpdatesConfig) => {
+    updateAppConfig({ updates: config })
   })
 
   // ── Session picker: new session ───────────────────────────────────────────────

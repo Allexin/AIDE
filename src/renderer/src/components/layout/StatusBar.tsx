@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { useFileTreeStore } from '../../store/useFileTreeStore'
 import { useEditorStore } from '../../store/useEditorStore'
+import UpdateDialog from './UpdateDialog'
 
 // Maps Monaco language IDs to display names for the language sensor.
 const LANG_DISPLAY: Record<string, string> = {
@@ -44,6 +45,21 @@ const sensorStyle: React.CSSProperties = {
 export default function StatusBar(): React.ReactElement {
   const { gitStatus } = useFileTreeStore()
   const { openRelativePath, cursorPosition, currentLanguage } = useEditorStore()
+
+  // ── Update checker sensor ────────────────────────────────────────────────────
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
+  const [showUpdateDialog, setShowUpdateDialog] = useState(false)
+
+  useEffect(() => {
+    window.editorApi.updaterGetStatus().then((s) => {
+      setUpdateStatus(s)
+      if (s.shouldNotify) setShowUpdateDialog(true)
+    })
+    return window.editorApi.onUpdaterStatusChanged((s) => {
+      setUpdateStatus(s)
+      if (s.shouldNotify) setShowUpdateDialog(true)
+    })
+  }, [])
 
   // ── Git branch sensor (left) ─────────────────────────────────────────────────
   const branch = gitStatus?.available ? gitStatus.branch : null
@@ -231,10 +247,29 @@ export default function StatusBar(): React.ReactElement {
             UTF-8
           </span>
         )}
-        <span style={{ ...sensorStyle, opacity: 0.7 }} title="App version">
-          v{__APP_VERSION__}
-        </span>
+        {updateStatus?.hasUpdate ? (
+          <span
+            title={`Доступна версия v${updateStatus.latestVersion}. Нажмите для просмотра обновлений.`}
+            onClick={() => setShowUpdateDialog(true)}
+            style={{ cursor: 'pointer', display: 'flex', gap: 4, alignItems: 'center' }}
+          >
+            <span style={{ ...sensorStyle, color: '#f44747' }}>v{__APP_VERSION__}</span>
+            <span style={{ ...sensorStyle, opacity: 0.6 }}>→</span>
+            <span style={{ ...sensorStyle, color: '#4ec9b0' }}>v{updateStatus.latestVersion}</span>
+          </span>
+        ) : (
+          <span style={{ ...sensorStyle, opacity: 0.7 }} title="App version">
+            v{__APP_VERSION__}
+          </span>
+        )}
       </div>
+
+      {showUpdateDialog && updateStatus?.hasUpdate && (
+        <UpdateDialog
+          status={updateStatus}
+          onClose={() => setShowUpdateDialog(false)}
+        />
+      )}
     </div>
   )
 }

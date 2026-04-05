@@ -5,6 +5,10 @@ interface ReasoningConfig {
   showPanel: boolean
 }
 
+interface UpdatesConfig {
+  notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly'
+}
+
 interface ToolSettingsEntry {
   toolId: string
   name: string
@@ -103,6 +107,7 @@ function ToolSettingsSection({ entry, onChange }: {
 
 export default function SettingsApp(): React.ReactElement {
   const [reasoning, setReasoning] = useState<ReasoningConfig>({ showPanel: false })
+  const [updates, setUpdates] = useState<UpdatesConfig>({ notifyFrequency: 'daily' })
   const [toolSettings, setToolSettings] = useState<ToolSettingsEntry[]>([])
   const [accountTools, setAccountTools] = useState<AccountToolEntry[]>([])
   const [accountIdentifiers, setAccountIdentifiers] = useState<Record<string, string | null>>({})
@@ -111,6 +116,7 @@ export default function SettingsApp(): React.ReactElement {
 
   useEffect(() => {
     window.settingsApi.getReasoningConfig().then(setReasoning)
+    window.settingsApi.getUpdatesConfig().then(setUpdates)
     window.settingsApi.getToolSettings().then(setToolSettings)
     window.settingsApi.getAccountTools().then(async (tools) => {
       setAccountTools(tools)
@@ -136,7 +142,8 @@ export default function SettingsApp(): React.ReactElement {
 
   const handleSave = async (): Promise<void> => {
     const saves: Promise<void>[] = [
-      window.settingsApi.saveReasoningConfig(reasoning)
+      window.settingsApi.saveReasoningConfig(reasoning),
+      window.settingsApi.saveUpdatesConfig(updates)
     ]
     for (const entry of toolSettings) {
       saves.push(window.settingsApi.updateToolSettings(entry.toolId, entry.values))
@@ -179,6 +186,29 @@ export default function SettingsApp(): React.ReactElement {
           onChange={(values) => updateToolValues(entry.toolId, values)}
         />
       ))}
+
+      <fieldset style={fieldsetStyle}>
+        <legend style={legendStyle}>Updates</legend>
+
+        <div style={{ marginBottom: 10 }}>
+          <label style={{ display: 'block', marginBottom: 4, color: '#999', fontSize: 12 }}>
+            Notify about new versions
+          </label>
+          <select
+            value={updates.notifyFrequency}
+            onChange={(e) => setUpdates({ ...updates, notifyFrequency: e.target.value as UpdatesConfig['notifyFrequency'] })}
+            style={{ ...inputStyle }}
+          >
+            <option value="never">Never</option>
+            <option value="daily">Every day</option>
+            <option value="weekly">Every week</option>
+            <option value="monthly">Every month</option>
+          </select>
+          <p style={{ margin: '4px 0 0', fontSize: 11, color: '#777', lineHeight: 1.5 }}>
+            Updates are always checked daily. This controls how often a notification dialog appears.
+          </p>
+        </div>
+      </fieldset>
 
       <fieldset style={fieldsetStyle}>
         <legend style={legendStyle}>Reasoning</legend>

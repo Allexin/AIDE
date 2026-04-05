@@ -46,6 +46,10 @@ export interface ReasoningConfig {
   showPanel: boolean
 }
 
+export interface UpdatesConfig {
+  notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly'
+}
+
 export interface AppConfig {
   editor: EditorConfig
   ui: UiConfig
@@ -53,6 +57,7 @@ export interface AppConfig {
   git: GitConfig
   toolbar: ToolbarAppConfig
   reasoning: ReasoningConfig
+  updates: UpdatesConfig
   toolConfigs: Record<string, Record<string, unknown>>
 }
 
@@ -79,6 +84,9 @@ const DEFAULTS: AppConfig = {
   },
   reasoning: {
     showPanel: false
+  },
+  updates: {
+    notifyFrequency: 'daily'
   },
   toolConfigs: {},
   toolbar: {
@@ -118,6 +126,7 @@ export function initAppConfig(): void {
         sessions: { ...DEFAULTS.sessions, ...(parsed.sessions ?? {}) },
         git: { ...DEFAULTS.git, ...(parsed.git ?? {}) },
         reasoning: { ...DEFAULTS.reasoning, ...(parsed.reasoning ?? {}) },
+        updates: { ...DEFAULTS.updates, ...(parsed.updates ?? {}) },
         toolConfigs: { ...DEFAULTS.toolConfigs, ...(parsed.toolConfigs ?? {}) },
         toolbar: {
           sounds: {

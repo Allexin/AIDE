@@ -217,6 +217,27 @@ interface EditorAPI {
   onGitCommitOutput: (
     cb: (payload: { line: string; stream: 'stdout' | 'stderr' }) => void
   ) => () => void
+
+  // Updater
+  updaterGetStatus: () => Promise<UpdateStatus>
+  updaterSkipVersion: (version: string) => Promise<void>
+  updaterDismissNotification: () => Promise<void>
+  updaterOpenReleases: () => void
+  onUpdaterStatusChanged: (cb: (status: UpdateStatus) => void) => () => void
+}
+
+interface ReleaseInfo {
+  version: string
+  notes: string
+}
+
+interface UpdateStatus {
+  currentVersion: string
+  latestVersion: string | null
+  newReleases: ReleaseInfo[]
+  hasUpdate: boolean
+  shouldNotify: boolean
+  lastCheckedAt: number | null
 }
 
 interface PreviewMessage {
@@ -298,6 +319,8 @@ interface SettingsAPI {
   getAccountTools: () => Promise<Array<{ id: string; name: string; hasAccount: boolean }>>
   getLoginIdentifier: (toolId: string) => Promise<string | null>
   resizeWindow: (height: number) => void
+  getUpdatesConfig: () => Promise<{ notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly' }>
+  saveUpdatesConfig: (config: { notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly' }) => Promise<void>
 }
 
 interface SettingsField {

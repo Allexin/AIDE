@@ -188,6 +188,27 @@ export interface EditorAPI {
   onGitCommitOutput: (
     cb: (payload: { line: string; stream: 'stdout' | 'stderr' }) => void
   ) => () => void
+
+  // Updater
+  updaterGetStatus: () => Promise<UpdateStatus>
+  updaterSkipVersion: (version: string) => Promise<void>
+  updaterDismissNotification: () => Promise<void>
+  updaterOpenReleases: () => void
+  onUpdaterStatusChanged: (cb: (status: UpdateStatus) => void) => () => void
+}
+
+interface ReleaseInfo {
+  version: string
+  notes: string
+}
+
+interface UpdateStatus {
+  currentVersion: string
+  latestVersion: string | null
+  newReleases: ReleaseInfo[]
+  hasUpdate: boolean
+  shouldNotify: boolean
+  lastCheckedAt: number | null
 }
 
 const editorApi: EditorAPI = {
@@ -409,6 +430,17 @@ const editorApi: EditorAPI = {
     ): void => cb(payload)
     ipcRenderer.on('git:commit-output', handler)
     return () => ipcRenderer.removeListener('git:commit-output', handler)
+  },
+
+  // Updater
+  updaterGetStatus: () => ipcRenderer.invoke('updater:get-status'),
+  updaterSkipVersion: (version) => ipcRenderer.invoke('updater:skip-version', version),
+  updaterDismissNotification: () => ipcRenderer.invoke('updater:dismiss-notification'),
+  updaterOpenReleases: () => ipcRenderer.send('updater:open-releases'),
+  onUpdaterStatusChanged: (cb) => {
+    const handler = (_: unknown, status: UpdateStatus): void => cb(status)
+    ipcRenderer.on('updater:status-changed', handler)
+    return () => ipcRenderer.removeListener('updater:status-changed', handler)
   }
 }
 
