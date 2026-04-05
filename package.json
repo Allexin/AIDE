@@ -1,6 +1,6 @@
 {
   "name": "aide",
-  "version": "0.1.153",
+  "version": "0.1.154",
   "description": "AI-Driven Code Editor",
   "private": true,
   "main": "out/main/index.js",
