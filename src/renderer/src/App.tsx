@@ -6,8 +6,9 @@ const SessionPickerApp = React.lazy(() => import('./windows/SessionPickerApp'))
 const AccountManagerApp = React.lazy(() => import('./windows/AccountManagerApp'))
 const SettingsApp = React.lazy(() => import('./windows/SettingsApp'))
 const CliToolsApp = React.lazy(() => import('./windows/CliToolsApp'))
+const HistoryViewerApp = React.lazy(() => import('./windows/HistoryViewerApp'))
 
-function getWindowType(): 'picker' | 'editor' | 'session-picker' | 'account-manager' | 'settings' | 'cli-tools' {
+function getWindowType(): 'picker' | 'editor' | 'session-picker' | 'account-manager' | 'settings' | 'cli-tools' | 'history-viewer' {
   const params = new URLSearchParams(window.location.search)
   const w = params.get('window')
   if (w === 'editor') return 'editor'
@@ -15,6 +16,7 @@ function getWindowType(): 'picker' | 'editor' | 'session-picker' | 'account-mana
   if (w === 'account-manager') return 'account-manager'
   if (w === 'settings') return 'settings'
   if (w === 'cli-tools') return 'cli-tools'
+  if (w === 'history-viewer') return 'history-viewer'
   return 'picker'
 }
 
@@ -27,6 +29,7 @@ export default function App(): React.ReactElement {
       {windowType === 'account-manager' && <AccountManagerApp />}
       {windowType === 'settings' && <SettingsApp />}
       {windowType === 'cli-tools' && <CliToolsApp />}
+      {windowType === 'history-viewer' && <HistoryViewerApp />}
       {windowType === 'picker' && <PickerApp />}
     </Suspense>
   )

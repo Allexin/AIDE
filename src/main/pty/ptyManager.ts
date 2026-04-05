@@ -290,6 +290,20 @@ export class PtyManager {
     const tabsArr = Array.from(this.tabs.values()).filter((t) => t.tool.id === tool.id)
     if (tabsArr.length === 0) return
 
+    // Fast path: if exactly one tab has no session yet, assign to it directly.
+    // This avoids relying on WMI process-tree queries which can lag by 1-2 s on
+    // Windows, causing the new session to be misassigned to a tab that already
+    // has a session but whose claude.exe happens to be the only one visible.
+    const waitingTabs = tabsArr.filter((t) => t.sessionId === null)
+    if (waitingTabs.length === 1) {
+      const tab = waitingTabs[0]
+      this.debugLog(`assignNewSession: ${sessionId} → ${tab.tabId} (sole waiting tab)`)
+      tab.sessionId = sessionId
+      this.send('terminal:tab-session-id', { tabId: tab.tabId, sessionId })
+      this.onSessionAssigned?.(tab.tabId, sessionId, tab.tool)
+      return
+    }
+
     if (tool.resolveOwnerPid) {
       const candidatePids = tabsArr.map((t) => t.pty.pid)
       const ownerPid = await tool.resolveOwnerPid(candidatePids)
