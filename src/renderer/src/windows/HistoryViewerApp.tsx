@@ -1,20 +1,56 @@
 import React, { useEffect, useRef, useState } from 'react'
 
 export default function HistoryViewerApp(): React.ReactElement {
-  const [data, setData] = useState<HistoryViewerData | null>(null)
+  const [toolInfo, setToolInfo] = useState<{ title: string; toolName: string } | null>(null)
+  const [entries, setEntries] = useState<HistoryEntry[]>([])
+  const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const atBottomRef = useRef(true)
+  const pendingScrollRef = useRef(false)
+  const initialLoadRef = useRef(true)
 
+  // Initial data load
   useEffect(() => {
     window.historyViewerApi.getData().then((d) => {
-      setData(d)
+      const data = d as HistoryViewerData
+      setToolInfo({ title: data.title, toolName: data.toolName })
+      setEntries(data.entries)
+      pendingScrollRef.current = true
     })
   }, [])
 
+  // Subscribe to live updates
   useEffect(() => {
-    if (data) {
-      bottomRef.current?.scrollIntoView({ behavior: 'instant' })
+    const cleanup = window.historyViewerApi.onNewEntries((newEntries) => {
+      if (scrollRef.current) {
+        atBottomRef.current = isAtBottom(scrollRef.current)
+      }
+      if (atBottomRef.current) {
+        pendingScrollRef.current = true
+      }
+      setEntries((prev) => [...prev, ...newEntries])
+    })
+    return cleanup
+  }, [])
+
+  // Scroll after entries change (initial load or live update)
+  useEffect(() => {
+    if (pendingScrollRef.current) {
+      pendingScrollRef.current = false
+      if (initialLoadRef.current) {
+        initialLoadRef.current = false
+        bottomRef.current?.scrollIntoView({ behavior: 'instant' })
+      } else {
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+      }
     }
-  }, [data])
+  })
+
+  function handleScroll(): void {
+    if (scrollRef.current) {
+      atBottomRef.current = isAtBottom(scrollRef.current)
+    }
+  }
 
   return (
     <div
@@ -40,30 +76,38 @@ export default function HistoryViewerApp(): React.ReactElement {
         }}
       >
         <div style={{ fontSize: 14, fontWeight: 600, color: '#cccccc' }}>
-          {data?.title || 'Session History'}
+          {toolInfo?.title || 'Session History'}
         </div>
-        {data && (
+        {toolInfo && (
           <div style={{ fontSize: 11, color: '#666' }}>
-            {data.entries.length} message{data.entries.length !== 1 ? 's' : ''} · {data.toolName}
+            {entries.length} message{entries.length !== 1 ? 's' : ''} · {toolInfo.toolName}
           </div>
         )}
       </div>
 
       {/* Messages */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 0', userSelect: 'text' }}>
-        {!data ? (
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        style={{ flex: 1, overflowY: 'auto', padding: '12px 0', userSelect: 'text' }}
+      >
+        {entries.length === 0 && toolInfo === null ? (
           <div style={{ padding: '16px 20px', color: '#555', fontSize: 12 }}>Loading…</div>
-        ) : data.entries.length === 0 ? (
+        ) : entries.length === 0 ? (
           <div style={{ padding: '16px 20px', color: '#555', fontSize: 12 }}>No messages found</div>
         ) : (
-          data.entries.map((entry, i) => (
-            <MessageRow key={i} entry={entry} toolName={data.toolName} />
+          entries.map((entry, i) => (
+            <MessageRow key={i} entry={entry} toolName={toolInfo?.toolName ?? ''} />
           ))
         )}
         <div ref={bottomRef} />
       </div>
     </div>
   )
+}
+
+function isAtBottom(el: HTMLDivElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 100
 }
 
 function MessageRow({ entry, toolName }: { entry: HistoryEntry; toolName: string }): React.ReactElement {

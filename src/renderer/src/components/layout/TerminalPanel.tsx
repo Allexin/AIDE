@@ -439,6 +439,28 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
           onCloseTab={handleCloseTab}
         />
 
+        {/* [ history ] open history viewer for current tab */}
+        {(() => {
+          const activeTab = tabs.find((t) => t.tabId === activeTabId)
+          if (!activeTab?.sessionId) return null
+          return (
+            <button
+              title="Open session history"
+              style={headerBtnStyle}
+              onClick={(e) => {
+                e.stopPropagation()
+                window.editorApi.terminalOpenHistory(
+                  activeTab.sessionId!,
+                  activeTab.toolId,
+                  activeTab.slug
+                )
+              }}
+            >
+              ☰
+            </button>
+          )
+        })()}
+
         {/* [ + ] open session picker */}
         <button
           title="Open session picker"

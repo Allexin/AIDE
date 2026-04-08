@@ -196,6 +196,19 @@ export function readSessionPreview(sessionsDir: string, sessionId: string): Prev
   }
 }
 
+export function parseHistoryLine(line: string): HistoryEntry | null {
+  try {
+    const obj = JSON.parse(line)
+    if (obj.type !== 'user' && obj.type !== 'assistant') return null
+    if (obj.isMeta) return null
+    const blocks = parseHistoryBlocks(obj?.message?.content)
+    if (blocks.length === 0) return null
+    return { role: obj.type as 'user' | 'assistant', blocks }
+  } catch {
+    return null
+  }
+}
+
 function parseHistoryBlocks(content: unknown): HistoryBlock[] {
   if (typeof content === 'string') {
     return content.trim() ? [{ type: 'text', text: content }] : []

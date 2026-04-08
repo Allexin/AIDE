@@ -144,6 +144,7 @@ interface EditorAPI {
   terminalResize: (tabId: string, cols: number, rows: number) => void
   terminalCloseTab: (tabId: string) => void
   terminalOpenSessionPicker: () => void
+  terminalOpenHistory: (sessionId: string, toolId: string, sessionTitle: string) => void
   onTerminalData: (cb: (tabId: string, data: string) => void) => () => void
   onTerminalTabTitle: (cb: (tabId: string, title: string) => void) => () => void
   onTerminalTabSessionId: (cb: (tabId: string, sessionId: string) => void) => () => void
@@ -278,6 +279,7 @@ interface HistoryViewerData {
 
 interface HistoryViewerAPI {
   getData: () => Promise<HistoryViewerData>
+  onNewEntries: (cb: (entries: HistoryEntry[]) => void) => () => void
 }
 
 interface SessionPickerAPI {

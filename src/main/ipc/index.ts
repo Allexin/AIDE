@@ -29,7 +29,7 @@ import {
 } from '../config/accountStorage'
 import { initCliLogger } from '../pty/cliTools/cliLogger'
 import { createSessionPickerWindow } from '../windows/sessionPicker'
-import { createHistoryViewerWindow, historyViewerDataMap } from '../windows/historyViewer'
+import { createHistoryViewerWindow, historyViewerDataMap, watchHistoryFile } from '../windows/historyViewer'
 import {
   spawnButtonProcess,
   killButtonProcess
@@ -394,6 +394,32 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     createSessionPickerWindow(senderWin)
   })
 
+  // ── Terminal: open history viewer directly for a session ──────────────────────
+  ipcMain.on('terminal:open-history', async (event, sessionId: string, toolId: string, sessionTitle: string) => {
+    const editorWin = BrowserWindow.fromWebContents(event.sender)
+    if (!editorWin) return
+
+    let projectPath: string | undefined
+    for (const [p, w] of openProjects) {
+      if (w === editorWin) { projectPath = p; break }
+    }
+    if (!projectPath) return
+
+    const tool = getToolById(toolId)
+    if (!tool?.getSessionHistory) return
+
+    const entries = await tool.getSessionHistory(projectPath, sessionId)
+    const win = createHistoryViewerWindow({
+      projectPath,
+      sessionId,
+      toolId,
+      title: sessionTitle || 'Session History',
+      entries
+    })
+    const filePath = tool.getSessionFilePath ? tool.getSessionFilePath(projectPath, sessionId) : null
+    watchHistoryFile(win, filePath)
+  })
+
   // ── Session picker: get sessions (all activated tools + open tabs) ────────────
   ipcMain.handle('session-picker:get-sessions', async (event) => {
     const pickerWin = BrowserWindow.fromWebContents(event.sender)
@@ -477,13 +503,15 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     if (!tool?.getSessionHistory) return
 
     const entries = await tool.getSessionHistory(projectPath, sessionId)
-    createHistoryViewerWindow({
+    const win = createHistoryViewerWindow({
       projectPath,
       sessionId,
       toolId,
       title: sessionTitle || 'Session History',
       entries
     })
+    const filePath = tool.getSessionFilePath ? tool.getSessionFilePath(projectPath, sessionId) : null
+    watchHistoryFile(win, filePath)
   })
 
   // ── History viewer: get data ──────────────────────────────────────────────────

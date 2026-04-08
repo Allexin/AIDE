@@ -111,6 +111,7 @@ export interface EditorAPI {
   terminalResize: (tabId: string, cols: number, rows: number) => void
   terminalCloseTab: (tabId: string) => void
   terminalOpenSessionPicker: () => void
+  terminalOpenHistory: (sessionId: string, toolId: string, sessionTitle: string) => void
   onTerminalData: (cb: (tabId: string, data: string) => void) => () => void
   onTerminalTabTitle: (cb: (tabId: string, title: string) => void) => () => void
   onTerminalTabSessionId: (cb: (tabId: string, sessionId: string) => void) => () => void
@@ -256,6 +257,8 @@ const editorApi: EditorAPI = {
   terminalResize: (tabId, cols, rows) => ipcRenderer.send('terminal:resize', tabId, cols, rows),
   terminalCloseTab: (tabId) => ipcRenderer.send('terminal:close-tab', tabId),
   terminalOpenSessionPicker: () => ipcRenderer.send('terminal:open-session-picker'),
+  terminalOpenHistory: (sessionId: string, toolId: string, sessionTitle: string) =>
+    ipcRenderer.send('terminal:open-history', sessionId, toolId, sessionTitle),
 
   onTerminalData: (cb: (tabId: string, data: string) => void) => {
     const handler = (_: unknown, payload: { tabId: string; data: string }): void =>
