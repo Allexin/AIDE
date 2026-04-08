@@ -1,10 +1,11 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, renameSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, renameSync, watch, openSync, fstatSync, readSync, closeSync } from 'fs'
+import type { FSWatcher } from 'fs'
 import { execFile } from 'child_process'
 import { homedir } from 'os'
 import { join } from 'path'
 import { session } from 'electron'
-import type { CliTool, CliSession, SettingsField, UsageInfo } from './types'
-import { scanSessions as scanDiskSessions, watchSessionsDir, getSessionsDir, readSessionPreview, readSessionHistory } from './claudeCodeScanner'
+import type { CliTool, CliSession, SettingsField, UsageInfo, HistoryEntry } from './types'
+import { scanSessions as scanDiskSessions, watchSessionsDir, getSessionsDir, readSessionPreview, readSessionHistory, parseHistoryLine } from './claudeCodeScanner'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
 
@@ -518,6 +519,66 @@ export const claudeCodeTool: CliTool = {
 
   getSessionHistory(projectPath: string, sessionId: string) {
     return readSessionHistory(getSessionsDir(projectPath), sessionId)
+  },
+
+  subscribeToSessionHistory(
+    projectPath: string,
+    sessionId: string,
+    onEntry: (entry: HistoryEntry) => void
+  ): () => void {
+    const filePath = join(getSessionsDir(projectPath), `${sessionId}.jsonl`)
+    if (!existsSync(filePath)) return () => {}
+
+    let stopped = false
+    let watcher: FSWatcher | null = null
+
+    // Track current file size so we only read new content
+    let offset = 0
+    try {
+      const fd = openSync(filePath, 'r')
+      offset = fstatSync(fd).size
+      closeSync(fd)
+    } catch { /* ignore */ }
+
+    const readNewEntries = () => {
+      if (stopped || !existsSync(filePath)) return
+
+      let fd: number
+      try {
+        fd = openSync(filePath, 'r')
+      } catch {
+        return
+      }
+
+      try {
+        const fileSize = fstatSync(fd)
+        if (fileSize.size <= offset) return
+
+        const len = fileSize.size - offset
+        const buf = Buffer.alloc(len)
+        readSync(fd, buf, 0, len, offset)
+        offset = fileSize.size
+
+        const text = buf.toString('utf-8')
+        for (const line of text.split('\n')) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          const entry = parseHistoryLine(trimmed)
+          if (entry && !stopped) onEntry(entry)
+        }
+      } finally {
+        closeSync(fd)
+      }
+    }
+
+    try {
+      watcher = watch(filePath, () => readNewEntries())
+    } catch { /* ignore */ }
+
+    return () => {
+      stopped = true
+      watcher?.close()
+    }
   },
 
   getSessionFilePath(projectPath: string, sessionId: string): string {

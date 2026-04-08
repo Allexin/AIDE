@@ -1,10 +1,8 @@
 import { BrowserWindow, shell } from 'electron'
 import { join } from 'path'
-import { watch, openSync, fstatSync, readSync, closeSync, existsSync } from 'fs'
-import type { FSWatcher } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import type { HistoryEntry } from '../pty/cliTools/types'
-import { parseHistoryLine } from '../pty/cliTools/claudeCodeScanner'
+import { getToolById } from '../pty/cliTools/registry'
 
 export interface HistoryViewerContext {
   projectPath: string
@@ -16,82 +14,37 @@ export interface HistoryViewerContext {
 
 export const historyViewerDataMap = new Map<BrowserWindow, HistoryViewerContext>()
 
-interface HistoryWatchState {
-  filePath: string
-  offset: number
-  watcher: FSWatcher | null
-}
+/** Active subscriptions: window → cleanup function */
+const historySubscriptions = new Map<BrowserWindow, () => void>()
 
-const historyWatchMap = new Map<BrowserWindow, HistoryWatchState>()
+/** Start subscribing to live history updates for the given tool/session. */
+export function subscribeToHistory(win: BrowserWindow, context: HistoryViewerContext): void {
+  // Clean up any existing subscription
+  stopSubscribing(win)
 
-export function watchHistoryFile(win: BrowserWindow, filePath: string | null): void {
-  if (!filePath) return
+  const tool = getToolById(context.toolId)
+  if (!tool?.subscribeToSessionHistory) return
 
-  let initialOffset = 0
-  if (existsSync(filePath)) {
-    try {
-      const fd = openSync(filePath, 'r')
-      initialOffset = fstatSync(fd).size
-      closeSync(fd)
-    } catch { /* ignore */ }
-  }
-
-  const state: HistoryWatchState = { filePath, offset: initialOffset, watcher: null }
-  historyWatchMap.set(win, state)
-
-  if (existsSync(filePath)) {
-    attachHistoryWatcher(win, state)
-  }
-}
-
-function attachHistoryWatcher(win: BrowserWindow, state: HistoryWatchState): void {
-  try {
-    state.watcher = watch(state.filePath, () => readNewHistoryEntries(win, state))
-  } catch { /* ignore */ }
-}
-
-function readNewHistoryEntries(win: BrowserWindow, state: HistoryWatchState): void {
-  if (!existsSync(state.filePath)) return
-
-  let fd: number
-  try {
-    fd = openSync(state.filePath, 'r')
-  } catch {
-    return
-  }
-
-  try {
-    const fileSize = fstatSync(fd).size
-    if (fileSize <= state.offset) return
-
-    const len = fileSize - state.offset
-    const buf = Buffer.alloc(len)
-    readSync(fd, buf, 0, len, state.offset)
-    state.offset = fileSize
-
-    const text = buf.toString('utf-8')
-    const newEntries: HistoryEntry[] = []
-
-    for (const line of text.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      const entry = parseHistoryLine(trimmed)
-      if (entry) newEntries.push(entry)
+  const cleanup = tool.subscribeToSessionHistory(
+    context.projectPath,
+    context.sessionId,
+    (entry: HistoryEntry) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('history-viewer:new-entries', [entry])
+      }
     }
+  )
 
-    if (newEntries.length > 0 && !win.isDestroyed()) {
-      win.webContents.send('history-viewer:new-entries', newEntries)
-    }
-  } finally {
-    closeSync(fd)
-  }
+  historySubscriptions.set(win, cleanup)
 }
 
-function stopWatchingHistory(win: BrowserWindow): void {
-  const state = historyWatchMap.get(win)
-  if (!state) return
-  state.watcher?.close()
-  historyWatchMap.delete(win)
+/** Stop any active subscription for the given window. */
+function stopSubscribing(win: BrowserWindow): void {
+  const cleanup = historySubscriptions.get(win)
+  if (cleanup) {
+    cleanup()
+    historySubscriptions.delete(win)
+  }
 }
 
 export function createHistoryViewerWindow(context: HistoryViewerContext): BrowserWindow {
@@ -123,8 +76,11 @@ export function createHistoryViewerWindow(context: HistoryViewerContext): Browse
   historyViewerDataMap.set(win, context)
   win.on('closed', () => {
     historyViewerDataMap.delete(win)
-    stopWatchingHistory(win)
+    stopSubscribing(win)
   })
+
+  // Start live subscription only after the renderer has loaded its IPC listeners
+  win.webContents.once('did-finish-load', () => subscribeToHistory(win, context))
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'] + '/?window=history-viewer')

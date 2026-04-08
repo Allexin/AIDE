@@ -4,10 +4,11 @@
  *
  * Usage: node scripts/release.mjs
  *
+ * - Fetches previous stable release from GitVerse (fail-fast internet check)
  * - Runs npm run build (bumps patch version + builds via electron-vite)
  * - Packages portable zip via electron-builder
  * - Creates git commit + tag
- * - Generates release notes via Claude Code (requires internet + claude in PATH)
+ * - Generates release notes via Claude Code
  * - Prints files to upload to GitVerse
  */
 
@@ -34,26 +35,8 @@ function readVersion() {
 
 console.log('\n📦 AIDE Release Tool\n')
 
-// Step 1: build (prebuild bumps patch version automatically)
-console.log('🔨 Building...')
-run('npm run build')
-const version = readVersion()
-console.log(`\n✓ Built v${version}`)
-
-// Step 2: package portable zip
-console.log('\n📦 Packaging portable zip...')
-run('npm run pack')
-console.log(`✓ Portable zip ready`)
-
-// Step 3: git commit + tag
-console.log('\n🔖 Committing and tagging...')
-run(`git add package.json`)
-run(`git commit -m "chore: release v${version}"`)
-run(`git tag v${version}`)
-console.log(`✓ Tag v${version} created`)
-
-// Step 4: get previous stable release from GitVerse
-console.log('\n🌐 Fetching previous stable release from GitVerse...')
+// Step 1: fetch previous stable release from GitVerse (fail fast before any heavy work)
+console.log('🌐 Fetching previous stable release from GitVerse...')
 const prevResult = spawnSync('node', ['scripts/get-prev-release.mjs'], {
   cwd: ROOT,
   encoding: 'utf8'
@@ -67,9 +50,27 @@ if (prevResult.status !== 0) {
 const prevVersion = prevResult.stdout.trim()
 console.log(`✓ Previous stable release: v${prevVersion}`)
 
+// Step 2: build (prebuild bumps patch version automatically)
+console.log('\n🔨 Building...')
+run('npm run build')
+const version = readVersion()
+console.log(`\n✓ Built v${version}`)
+
+// Step 3: package portable zip
+console.log('\n📦 Packaging portable zip...')
+run('npm run pack')
+console.log(`✓ Portable zip ready`)
+
+// Step 4: git commit + tag
+console.log('\n🔖 Committing and tagging...')
+run(`git add package.json`)
+run(`git commit -m "chore: release v${version}"`)
+run(`git tag v${version}`)
+console.log(`✓ Tag v${version} created`)
+
 // Step 5: collect commit log since previous stable release (exclude the release commit itself)
 const commitLog = runCapture(
-  `git log v${prevVersion}..HEAD~1 --oneline --no-merges`
+  `git log v${prevVersion}..HEAD~1 --no-merges --format="--- %h %s%n%b"`
 )
 if (!commitLog) {
   console.warn('⚠  No commits found since previous release. Release notes will be empty.')
@@ -126,7 +127,7 @@ const claudeResult = spawnSync(claudeExe, ['-p', prompt], {
 if (claudeResult.status !== 0 || !claudeResult.stdout.trim()) {
   const err = claudeResult.stderr || claudeResult.error?.message || 'unknown error'
   console.error(`\n❌ Claude Code failed: ${err}`)
-  console.error('   Ensure `claude` is in PATH and you are authenticated.')
+  console.error('   Ensure claude.exe is at %USERPROFILE%\\.local\\bin\\claude.exe')
   console.error('   You can create release notes manually using docs/release-format.md')
   process.exit(1)
 }

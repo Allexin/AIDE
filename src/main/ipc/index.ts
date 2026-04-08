@@ -29,7 +29,7 @@ import {
 } from '../config/accountStorage'
 import { initCliLogger } from '../pty/cliTools/cliLogger'
 import { createSessionPickerWindow } from '../windows/sessionPicker'
-import { createHistoryViewerWindow, historyViewerDataMap, watchHistoryFile } from '../windows/historyViewer'
+import { createHistoryViewerWindow, historyViewerDataMap } from '../windows/historyViewer'
 import {
   spawnButtonProcess,
   killButtonProcess
@@ -409,15 +409,13 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     if (!tool?.getSessionHistory) return
 
     const entries = await tool.getSessionHistory(projectPath, sessionId)
-    const win = createHistoryViewerWindow({
+    createHistoryViewerWindow({
       projectPath,
       sessionId,
       toolId,
       title: sessionTitle || 'Session History',
       entries
     })
-    const filePath = tool.getSessionFilePath ? tool.getSessionFilePath(projectPath, sessionId) : null
-    watchHistoryFile(win, filePath)
   })
 
   // ── Session picker: get sessions (all activated tools + open tabs) ────────────
@@ -503,15 +501,13 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     if (!tool?.getSessionHistory) return
 
     const entries = await tool.getSessionHistory(projectPath, sessionId)
-    const win = createHistoryViewerWindow({
+    createHistoryViewerWindow({
       projectPath,
       sessionId,
       toolId,
       title: sessionTitle || 'Session History',
       entries
     })
-    const filePath = tool.getSessionFilePath ? tool.getSessionFilePath(projectPath, sessionId) : null
-    watchHistoryFile(win, filePath)
   })
 
   // ── History viewer: get data ──────────────────────────────────────────────────

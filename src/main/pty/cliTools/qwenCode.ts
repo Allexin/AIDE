@@ -2,8 +2,9 @@ import { existsSync, readdirSync, readFileSync, statSync, watch as fsWatch, writ
 import { execFile } from 'child_process'
 import { homedir, platform } from 'os'
 import { join } from 'path'
-import type { CliTool, CliSession, UsageInfo } from './types'
+import type { CliTool, CliSession, UsageInfo, HistoryEntry } from './types'
 import { cliLog } from './cliLogger'
+import { readQwenSessionHistory, watchQwenSessionFile } from './qwenCodeScanner'
 
 const LOG_CH = 'Qwen Code'
 const TOOL_NAME = 'Qwen Code'
@@ -287,6 +288,22 @@ export const qwenCodeTool: CliTool = {
 
   getSessionFilePath(projectPath: string, sessionId: string): string | null {
     return join(getChatsDir(projectPath), `${sessionId}.jsonl`)
+  },
+
+  async getSessionHistory(projectPath: string, sessionId: string): Promise<HistoryEntry[]> {
+    const filePath = join(getChatsDir(projectPath), `${sessionId}.jsonl`)
+    if (!existsSync(filePath)) return []
+    return readQwenSessionHistory(filePath)
+  },
+
+  subscribeToSessionHistory(
+    projectPath: string,
+    sessionId: string,
+    onEntry: (entry: HistoryEntry) => void
+  ): () => void {
+    const filePath = join(getChatsDir(projectPath), `${sessionId}.jsonl`)
+    if (!existsSync(filePath)) return () => {}
+    return watchQwenSessionFile(filePath, onEntry)
   },
 
   async getUsageInfo(): Promise<UsageInfo | null> {

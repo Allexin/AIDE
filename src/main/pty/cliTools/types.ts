@@ -133,6 +133,17 @@ export interface CliTool {
    */
   getSessionFilePath?(projectPath: string, sessionId: string): string | null
 
+  /** Start streaming new history entries for a session.
+   *  Calls `onEntry` whenever a new entry arrives (e.g. from file watch, API, etc).
+   *  Returns a cleanup function to stop the subscription.
+   *  Tools that don't support live updates can omit this.
+   */
+  subscribeToSessionHistory?(
+    projectPath: string,
+    sessionId: string,
+    onEntry: (entry: HistoryEntry) => void
+  ): () => void
+
   /** Return the text to insert into the terminal to reference a file in AI context
    *  (e.g. Claude Code uses "@relativePath").
    *  Returns null if the tool does not support this feature — the context menu item is hidden.
