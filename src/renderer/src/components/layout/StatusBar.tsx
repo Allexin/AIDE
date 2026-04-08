@@ -249,7 +249,7 @@ export default function StatusBar(): React.ReactElement {
         )}
         {updateStatus?.hasUpdate ? (
           <span
-            title={`Доступна версия v${updateStatus.latestVersion}. Нажмите для просмотра обновлений.`}
+            title={`Version v${updateStatus.latestVersion} is available. Click to view updates.`}
             onClick={() => setShowUpdateDialog(true)}
             style={{ cursor: 'pointer', display: 'flex', gap: 4, alignItems: 'center' }}
           >

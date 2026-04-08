@@ -589,6 +589,25 @@ export const claudeCodeTool: CliTool = {
     return `@${relPath}`
   },
 
+  parseThinkingBlocks(line: string): string[] {
+    try {
+      const obj = JSON.parse(line)
+      if (obj.type !== 'assistant') return []
+      const content = obj?.message?.content
+      if (!Array.isArray(content)) return []
+      return content
+        .filter((b: unknown) =>
+          typeof b === 'object' && b !== null &&
+          (b as { type?: string }).type === 'thinking' &&
+          typeof (b as { thinking?: unknown }).thinking === 'string' &&
+          (b as { thinking: string }).thinking.length > 0
+        )
+        .map((b: unknown) => (b as { thinking: string }).thinking)
+    } catch {
+      return []
+    }
+  },
+
   watchForNewSessions(projectPath: string, onNew: (session: CliSession) => void): () => void {
     const sessionsDir = getSessionsDir(projectPath)
     return watchSessionsDir(sessionsDir, (sessionId: string) => {

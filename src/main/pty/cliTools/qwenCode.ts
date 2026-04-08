@@ -306,6 +306,25 @@ export const qwenCodeTool: CliTool = {
     return watchQwenSessionFile(filePath, onEntry)
   },
 
+  parseThinkingBlocks(line: string): string[] {
+    try {
+      const obj = JSON.parse(line)
+      if (obj.type !== 'user' && obj.type !== 'assistant') return []
+      const parts = obj?.message?.parts
+      if (!Array.isArray(parts)) return []
+      return parts
+        .filter((p: unknown) =>
+          typeof p === 'object' && p !== null &&
+          (p as { thought?: boolean }).thought === true &&
+          typeof (p as { text?: string }).text === 'string' &&
+          (p as { text: string }).text.length > 0
+        )
+        .map((p: unknown) => (p as { text: string }).text)
+    } catch {
+      return []
+    }
+  },
+
   async getUsageInfo(): Promise<UsageInfo | null> {
     try {
       const used = computeUsageToday()

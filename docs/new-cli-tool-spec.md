@@ -1,59 +1,59 @@
-# Спецификация: добавление нового CLI Tool в AIDE
+# Adding a New CLI Tool to AIDE
 
-Этот документ — полное руководство по реализации нового AI CLI Tool (например, Aider, Gemini CLI, Codex и т.д.) с нуля. Следуя ему, можно добавить поддержку любого инструмента без изменения существующей логики AIDE.
-
----
-
-## Оглавление
-
-1. [Архитектура системы CLI Tools](#1-архитектура-системы-cli-tools)
-2. [Интерфейс CliTool — полный справочник](#2-интерфейс-clitool--полный-справочник)
-3. [Минимальная реализация](#3-минимальная-реализация)
-4. [Управление сессиями на диске](#4-управление-сессиями-на-диске)
-5. [Полная реализация — каждый метод](#5-полная-реализация--каждый-метод)
-6. [Регистрация инструмента](#6-регистрация-инструмента)
-7. [Настройки (Settings)](#7-настройки-settings)
-8. [Аккаунты (Accounts)](#8-аккаунты-accounts)
-9. [Чеклист реализации](#9-чеклист-реализации)
+This document is a complete guide for implementing a new AI CLI Tool (e.g. Aider, Gemini CLI, Codex, etc.) from scratch. Following it, you can add support for any tool without modifying existing AIDE logic.
 
 ---
 
-## 1. Архитектура системы CLI Tools
+## Table of Contents
 
-### Как работает система
+1. [System Architecture](#1-system-architecture)
+2. [CliTool Interface — Complete Reference](#2-clitool-interface--complete-reference)
+3. [Minimal Implementation](#3-minimal-implementation)
+4. [Session Storage on Disk](#4-session-storage-on-disk)
+5. [Full Implementation — Every Method](#5-full-implementation--every-method)
+6. [Registering the Tool](#6-registering-the-tool)
+7. [Settings](#7-settings)
+8. [Accounts](#8-accounts)
+9. [Implementation Checklist](#9-implementation-checklist)
 
-Каждый CLI Tool — это объект, реализующий интерфейс `CliTool` (`src/main/pty/cliTools/types.ts`). AIDE управляет этими объектами через единый реестр (`registry.ts`). Пользователь активирует инструменты через UI (Tools → Manage CLI Tools), после чего AIDE использует их для создания PTY-сессий в терминальных вкладках.
+---
 
-### Жизненный цикл сессии
+## 1. System Architecture
+
+### How it works
+
+Each CLI Tool is an object implementing the `CliTool` interface (`src/main/pty/cliTools/types.ts`). AIDE manages these objects through a single registry (`registry.ts`). Users activate tools via the UI (Tools → Manage CLI Tools), after which AIDE uses them to create PTY sessions in terminal tabs.
+
+### New session lifecycle
 
 ```
-Пользователь нажимает "New Session"
+User clicks "New Session"
     │
     ▼
 PtyManager.createNewSessionTab(toolId)
     │
-    ├─ tool.prepareProject(projectPath)   // однократная подготовка (если нужна)
+    ├─ tool.prepareProject(projectPath)   // one-time setup (if needed)
     │
     ├─ spawn PowerShell PTY
     │
-    ├─ write tool.newSessionCommand()     // запуск CLI в PTY
+    ├─ write tool.newSessionCommand()     // start the CLI in the PTY
     │
-    ├─ tool.checkStartupHealth(output)    // мониторинг готовности
+    ├─ tool.checkStartupHealth(output)    // monitor readiness
     │
-    └─ tool.watchForNewSessions()         // ожидание файла сессии на диске
+    └─ tool.watchForNewSessions()         // wait for a session file on disk
            │
-           └─ sessionId → tab.sessionId присвоен
+           └─ sessionId → tab.sessionId assigned
 ```
 
-### Жизненный цикл восстановления сессии
+### Session resume lifecycle
 
 ```
-Проект открыт, есть сохранённые сессии
+Project opened, saved sessions exist
     │
     ▼
 PtyManager.createInitialTabs(saved[])
     │
-    └─ для каждой saved[i]:
+    └─ for each saved[i]:
          tool = getToolById(saved[i].toolId)
          │
          ├─ tool.prepareProject(projectPath)
@@ -63,89 +63,96 @@ PtyManager.createInitialTabs(saved[])
          └─ write tool.resumeCommand(saved[i].sessionId)
 ```
 
-### Файловая структура
+### File structure
 
 ```
 src/main/pty/cliTools/
-  types.ts            — интерфейс CliTool, SettingsField, UsageInfo
-  registry.ts         — реестр инструментов, getDefaultTool()
-  claudeCode.ts       — эталонная реализация (Claude Code)
-  claudeCodeScanner.ts — сканер сессий на диске (специфично для Claude Code)
-  plainShell.ts       — встроенный fallback (Terminal)
-  cliLogger.ts        — утилита логирования
+  types.ts              — CliTool interface, SettingsField, UsageInfo, HistoryEntry
+  registry.ts           — tool registry, getDefaultTool()
+  claudeCode.ts         — reference implementation (Claude Code)
+  claudeCodeScanner.ts  — disk session scanner (Claude Code-specific)
+  qwenCode.ts           — second reference implementation (Qwen Code)
+  qwenCodeScanner.ts    — disk session scanner (Qwen Code-specific)
+  plainShell.ts         — built-in fallback (plain terminal)
+  cliLogger.ts          — logging utility
 
-  yourTool.ts         ← НОВЫЙ ФАЙЛ (твоя реализация)
+  yourTool.ts           ← NEW FILE (your implementation)
+  yourToolScanner.ts    ← optional, if you need a separate parser file
 ```
 
----
-
-## 2. Интерфейс CliTool — полный справочник
-
-Полный интерфейс (`src/main/pty/cliTools/types.ts`):
-
-### Обязательные поля
-
-| Поле | Тип | Описание |
-|------|-----|----------|
-| `id` | `string` | Стабильный машинный идентификатор. Хранится в `aide-state.json` и `.aide/settings.json`. **Никогда не менять после публикации.** Пример: `'aider'`, `'gemini-cli'` |
-| `name` | `string` | Человекочитаемое имя. Показывается в UI. Пример: `'Aider'`, `'Gemini CLI'` |
-
-### Обязательные методы
-
-| Метод | Сигнатура | Описание |
-|-------|-----------|----------|
-| `isInstalled` | `() => Promise<boolean>` | Проверяет наличие бинарника в системе. Вызывается при активации инструмента в UI. **Не кешировать.** |
-| `newSessionCommand` | `() => string` | Команда, которая записывается в PTY stdin для запуска нового сеанса. Например: `'aider'`. |
-| `resumeCommand` | `(sessionId: string) => string` | Команда для возобновления существующего сеанса по его ID. |
-| `scanSessions` | `(projectPath: string) => Promise<CliSession[]>` | Сканирует диск и возвращает список существующих сессий для проекта. Сортировка: новые первые. |
-| `watchForNewSessions` | `(projectPath, onNew) => () => void` | Подписывается на появление новых файлов сессий на диске. Возвращает функцию отписки. |
-
-### Опциональные поля
-
-| Поле | Тип | Описание |
-|------|-----|----------|
-| `installUrl` | `string` | Ссылка на инструкцию по установке. Показывается в CLI Tools Manager рядом с кнопкой Activate. |
-
-### Опциональные методы — запуск и рантайм
-
-| Метод | Сигнатура | Описание |
-|-------|-----------|----------|
-| `prepareProject` | `(projectPath) => Promise<void>` | Однократная подготовка перед первым сеансом. Например: запись config-файла, чтобы CLI не спрашивал разрешений. |
-| `checkStartupHealth` | `(accumulated, elapsedMs) => 'ok' \| 'dead' \| 'pending'` | Анализирует накопленный вывод PTY. Возвращает `'ok'` когда CLI готов, `'dead'` при фатальной ошибке. |
-| `getEnvOverrides` | `() => Record<string, string>` | Переменные окружения, которые добавляются в PTY при каждом spawn. |
-| `resolveOwnerPid` | `(candidatePids: number[]) => Promise<number \| null>` | При наличии нескольких вкладок определяет, какая PTY-вкладка породила новый файл сессии. |
-| `watchSessionLabel` | `(projectPath, sessionId, onLabel) => () => void` | Стримит обновления заголовка для запущенной сессии. |
-| `detectTitleEvent` | `(prevTitle, newTitle) => string \| null` | Возвращает имя события при смене OSC-заголовка терминала. |
-| `contextInsert` | `(relPath: string) => string \| null` | Возвращает текст для вставки в терминал при добавлении файла в контекст AI. Если `null` — пункт меню скрыт. |
-| `getSessionPreview` | `(projectPath, sessionId) => Promise<[{role, text}]>` | Последние сообщения сессии для предпросмотра в Session Picker. |
-| `getSessionHistory` | `(projectPath, sessionId) => Promise<HistoryEntry[]>` | Полная история переписки для History Viewer (кнопка ☰ в Session Picker). |
-| `getSessionFilePath` | `(projectPath, sessionId) => string \| null` | Путь к файлу данных сессии. Используется `ThinkingWatcher`. |
-
-### Опциональные методы — настройки
-
-| Метод | Сигнатура | Описание |
-|-------|-----------|----------|
-| `settingsFields` | `() => SettingsField[]` | Описание полей для отображения в Settings UI. |
-| `getSettings` | `() => Promise<Record<string, unknown>>` | Загружает текущие значения настроек. |
-| `updateSettings` | `(values) => Promise<void>` | Сохраняет обновлённые настройки. |
-
-### Опциональные методы — аккаунты
-
-| Метод | Сигнатура | Описание |
-|-------|-----------|----------|
-| `isLoggedIn` | `() => Promise<boolean>` | Проверяет, авторизован ли пользователь. |
-| `getLoginIdentifier` | `() => Promise<string \| null>` | Возвращает email или username. |
-| `credentialsMatch` | `(saved) => Promise<boolean>` | Проверяет совпадение сохранённых credentials с текущими. |
-| `exportCredentials` | `() => Promise<Record<string, unknown> \| null>` | Экспортирует текущие credentials в сериализуемый объект. |
-| `importCredentials` | `(credentials) => Promise<void>` | Восстанавливает сохранённые credentials. |
-| `clearCredentials` | `() => Promise<void>` | Удаляет локальные credentials (без revoke на сервере). |
-| `getUsageInfo` | `() => Promise<UsageInfo \| null>` | Возвращает данные об использовании для статусной строки. |
+Both `claudeCode.ts` and `qwenCode.ts` are complete reference implementations — read them before starting. They illustrate two distinct patterns: OAuth-based auth with cloud API usage tracking (Claude Code) and local file-based usage counting (Qwen Code).
 
 ---
 
-## 3. Минимальная реализация
+## 2. CliTool Interface — Complete Reference
 
-Минимальный набор для полностью работающего инструмента — только обязательные члены. Пример для гипотетического инструмента `mytool`:
+Full interface (`src/main/pty/cliTools/types.ts`):
+
+### Required fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `string` | Stable machine identifier. Stored in `aide-state.json` and `.aide/settings.json`. **Never change after publishing.** Examples: `'aider'`, `'gemini-cli'` |
+| `name` | `string` | Human-readable name shown in the UI. Examples: `'Aider'`, `'Gemini CLI'` |
+
+### Required methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `isInstalled` | `() => Promise<boolean>` | Checks that the CLI binary is present on the system. Called when the user activates the tool in the UI. **Do not cache.** |
+| `newSessionCommand` | `() => string` | Command written to PTY stdin to start a new session. Example: `'aider'`. |
+| `resumeCommand` | `(sessionId: string) => string` | Command to resume an existing session by its ID. |
+| `scanSessions` | `(projectPath: string) => Promise<CliSession[]>` | Scans disk and returns existing sessions for the project. Sort newest first. |
+| `watchForNewSessions` | `(projectPath, onNew) => () => void` | Subscribes to new session files appearing on disk. Returns an unsubscribe function. |
+
+### Optional fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `installUrl` | `string` | Link to installation instructions. Shown in CLI Tools Manager next to the Activate button. |
+
+### Optional methods — startup and runtime
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `prepareProject` | `(projectPath) => Promise<void>` | One-time setup before the first session. Example: write a config file so the CLI skips permission prompts. |
+| `checkStartupHealth` | `(accumulated, elapsedMs) => 'ok' \| 'dead' \| 'pending'` | Inspects accumulated PTY output. Return `'ok'` when the CLI is ready, `'dead'` on a fatal error. |
+| `getEnvOverrides` | `() => Record<string, string>` | Environment variables merged into the PTY environment at every spawn. |
+| `resolveOwnerPid` | `(candidatePids: number[]) => Promise<number \| null>` | When multiple tabs exist, determines which PTY spawned the new session file. |
+| `watchSessionLabel` | `(projectPath, sessionId, onLabel) => () => void` | Streams title updates for a running session. Returns unsubscribe. |
+| `detectTitleEvent` | `(prevTitle, newTitle) => string \| null` | Returns an event name when an OSC title transition is notable. |
+| `contextInsert` | `(relPath: string) => string \| null` | Returns the text to paste into the terminal when adding a file to AI context. If `null`, the menu item is hidden. |
+| `getSessionPreview` | `(projectPath, sessionId) => Promise<[{role, text}]>` | Last few messages for the hover preview in Session Picker. |
+| `getSessionHistory` | `(projectPath, sessionId) => Promise<HistoryEntry[]>` | Full conversation history for the History Viewer (☰ button in Session Picker). |
+| `subscribeToSessionHistory` | `(projectPath, sessionId, onEntry) => () => void` | Live subscription to new history entries. |
+| `getSessionFilePath` | `(projectPath, sessionId) => string \| null` | Path to the session data file. Used by `ThinkingWatcher`. |
+| `parseThinkingBlocks` | `(line: string) => string[]` | Parses a JSONL line and returns thinking block texts. |
+
+### Optional methods — settings
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `settingsFields` | `() => SettingsField[]` | Field descriptors rendered in the Settings UI. |
+| `getSettings` | `() => Promise<Record<string, unknown>>` | Loads current setting values. |
+| `updateSettings` | `(values) => Promise<void>` | Persists updated setting values. |
+
+### Optional methods — accounts
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `isLoggedIn` | `() => Promise<boolean>` | Checks whether the user is authenticated. |
+| `getLoginIdentifier` | `() => Promise<string \| null>` | Returns the email or username of the current user. |
+| `credentialsMatch` | `(saved) => Promise<boolean>` | Checks whether saved credentials match the currently active ones. |
+| `exportCredentials` | `() => Promise<Record<string, unknown> \| null>` | Exports current credentials as a serialisable object. |
+| `importCredentials` | `(credentials) => Promise<void>` | Restores previously exported credentials. |
+| `clearCredentials` | `() => Promise<void>` | Deletes local credentials (does not revoke tokens server-side). |
+| `getUsageInfo` | `() => Promise<UsageInfo \| null>` | Returns usage data for the status bar. |
+
+---
+
+## 3. Minimal Implementation
+
+The minimum required set for a fully working tool — only mandatory members. Example for a hypothetical `mytool`:
 
 ```typescript
 // src/main/pty/cliTools/myTool.ts
@@ -163,44 +170,42 @@ export const myTool: CliTool = {
 
   async isInstalled(): Promise<boolean> {
     return new Promise((resolve) => {
-      // Используй 'where' (Windows) для поиска бинарника в PATH
+      // Use 'where' (Windows) to find the binary in PATH
       execFile('where', ['mytool'], { timeout: 3000 }, (err) => resolve(!err))
     })
   },
 
   newSessionCommand(): string {
-    // Команда, которая запускает сеанс в PTY
     return 'mytool'
   },
 
   resumeCommand(sessionId: string): string {
-    // Команда для продолжения сохранённой сессии
     return `mytool --resume ${sessionId}`
   },
 
   async scanSessions(_projectPath: string): Promise<CliSession[]> {
-    // Если инструмент не хранит сессии на диске — вернуть []
+    // If the tool does not store sessions on disk — return []
     return []
   },
 
   watchForNewSessions(_projectPath: string, _onNew: (session: CliSession) => void): () => void {
-    // Если сессии не хранятся — вернуть no-op
+    // If sessions are not stored — return a no-op
     return () => {}
   }
 }
 ```
 
-После создания файла — **зарегистрировать** в `registry.ts` (см. [раздел 6](#6-регистрация-инструмента)).
+After creating the file — **register** it in `registry.ts` (see [section 6](#6-registering-the-tool)).
 
 ---
 
-## 4. Управление сессиями на диске
+## 4. Session Storage on Disk
 
-Большинство CLI хранят сессии в виде файлов. Ниже — паттерны реализации для двух сценариев.
+Most CLIs store sessions as files. Below are implementation patterns for two scenarios.
 
-### Сценарий A: инструмент НЕ хранит сессии (stateless)
+### Scenario A: tool does NOT store sessions (stateless)
 
-Если CLI не имеет понятия "сессий" или возобновляемых разговоров:
+If the CLI has no concept of "sessions" or resumable conversations:
 
 ```typescript
 async scanSessions(_projectPath: string): Promise<CliSession[]> {
@@ -212,14 +217,14 @@ watchForNewSessions(_projectPath, _onNew) {
 },
 
 resumeCommand(_sessionId: string): string {
-  // Игнорируем sessionId — всегда стартуем заново
+  // Ignore sessionId — always start fresh
   return 'mytool'
 }
 ```
 
-### Сценарий B: инструмент хранит сессии в файлах
+### Scenario B: tool stores sessions in files
 
-Типичный паттерн: файлы `~/.mytool/sessions/<sessionId>.json` или аналогичные.
+Typical pattern: files at `~/.mytool/sessions/<sessionId>.json` or similar.
 
 ```typescript
 import { existsSync, readdirSync, statSync, watch } from 'fs'
@@ -227,7 +232,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 
 function getSessionsDir(projectPath: string): string {
-  // Директория, специфичная для проекта
+  // Project-specific directory
   const encoded = projectPath.replace(/[:\\\/]/g, '-')
   return join(homedir(), '.mytool', 'sessions', encoded)
 }
@@ -246,29 +251,29 @@ async scanSessions(projectPath: string): Promise<CliSession[]> {
 
     sessions.push({
       sessionId,
-      slug: TOOL_NAME,           // fallback-заголовок до получения OSC-заголовка
-      // firstMessage: '...',    // опционально: первое сообщение пользователя (строка 1 в Session Picker)
+      slug: TOOL_NAME,           // fallback title until an OSC title arrives
+      // firstMessage: '...',    // optional: first user message (line 1 in Session Picker)
       lastModified: stat.mtime
     })
   }
 
-  // Сортировка: новые первые
+  // Sort: newest first
   return sessions.sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime())
 },
 
 watchForNewSessions(projectPath: string, onNew: (session: CliSession) => void): () => void {
   const dir = getSessionsDir(projectPath)
 
-  // Убедиться, что директория существует перед watch
+  // Directory may not exist yet before the first session
   if (!existsSync(dir)) {
-    // Папки ещё нет — возвращаем no-op; AIDE вызовет scanSessions позже
+    // Return no-op; AIDE will call scanSessions again later
     return () => {}
   }
 
   const watcher = watch(dir, (event, filename) => {
     if (event !== 'rename' || !filename?.endsWith('.json')) return
     const filePath = join(dir, filename)
-    if (!existsSync(filePath)) return // удаление файла, а не создание
+    if (!existsSync(filePath)) return // file was deleted, not created
 
     const sessionId = filename.replace('.json', '')
     onNew({
@@ -282,39 +287,39 @@ watchForNewSessions(projectPath: string, onNew: (session: CliSession) => void): 
 }
 ```
 
-### Тип CliSession
+### CliSession type
 
 ```typescript
 interface CliSession {
-  sessionId: string        // уникальный ID (передаётся в resumeCommand)
-  slug: string             // начальный заголовок вкладки; для Claude Code — последнее сообщение пользователя
-  summary?: string         // AI-сгенерированный заголовок (опционально)
-  firstMessage?: string    // первое сообщение пользователя в сессии (опционально)
-  lastModified: Date       // для сортировки
+  sessionId: string        // unique ID (passed to resumeCommand)
+  slug: string             // initial tab title; for Claude Code — last user message
+  summary?: string         // AI-generated title (optional)
+  firstMessage?: string    // first user message in the session (optional)
+  lastModified: Date       // used for sorting
 }
 ```
 
-#### Отображение в Session Picker
+#### Session Picker display
 
-Session Picker отображает каждую сессию в три строки:
+Session Picker renders each session in three lines:
 
-| Строка | Источник | Описание |
-|--------|----------|----------|
-| 1 (основная) | `firstMessage ?? slug` | Первое сообщение пользователя — идентифицирует тему сессии так же, как в CLI при `--resume` |
-| 2 (мелкий текст) | `slug` (если ≠ `firstMessage`) | Последнее сообщение — показывает, на чём остановились |
-| 3 (ещё мельче) | `toolName` | Название CLI-инструмента сессии |
+| Line | Source | Description |
+|------|--------|-------------|
+| 1 (primary) | `firstMessage ?? slug` | First user message — identifies the session topic |
+| 2 (small) | `slug` (if ≠ `firstMessage`) | Last user message — shows where you left off |
+| 3 (smaller) | `toolName` | Name of the CLI tool for this session |
 
-Если `firstMessage` не задан (инструмент не поддерживает его), строка 1 показывает `slug`, строка 2 скрыта.
+If `firstMessage` is not set, line 1 shows `slug` and line 2 is hidden.
 
 ---
 
-## 5. Полная реализация — каждый метод
+## 5. Full Implementation — Every Method
 
 ### `prepareProject`
 
-Вызывается **один раз** перед первым сеансом для данного проекта (и при восстановлении сессий). Используется для:
-- Записи config-файла, чтобы CLI не показывал диалоги подтверждения
-- Создания нужных директорий
+Called **once** before the first session for a project (and again on session resume). Used to:
+- Write a config file so the CLI skips confirmation dialogs
+- Create required directories
 
 ```typescript
 async prepareProject(projectPath: string): Promise<void> {
@@ -334,30 +339,30 @@ async prepareProject(projectPath: string): Promise<void> {
 
 ### `checkStartupHealth`
 
-Анализирует накопленный вывод PTY. AIDE вызывает этот метод периодически пока статус `'pending'`.
+Inspects accumulated PTY output. AIDE calls this method periodically while the status is `'pending'`.
 
 ```typescript
 checkStartupHealth(accumulated: string, elapsedMs: number): 'ok' | 'dead' | 'pending' {
-  // Обнаружение фатальной ошибки по выводу
+  // Detect fatal error from output
   if (accumulated.includes('command not found')) return 'dead'
   if (accumulated.includes('Error: ')) return 'dead'
 
-  // Обнаружение готовности по выводу
-  if (accumulated.includes('> ')) return 'ok'          // prompt появился
-  if (accumulated.includes('My Tool v')) return 'ok'   // banner распарсен
+  // Detect readiness from output
+  if (accumulated.includes('> ')) return 'ok'          // prompt appeared
+  if (accumulated.includes('My Tool v')) return 'ok'   // banner parsed
 
-  // Таймаут — считать готовым через 15 секунд
+  // Timeout — assume ready after 15 seconds
   if (elapsedMs > 15000) return 'ok'
 
   return 'pending'
 }
 ```
 
-**Важно:** Возвращай `'dead'` только при явных признаках ошибки. При сомнениях — `'pending'` вплоть до таймаута.
+**Important:** Return `'dead'` only on clear error signals. When in doubt, return `'pending'` until the timeout.
 
 ### `getEnvOverrides`
 
-Возвращает объект с переменными окружения, которые мержатся с окружением PTY при каждом spawn.
+Returns environment variables merged into the PTY environment at every spawn.
 
 ```typescript
 getEnvOverrides(): Record<string, string> {
@@ -374,11 +379,12 @@ getEnvOverrides(): Record<string, string> {
 
 ### `resolveOwnerPid`
 
-Нужен только если несколько вкладок могут одновременно ждать новую сессию. Определяет, какой PTY-процесс породил новый файл сессии.
+Only needed when multiple tabs can simultaneously wait for a new session. Determines which PTY process spawned the new session file.
 
 ```typescript
 async resolveOwnerPid(candidatePids: number[]): Promise<number | null> {
-  // Запросить дерево процессов через PowerShell
+  if (candidatePids.length === 0) return null
+
   const json = await new Promise<string>((resolve, reject) => {
     execFile(
       'powershell.exe',
@@ -389,58 +395,75 @@ async resolveOwnerPid(candidatePids: number[]): Promise<number | null> {
     )
   })
 
-  const allProcs = JSON.parse(json) as Array<{ ProcessId: number; ParentProcessId: number; Name: string }>
+  const parsed = JSON.parse(json)
+  const allProcs: Array<{ ProcessId: number; ParentProcessId: number; Name: string }> =
+    Array.isArray(parsed) ? parsed : [parsed]
+
   const parentMap = new Map(allProcs.map(p => [p.ProcessId, p.ParentProcessId]))
   const pidSet = new Set(candidatePids)
 
-  for (const proc of allProcs) {
-    if (!proc.Name.toLowerCase().startsWith('mytool')) continue
-    // Подняться по дереву процессов до одного из candidatePids
-    let pid = proc.ParentProcessId
-    while (pid) {
+  const findAncestor = (startPid: number): number | null => {
+    let pid = startPid
+    const visited = new Set<number>()
+    while (pid && !visited.has(pid)) {
       if (pidSet.has(pid)) return pid
+      visited.add(pid)
       pid = parentMap.get(pid) ?? 0
     }
+    return null
   }
-  return null
+
+  const matches: Array<{ pid: number; ancestor: number }> = []
+  for (const proc of allProcs) {
+    if (!(proc.Name ?? '').toLowerCase().startsWith('mytool')) continue
+    const ancestor = findAncestor(proc.ParentProcessId)
+    if (ancestor !== null) matches.push({ pid: proc.ProcessId, ancestor })
+  }
+
+  if (matches.length === 0) return null
+
+  // Pick the highest PID (most recently started) so each new session file
+  // is matched to the tab that just launched it.
+  matches.sort((a, b) => b.pid - a.pid)
+  return matches[0].ancestor
 }
 ```
 
 ### `detectTitleEvent`
 
-Вызывается при каждом изменении OSC-заголовка терминала. Используется для звуковых уведомлений и индикации завершения.
+Called on every OSC title change. Used for sound notifications and completion indicators.
 
 ```typescript
 detectTitleEvent(prevTitle: string | null, newTitle: string): string | null {
-  // prevTitle === null — первое присвоение при старте, игнорировать
+  // prevTitle === null means first assignment at startup — ignore
   if (prevTitle === null) return null
 
-  // Пример: инструмент показывает "✓ Ready" когда закончил
+  // Example: tool shows "✓ Ready" when it finishes
   if (!prevTitle.startsWith('✓') && newTitle.startsWith('✓')) {
-    return 'completeAndWait'   // стандартное имя события — триггерит звук в toolbar
+    return 'completeAndWait'   // standard event name — triggers toolbar sound
   }
   return null
 }
 ```
 
-**Стандартные имена событий:** `'completeAndWait'` — используется для звукового уведомления о завершении задачи. Можно возвращать любые строки — они логируются, но только `'completeAndWait'` обрабатывается toolbar-звуковой системой.
+**Standard event names:** `'completeAndWait'` triggers the toolbar completion sound. Any other string is logged but not handled specially.
 
 ### `contextInsert`
 
-Возвращает текст для вставки в терминал при выборе "Add to context" в файловом дереве.
+Returns the text to paste into the terminal when the user picks "Add to context" from the file tree.
 
 ```typescript
 contextInsert(relPath: string): string | null {
   // Claude Code: "@src/file.ts"
-  // Aider: "/add src/file.ts"
-  // Если инструмент не поддерживает — вернуть null (пункт меню скрыт)
+  // Aider:       "/add src/file.ts"
+  // Return null if the tool does not support this — the menu item is hidden
   return `/add ${relPath}`
 }
 ```
 
 ### `getSessionPreview`
 
-Возвращает последние сообщения для предпросмотра в Session Picker.
+Returns the last few messages for the hover preview in Session Picker.
 
 ```typescript
 async getSessionPreview(
@@ -452,7 +475,6 @@ async getSessionPreview(
 
   try {
     const data = JSON.parse(readFileSync(filePath, 'utf-8'))
-    // Вернуть последние 3 сообщения
     return (data.messages ?? []).slice(-3).map((m: { role: string; content: string }) => ({
       role: m.role as 'user' | 'assistant',
       text: m.content.slice(0, 200)
@@ -465,9 +487,9 @@ async getSessionPreview(
 
 ### `getSessionHistory`
 
-Возвращает **полную историю переписки** сессии для отображения в History Viewer — отдельном окне, открываемом кнопкой ☰ в Session Picker.
+Returns the **full conversation history** for the History Viewer — a separate window opened via ☰ in Session Picker.
 
-Отличие от `getSessionPreview`: preview читает последние ~64 KB для быстрого предпросмотра при наведении; history читает весь файл целиком и возвращает структурированные блоки с поддержкой tool_use, tool_result и thinking.
+Difference from `getSessionPreview`: preview reads the last ~64 KB for a quick hover card; history reads the entire file and returns structured blocks supporting `tool_use`, `tool_result`, and `thinking`.
 
 ```typescript
 async getSessionHistory(
@@ -480,41 +502,168 @@ async getSessionHistory(
 }
 ```
 
-Если инструмент не поддерживает просмотр истории — просто не реализуй этот метод. Кнопка ☰ будет видна, но History Viewer откроется пустым.
+If the tool does not support history viewing — simply omit this method. The ☰ button will still appear, but History Viewer will open empty.
 
-**Только для Claude Code:** реализация уже есть в `claudeCode.ts` через `readSessionHistory()` из `claudeCodeScanner.ts`. При добавлении нового CLI инструмента реализуй аналогичный парсер для своего формата хранения.
+**Architecture:** each tool implements its own JSONL parser in a separate file (`claudeCodeScanner.ts`, `qwenCodeScanner.ts`). History Viewer delegates file reading to the tool via `subscribeToSessionHistory`, making the system tool-agnostic.
 
 ### `getSessionFilePath`
 
-Путь к файлу сессии. Используется `ThinkingWatcher` для отслеживания состояния "мышления" AI.
+Path to the session file. Used by `ThinkingWatcher` to track AI thinking state.
 
 ```typescript
 getSessionFilePath(projectPath: string, sessionId: string): string | null {
   return join(getSessionsDir(projectPath), `${sessionId}.jsonl`)
-  // Вернуть null, если инструмент не использует файловое хранилище
+  // Return null if the tool does not use file-based storage
 }
 ```
 
+### `subscribeToSessionHistory`
+
+Live subscription to new history entries. Called by History Viewer after `did-finish-load` to avoid race conditions with IPC listeners.
+
+```typescript
+subscribeToSessionHistory(
+  projectPath: string,
+  sessionId: string,
+  onEntry: (entry: HistoryEntry) => void
+): () => void {
+  const filePath = join(getSessionsDir(projectPath), `${sessionId}.jsonl`)
+  if (!existsSync(filePath)) return () => {}
+
+  let stopped = false
+  let watcher: FSWatcher | null = null
+
+  // Track file size to read only new data
+  let offset = 0
+  try {
+    const fd = openSync(filePath, 'r')
+    offset = fstatSync(fd).size
+    closeSync(fd)
+  } catch { /* ignore */ }
+
+  const readNewEntries = () => {
+    if (stopped || !existsSync(filePath)) return
+
+    let fd: number
+    try {
+      fd = openSync(filePath, 'r')
+    } catch {
+      return
+    }
+
+    try {
+      const fileSize = fstatSync(fd)
+      if (fileSize.size <= offset) return
+
+      const len = fileSize.size - offset
+      const buf = Buffer.alloc(len)
+      readSync(fd, buf, 0, len, offset)
+      offset = fileSize.size
+
+      const text = buf.toString('utf-8')
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        const entry = parseHistoryLine(trimmed)  // tool-specific parser
+        if (entry && !stopped) onEntry(entry)
+      }
+    } finally {
+      closeSync(fd)
+    }
+  }
+
+  try {
+    watcher = watch(filePath, () => readNewEntries())
+  } catch { /* ignore */ }
+
+  return () => {
+    stopped = true
+    watcher?.close()
+  }
+}
+```
+
+**Notes:**
+- Use offset-based reading to avoid duplicating already-read entries
+- Return a cleanup function that sets `stopped = true` and closes the watcher
+- Call `onEntry` for each new entry — History Viewer appends them to the UI
+- If the tool does not support live updates — simply omit this method
+
+### `parseThinkingBlocks`
+
+Parses a single JSONL line and returns an array of thinking block texts. Each tool knows its own data format.
+
+**For Claude Code** (format: `message.content[]` with `type: 'thinking'`):
+
+```typescript
+parseThinkingBlocks(line: string): string[] {
+  try {
+    const obj = JSON.parse(line)
+    if (obj.type !== 'assistant') return []
+    const content = obj?.message?.content
+    if (!Array.isArray(content)) return []
+    return content
+      .filter((b: unknown) =>
+        typeof b === 'object' && b !== null &&
+        (b as { type?: string }).type === 'thinking' &&
+        typeof (b as { thinking?: unknown }).thinking === 'string' &&
+        (b as { thinking: string }).thinking.length > 0
+      )
+      .map((b: unknown) => (b as { thinking: string }).thinking)
+  } catch {
+    return []
+  }
+}
+```
+
+**For Qwen Code** (format: `message.parts[]` with `thought: true`):
+
+```typescript
+parseThinkingBlocks(line: string): string[] {
+  try {
+    const obj = JSON.parse(line)
+    if (obj.type !== 'user' && obj.type !== 'assistant') return []
+    const parts = obj?.message?.parts
+    if (!Array.isArray(parts)) return []
+    return parts
+      .filter((p: unknown) =>
+        typeof p === 'object' && p !== null &&
+        (p as { thought?: boolean }).thought === true &&
+        typeof (p as { text?: string }).text === 'string' &&
+        (p as { text: string }).text.length > 0
+      )
+      .map((p: unknown) => (p as { text: string }).text)
+  } catch {
+    return []
+  }
+}
+```
+
+**How it is used:** `ThinkingWatcher` calls this method when reading new lines from the session file. If the method is not implemented — thinking blocks will not be displayed, but nothing else breaks.
+
 ---
 
-## 6. Регистрация инструмента
+## 6. Registering the Tool
 
-Единственное место, где нужно зарегистрировать новый инструмент:
+The only place where the new tool needs to be registered:
 
 **`src/main/pty/cliTools/registry.ts`**
 
 ```typescript
 import type { CliTool } from './types'
 import { claudeCodeTool } from './claudeCode'
-import { myTool } from './myTool'           // ← добавить import
+import { qwenCodeTool } from './qwenCode'
+import { myTool } from './myTool'           // ← add import
 import { plainShellTool } from './plainShell'
 
-/** AI CLI tools that users can activate. */
+/** AI CLI tools that users can activate (shown in settings, require install). */
 const cliToolRegistry: CliTool[] = [
   claudeCodeTool,
-  myTool,           // ← добавить в массив
+  qwenCodeTool,
+  myTool,           // ← add to array
 ]
 
+/** Always-available built-in tools (not user-activatable, used as fallback). */
 const builtinTools: CliTool[] = [plainShellTool]
 
 export function getRegisteredTools(): CliTool[] {
@@ -531,27 +680,27 @@ export function getDefaultTool(activatedTools: string[]): CliTool {
 }
 ```
 
-После регистрации инструмент появится в CLI Tools Manager (Tools → Manage CLI Tools) и будет доступен для активации.
+After registering, the tool appears in CLI Tools Manager (Tools → Manage CLI Tools) and becomes available for activation.
 
 ---
 
-## 7. Настройки (Settings)
+## 7. Settings
 
-Если инструмент имеет конфигурируемые параметры, реализуй три метода: `settingsFields`, `getSettings`, `updateSettings`. AIDE отобразит секцию в Settings UI автоматически.
+If the tool has configurable parameters, implement three methods: `settingsFields`, `getSettings`, `updateSettings`. AIDE will render a section in the Settings UI automatically.
 
-### Хранение настроек
+### Storage
 
-Используй встроенную систему хранения конфигурации инструментов:
+Use the built-in tool configuration system:
 
 ```typescript
-// src/main/config/appConfig.ts — уже существует
+// src/main/config/appConfig.ts — already exists
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 
 const TOOL_ID = 'my-tool'
 
 async getSettings(): Promise<Record<string, unknown>> {
   return getToolConfig(TOOL_ID)
-  // Данные хранятся в aide-config.json (Electron userData) под ключом tools['my-tool']
+  // Data is stored in aide-config.json (Electron userData) under tools['my-tool']
 },
 
 async updateSettings(values: Record<string, unknown>): Promise<void> {
@@ -559,7 +708,7 @@ async updateSettings(values: Record<string, unknown>): Promise<void> {
 }
 ```
 
-### Описание полей
+### Field descriptors
 
 ```typescript
 import type { SettingsField } from './types'
@@ -570,7 +719,7 @@ settingsFields(): SettingsField[] {
       key: 'apiKey',
       label: 'API Key',
       description: 'Your My Tool API key from https://example.com/settings',
-      type: 'password',          // скрывает значение в UI
+      type: 'password',          // hides the value in the UI
     },
     {
       key: 'model',
@@ -594,22 +743,44 @@ settingsFields(): SettingsField[] {
       label: 'Verbose output',
       type: 'boolean',
       default: false
+    },
+    {
+      key: 'maxTokens',
+      label: 'Max tokens',
+      type: 'number',
+      default: 4096,
+      // Only show this field when model is 'model-smart'
+      visibleWhen: { key: 'model', value: 'model-smart' }
     }
   ]
 }
 ```
 
-### Типы полей (`SettingsField.type`)
+### Field types (`SettingsField.type`)
 
-| Тип | Рендеринг | Примечание |
-|-----|-----------|------------|
+| Type | Rendered as | Notes |
+|------|-------------|-------|
 | `'string'` | Text input | |
-| `'password'` | Password input | Значение скрыто |
+| `'password'` | Password input | Value is masked |
 | `'boolean'` | Checkbox | |
 | `'number'` | Number input | |
-| `'select'` | Dropdown | Требует `options` |
+| `'select'` | Dropdown | Requires `options` |
 
-### Использование настроек в getEnvOverrides
+### `visibleWhen`
+
+The optional `visibleWhen` property conditionally shows a field based on another field's value:
+
+```typescript
+{
+  key: 'advancedOption',
+  label: 'Advanced option',
+  type: 'string',
+  visibleWhen: { key: 'mode', value: 'advanced' }
+  // This field is only rendered when the 'mode' field equals 'advanced'
+}
+```
+
+### Using settings in `getEnvOverrides`
 
 ```typescript
 getEnvOverrides(): Record<string, string> {
@@ -631,17 +802,16 @@ getEnvOverrides(): Record<string, string> {
 
 ---
 
-## 8. Аккаунты (Accounts)
+## 8. Accounts
 
-Если инструмент использует аутентификацию, реализуй методы группы accounts. Они отображаются в Settings → Accounts.
+If the tool uses authentication, implement the accounts method group. They are displayed in Settings → Accounts.
 
-### Минимальный набор
+### Minimum set
 
-Для базового отображения статуса аутентификации достаточно:
+For basic auth status display:
 
 ```typescript
 async isLoggedIn(): Promise<boolean> {
-  // Проверить наличие токена/credentials на диске
   const configPath = join(homedir(), '.mytool', 'auth.json')
   if (!existsSync(configPath)) return false
   try {
@@ -664,12 +834,12 @@ async getLoginIdentifier(): Promise<string | null> {
 }
 ```
 
-### Полная реализация с переключением аккаунтов
+### Full implementation with account switching
 
-AIDE поддерживает сохранение нескольких аккаунтов. Для этого нужны четыре метода:
+AIDE supports saving multiple accounts. Four methods are required:
 
 ```typescript
-/** Какие ключи из auth.json хранить как credentials */
+/** Keys from auth.json to persist as credentials */
 const CREDENTIAL_KEYS = ['token', 'email', 'userId'] as const
 const AUTH_PATH = join(homedir(), '.mytool', 'auth.json')
 
@@ -677,7 +847,7 @@ async credentialsMatch(saved: Record<string, unknown>): Promise<boolean> {
   if (!existsSync(AUTH_PATH)) return false
   try {
     const auth = JSON.parse(readFileSync(AUTH_PATH, 'utf-8'))
-    // Сравнить по стабильному уникальному полю
+    // Compare by a stable unique field
     return auth.userId === saved.userId
   } catch {
     return false
@@ -720,13 +890,12 @@ async clearCredentials(): Promise<void> {
 }
 ```
 
-### Usage Info (статусная строка)
+### Usage info (status bar)
 
-Если инструмент предоставляет API для получения информации об использовании:
+If the tool exposes an API for usage information:
 
 ```typescript
 async getUsageInfo(): Promise<UsageInfo | null> {
-  // Простой пример без кеширования
   const configPath = join(homedir(), '.mytool', 'auth.json')
   if (!existsSync(configPath)) return null
 
@@ -753,50 +922,50 @@ async getUsageInfo(): Promise<UsageInfo | null> {
 }
 ```
 
-**Рекомендация:** добавь кеширование (аналогично `claudeCode.ts`) и backoff при 429-ошибках — этот метод вызывается часто.
+**Recommendation:** add caching (similar to `claudeCode.ts`) and backoff on 429 errors — this method is called frequently. See `claudeCode.ts` for a complete caching + backoff implementation using a local JSON file and `Electron.session` for proxy-aware requests.
 
 ---
 
-## 9. Чеклист реализации
+## 9. Implementation Checklist
 
-### Обязательный минимум
+### Required minimum
 
-- [ ] Создан файл `src/main/pty/cliTools/yourTool.ts`
-- [ ] Реализованы все обязательные члены: `id`, `name`, `isInstalled`, `newSessionCommand`, `resumeCommand`, `scanSessions`, `watchForNewSessions`
-- [ ] Инструмент добавлен в `cliToolRegistry` в `registry.ts`
-- [ ] `npm run typecheck` проходит без ошибок
+- [ ] Created `src/main/pty/cliTools/yourTool.ts`
+- [ ] Implemented all required members: `id`, `name`, `isInstalled`, `newSessionCommand`, `resumeCommand`, `scanSessions`, `watchForNewSessions`
+- [ ] Tool added to `cliToolRegistry` in `registry.ts`
+- [ ] `npm run typecheck` passes with no errors
 
-### Рекомендуется
+### Recommended
 
-- [ ] Добавлен `installUrl` — ссылка на инструкцию по установке
-- [ ] Реализован `checkStartupHealth` — чтобы AIDE знал, когда CLI готов
-- [ ] Реализован `prepareProject` — если CLI требует подтверждений при первом запуске
-- [ ] Реализован `contextInsert` — для добавления файлов в контекст через правую кнопку
+- [ ] Added `installUrl` — link to installation instructions
+- [ ] Implemented `checkStartupHealth` — so AIDE knows when the CLI is ready
+- [ ] Implemented `prepareProject` — if the CLI requires confirmations on first run
+- [ ] Implemented `contextInsert` — for adding files to context via right-click
 
-### Для инструментов с сессиями на диске
+### For tools with sessions on disk
 
-- [ ] `scanSessions` возвращает реальные данные
-- [ ] `watchForNewSessions` реагирует на появление файлов
-- [ ] `resumeCommand` корректно собирает команду из `sessionId`
-- [ ] `getSessionFilePath` возвращает путь к файлу (для `ThinkingWatcher`)
+- [ ] `scanSessions` returns real data
+- [ ] `watchForNewSessions` reacts to new files appearing
+- [ ] `resumeCommand` correctly builds the command from `sessionId`
+- [ ] `getSessionFilePath` returns the path to the file (for `ThinkingWatcher`)
 
-### Для инструментов с настройками
+### For tools with history viewing
 
-- [ ] Реализованы `settingsFields`, `getSettings`, `updateSettings`
-- [ ] Настройки используются в `getEnvOverrides` или `prepareProject`
+- [ ] Implemented `getSessionHistory` — returns full `HistoryEntry[]`
+- [ ] Implemented `subscribeToSessionHistory` — for live updates in History Viewer
+- [ ] Created a separate scanner file (e.g. `yourToolScanner.ts`) with JSONL parsers
+- [ ] Implemented `parseThinkingBlocks` — for thinking display in ThinkingWatcher
+- [ ] `HistoryEntry` includes all block types: `text`, `thinking`, `tool_use`, `tool_result`
 
-### Для инструментов с аутентификацией
+### For tools with settings
 
-- [ ] Реализованы `isLoggedIn`, `getLoginIdentifier`
-- [ ] Реализованы `exportCredentials`, `importCredentials`, `clearCredentials` (для переключения аккаунтов)
-- [ ] Реализован `credentialsMatch` (для корректного определения активного аккаунта)
+- [ ] Implemented `settingsFields`, `getSettings`, `updateSettings`
+- [ ] Settings are used in `getEnvOverrides` or `prepareProject`
+- [ ] Used `visibleWhen` where fields depend on each other
 
-### Финальная проверка
+### For tools with authentication
 
-- [ ] `npm run typecheck` проходит
-- [ ] `npm run build` проходит
-- [ ] Инструмент появляется в Tools → Manage CLI Tools
-- [ ] Activate → `isInstalled()` отрабатывает корректно
-- [ ] New Session запускает `newSessionCommand()` в терминале
-- [ ] `sessionId` присваивается вкладке после появления файла сессии
-- [ ] Закрытие и переоткрытие проекта восстанавливает сессии
+- [ ] Implemented `isLoggedIn`, `getLoginIdentifier`
+- [ ] Implemented `exportCredentials`, `importCredentials`, `clearCredentials` (for account switching)
+- [ ] Implemented `credentialsMatch` (for correct active account detection)
+- [ ] Implemented `getUsageInfo` with caching and 429 backoff

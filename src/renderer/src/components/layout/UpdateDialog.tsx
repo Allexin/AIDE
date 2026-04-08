@@ -53,7 +53,7 @@ export default function UpdateDialog({ status, onClose }: Props): React.ReactEle
         {/* Header */}
         <div style={{ padding: '16px 20px 12px', borderBottom: '1px solid #333' }}>
           <div style={{ fontSize: 15, fontWeight: 600, color: '#e0e0e0' }}>
-            Доступно обновление
+            Update Available
           </div>
           <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
             v{currentVersion} → v{latestVersion}
@@ -91,7 +91,7 @@ export default function UpdateDialog({ status, onClose }: Props): React.ReactEle
                 </pre>
               ) : (
                 <span style={{ fontSize: 12, color: '#666', fontStyle: 'italic' }}>
-                  Нет описания
+                  No description
                 </span>
               )}
             </div>
@@ -120,7 +120,7 @@ export default function UpdateDialog({ status, onClose }: Props): React.ReactEle
               cursor: 'pointer'
             }}
           >
-            Отмена
+            Cancel
           </button>
           <button
             onClick={handleSkip}
@@ -134,7 +134,7 @@ export default function UpdateDialog({ status, onClose }: Props): React.ReactEle
               cursor: 'pointer'
             }}
           >
-            Пропустить версию
+            Skip Version
           </button>
           <button
             onClick={handleDownload}
@@ -148,7 +148,7 @@ export default function UpdateDialog({ status, onClose }: Props): React.ReactEle
               cursor: 'pointer'
             }}
           >
-            Перейти к скачиванию
+            Download Update
           </button>
         </div>
       </div>

@@ -149,6 +149,12 @@ export interface CliTool {
    *  Returns null if the tool does not support this feature — the context menu item is hidden.
    */
   contextInsert?(relPath: string): string | null
+
+  /** Parse a single JSONL session line and return thinking block texts.
+   *  Returns [] if the line has no thinking content or the tool doesn't support it.
+   *  Each tool knows its own format — Claude uses message.content[], Qwen uses message.parts[] with thought flag.
+   */
+  parseThinkingBlocks?(line: string): string[]
 }
 
 export type HistoryBlock =

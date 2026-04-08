@@ -1,10 +1,12 @@
 import { watch, openSync, fstatSync, readSync, closeSync, existsSync } from 'fs'
 import type { FSWatcher } from 'fs'
 import type { BrowserWindow } from 'electron'
+import type { CliTool } from '../pty/cliTools/types'
 
 interface TabState {
   sessionId: string
   filePath: string
+  tool: CliTool
   blocks: string[]    // thinking texts in order
   offset: number      // byte offset read so far
   watcher: FSWatcher | null
@@ -21,7 +23,7 @@ export class ThinkingWatcher {
   /** Start watching a session file. filePath comes from tool.getSessionFilePath().
    *  If filePath is null the tool does not support file-based thinking blocks — no-op.
    */
-  startWatching(tabId: string, sessionId: string, filePath: string | null): void {
+  startWatching(tabId: string, sessionId: string, filePath: string | null, tool: CliTool): void {
     // Stop any existing watcher for this tab first
     this.stopWatching(tabId)
 
@@ -30,6 +32,7 @@ export class ThinkingWatcher {
     const state: TabState = {
       sessionId,
       filePath,
+      tool,
       blocks: [],
       offset: 0,
       watcher: null
@@ -123,7 +126,7 @@ export class ThinkingWatcher {
       for (const line of lines) {
         const trimmed = line.trim()
         if (!trimmed) continue
-        const blocks = parseThinkingBlocks(trimmed)
+        const blocks = state.tool.parseThinkingBlocks?.(trimmed) ?? []
         if (blocks.length > 0) {
           state.blocks.push(...blocks)
           foundNew = true
@@ -142,25 +145,5 @@ export class ThinkingWatcher {
     if (!this.win.isDestroyed()) {
       this.win.webContents.send(channel, data)
     }
-  }
-}
-
-/** Extract all thinking block texts from a single JSONL line. */
-function parseThinkingBlocks(line: string): string[] {
-  try {
-    const obj = JSON.parse(line)
-    if (obj.type !== 'assistant') return []
-    const content = obj?.message?.content
-    if (!Array.isArray(content)) return []
-    return content
-      .filter((b: unknown) =>
-        typeof b === 'object' && b !== null &&
-        (b as { type?: string }).type === 'thinking' &&
-        typeof (b as { thinking?: unknown }).thinking === 'string' &&
-        (b as { thinking: string }).thinking.length > 0
-      )
-      .map((b: unknown) => (b as { thinking: string }).thinking)
-  } catch {
-    return []
   }
 }
