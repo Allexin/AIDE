@@ -1,13 +1,116 @@
-import { existsSync, readdirSync, readFileSync, statSync, watch as fsWatch } from 'fs'
+import { existsSync, readdirSync, readFileSync, statSync, watch as fsWatch, writeFileSync, mkdirSync } from 'fs'
 import { execFile } from 'child_process'
 import { homedir, platform } from 'os'
 import { join } from 'path'
-import type { CliTool, CliSession } from './types'
+import type { CliTool, CliSession, UsageInfo } from './types'
 import { cliLog } from './cliLogger'
 
 const LOG_CH = 'Qwen Code'
 const TOOL_NAME = 'Qwen Code'
 const TOOL_ID = 'qwen-code'
+
+const DAILY_LIMIT = 1000
+const USAGE_CACHE_PATH = join(homedir(), '.qwen', 'aide-usage-cache.json')
+
+interface UsageFileEntry {
+  mtime: number
+  count: number
+}
+
+interface UsageCache {
+  date: string // UTC date "YYYY-MM-DD"
+  total: number
+  files: Record<string, UsageFileEntry>
+  updatedAt: number
+}
+
+/** Return today's date string in UTC, e.g. "2026-04-08". */
+function todayUtc(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+/** Count assistant records in a JSONL file that belong to the given UTC date. */
+function countAssistantToday(filePath: string, date: string): number {
+  let count = 0
+  try {
+    const lines = readFileSync(filePath, 'utf-8').split('\n')
+    for (const line of lines) {
+      if (!line) continue
+      try {
+        const rec = JSON.parse(line) as { type?: string; timestamp?: string }
+        if (rec.type === 'assistant' && rec.timestamp?.startsWith(date)) count++
+      } catch { /* skip malformed */ }
+    }
+  } catch { /* file unreadable */ }
+  return count
+}
+
+/** Load cache from disk, or return a fresh empty cache for today. */
+function loadUsageCache(): UsageCache {
+  const today = todayUtc()
+  try {
+    const raw = JSON.parse(readFileSync(USAGE_CACHE_PATH, 'utf-8')) as UsageCache
+    if (raw.date === today) return raw
+  } catch { /* missing or malformed → fresh cache */ }
+  return { date: today, total: 0, files: {}, updatedAt: 0 }
+}
+
+/** Persist cache to disk. */
+function saveUsageCache(cache: UsageCache): void {
+  try {
+    mkdirSync(join(homedir(), '.qwen'), { recursive: true })
+    writeFileSync(USAGE_CACHE_PATH, JSON.stringify(cache), 'utf-8')
+  } catch (e) {
+    cliLog(LOG_CH, `[usage] failed to save cache: ${e}`)
+  }
+}
+
+/** Scan all Qwen project chat dirs and return a fresh count for today. */
+function computeUsageToday(): number {
+  const cache = loadUsageCache()
+  const today = cache.date
+  const projectsDir = join(homedir(), '.qwen', 'projects')
+
+  if (!existsSync(projectsDir)) {
+    return 0
+  }
+
+  let changed = false
+
+  for (const projectSlug of readdirSync(projectsDir)) {
+    const chatsDir = join(projectsDir, projectSlug, 'chats')
+    if (!existsSync(chatsDir)) continue
+
+    let files: string[]
+    try {
+      files = readdirSync(chatsDir).filter((f) => f.endsWith('.jsonl'))
+    } catch { continue }
+
+    for (const file of files) {
+      const filePath = join(chatsDir, file)
+      let mtime: number
+      try {
+        mtime = statSync(filePath).mtimeMs
+      } catch { continue }
+
+      const cached = cache.files[filePath]
+      if (cached && cached.mtime === mtime) continue // unchanged — reuse cached count
+
+      const count = countAssistantToday(filePath, today)
+      cache.files[filePath] = { mtime, count }
+      changed = true
+    }
+  }
+
+  // Recalculate total from all file entries
+  if (changed) {
+    cache.total = Object.values(cache.files).reduce((s, e) => s + e.count, 0)
+    cache.updatedAt = Date.now()
+    saveUsageCache(cache)
+  }
+
+  return cache.total
+}
 
 /**
  * Compute the project directory slug the same way Qwen Code does:
@@ -184,5 +287,25 @@ export const qwenCodeTool: CliTool = {
 
   getSessionFilePath(projectPath: string, sessionId: string): string | null {
     return join(getChatsDir(projectPath), `${sessionId}.jsonl`)
+  },
+
+  async getUsageInfo(): Promise<UsageInfo | null> {
+    try {
+      const used = computeUsageToday()
+      const pct = Math.round((used / DAILY_LIMIT) * 100)
+      const level: UsageInfo['level'] = pct >= 90 ? 'critical' : pct >= 70 ? 'warn' : 'normal'
+      const resetTime = new Date()
+      resetTime.setUTCHours(24, 0, 0, 0)
+      const resetStr = resetTime.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+      return {
+        summary: `~${used}/${DAILY_LIMIT}`,
+        tooltip: `Qwen Code: ~${used} of ${DAILY_LIMIT} daily requests used (local estimate)\nResets at ${resetStr} UTC`,
+        level,
+        fetchedAt: Date.now()
+      }
+    } catch (e) {
+      cliLog(LOG_CH, `[usage] error computing usage: ${e}`)
+      return null
+    }
   }
 }
