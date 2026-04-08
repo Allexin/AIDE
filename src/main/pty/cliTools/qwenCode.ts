@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync, watch as fsWatch, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, statSync, watch as fsWatch, writeFileSync, mkdirSync, copyFileSync, unlinkSync } from 'fs'
 import { execFile } from 'child_process'
 import { homedir, platform } from 'os'
 import { join } from 'path'
@@ -12,6 +12,7 @@ const TOOL_ID = 'qwen-code'
 
 const DAILY_LIMIT = 1000
 const USAGE_CACHE_PATH = join(homedir(), '.qwen', 'aide-usage-cache.json')
+const OAUTH_CREDS_PATH = join(homedir(), '.qwen', 'oauth_creds.json')
 
 interface UsageFileEntry {
   mtime: number
@@ -342,6 +343,59 @@ export const qwenCodeTool: CliTool = {
     } catch (e) {
       cliLog(LOG_CH, `[usage] error computing usage: ${e}`)
       return null
+    }
+  },
+
+  async isLoggedIn(): Promise<boolean> {
+    return existsSync(OAUTH_CREDS_PATH)
+  },
+
+  async getLoginIdentifier(): Promise<string | null> {
+    if (!existsSync(OAUTH_CREDS_PATH)) return null
+    return 'Qwen Account'
+  },
+
+  async credentialsMatch(saved: Record<string, unknown>): Promise<boolean> {
+    if (!existsSync(OAUTH_CREDS_PATH)) return false
+    try {
+      const current = JSON.parse(readFileSync(OAUTH_CREDS_PATH, 'utf-8'))
+      // Match by refresh_token or access_token — these are the unique identifiers
+      const savedRefresh = saved.refresh_token as string | undefined
+      const savedAccess = saved.access_token as string | undefined
+      if (savedRefresh && current.refresh_token === savedRefresh) return true
+      if (savedAccess && current.access_token === savedAccess) return true
+      return false
+    } catch {
+      return false
+    }
+  },
+
+  async exportCredentials(): Promise<Record<string, unknown> | null> {
+    if (!existsSync(OAUTH_CREDS_PATH)) return null
+    try {
+      return JSON.parse(readFileSync(OAUTH_CREDS_PATH, 'utf-8'))
+    } catch {
+      return null
+    }
+  },
+
+  async importCredentials(credentials: Record<string, unknown>): Promise<void> {
+    try {
+      mkdirSync(join(homedir(), '.qwen'), { recursive: true })
+      writeFileSync(OAUTH_CREDS_PATH, JSON.stringify(credentials, null, 2), 'utf-8')
+    } catch (e) {
+      cliLog(LOG_CH, `[credentials] failed to import: ${e}`)
+      throw e
+    }
+  },
+
+  async clearCredentials(): Promise<void> {
+    if (existsSync(OAUTH_CREDS_PATH)) {
+      try {
+        unlinkSync(OAUTH_CREDS_PATH)
+      } catch (e) {
+        cliLog(LOG_CH, `[credentials] failed to clear: ${e}`)
+      }
     }
   }
 }

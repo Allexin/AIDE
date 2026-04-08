@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { useFileTreeStore } from '../../store/useFileTreeStore'
 import { useEditorStore } from '../../store/useEditorStore'
+import { useSessionStore } from '../../store/useSessionStore'
 import UpdateDialog from './UpdateDialog'
 
 // Maps Monaco language IDs to display names for the language sensor.
@@ -84,18 +85,23 @@ export default function StatusBar(): React.ReactElement {
   const lastUsageFetch = useRef(0)
   const [usageAge, setUsageAge] = useState('')
 
-  const fetchUsage = useCallback(() => {
-    const toolId = activeToolIdRef.current
-    if (!toolId) return
-    lastUsageFetch.current = Date.now()
-    window.editorApi.getUsageInfo(toolId).then((info) => {
-      setUsageInfo(info)
-    })
-  }, [])
+  // Reactive toolId from the active tab
+  const activeToolId = useSessionStore((s) => {
+    const tab = s.tabs.find((t) => t.tabId === s.activeTabId)
+    return tab?.toolId ?? null
+  })
 
-  const refreshAccount = useCallback(() => {
-    const toolId = activeToolIdRef.current
-    if (!toolId) return
+  const fetchAccountAndUsage = useCallback((toolId: string | null) => {
+    activeToolIdRef.current = toolId
+    if (!toolId) {
+      // No integration — clear display
+      setAccountLabel(null)
+      setAccountSaved(true)
+      setUsageInfo(null)
+      return
+    }
+
+    // Fetch account info
     window.editorApi.getAccountCurrentInfo(toolId).then((info) => {
       if (info) {
         setAccountLabel(info.label)
@@ -104,31 +110,48 @@ export default function StatusBar(): React.ReactElement {
         setAccountLabel(null)
       }
     })
+
+    // Fetch usage
+    lastUsageFetch.current = Date.now()
+    window.editorApi.getUsageInfo(toolId).then((info) => {
+      setUsageInfo(info)
+    })
   }, [])
 
-  // Load default tool ID once on mount, then kick off initial fetches
+  // Load default tool ID on mount
   useEffect(() => {
     window.editorApi.getDefaultToolId().then(async (id) => {
       if (!id) {
         const activated = await window.editorApi.getActivatedTools()
         id = activated[0] ?? null
       }
-      activeToolIdRef.current = id
-      if (id) {
-        refreshAccount()
-        fetchUsage()
-      }
+      // Don't set activeToolIdRef here — it will be set reactively from the store
+      fetchAccountAndUsage(id)
     })
-  }, [refreshAccount, fetchUsage])
+  }, [fetchAccountAndUsage])
 
+  // React to active tab changes — update account/usage when tab switches
+  useEffect(() => {
+    fetchAccountAndUsage(activeToolId)
+  }, [activeToolId, fetchAccountAndUsage])
+
+  // Listen to account changes and tab events (refresh data)
   useEffect(() => {
     const unsubs = [
-      window.editorApi.onAccountsChanged(() => { refreshAccount(); fetchUsage() }),
-      window.editorApi.onTerminalSwitchTab(refreshAccount),
-      window.editorApi.onTerminalNewTab(refreshAccount)
+      window.editorApi.onAccountsChanged(() => {
+        if (activeToolIdRef.current) fetchAccountAndUsage(activeToolIdRef.current)
+      }),
+      window.editorApi.onTerminalSwitchTab(() => {
+        // Tab switch is already handled reactively via activeToolId
+        // This ensures refresh on push events from main process
+        if (activeToolIdRef.current) fetchAccountAndUsage(activeToolIdRef.current)
+      }),
+      window.editorApi.onTerminalNewTab(() => {
+        if (activeToolIdRef.current) fetchAccountAndUsage(activeToolIdRef.current)
+      })
     ]
     return () => unsubs.forEach((u) => u())
-  }, [refreshAccount, fetchUsage])
+  }, [fetchAccountAndUsage])
 
   // Update age label every second based on fetchedAt from the data itself
   useEffect(() => {
@@ -152,13 +175,25 @@ export default function StatusBar(): React.ReactElement {
     const startInterval = (): void => {
       clearInterval(timerId)
       const ms = document.hasFocus() ? 300_000 : 1_200_000
-      timerId = setInterval(fetchUsage, ms)
+      timerId = setInterval(() => {
+        if (activeToolIdRef.current) {
+          lastUsageFetch.current = Date.now()
+          window.editorApi.getUsageInfo(activeToolIdRef.current).then((info) => {
+            setUsageInfo(info)
+          })
+        }
+      }, ms)
     }
 
     startInterval()
 
     const onFocus = (): void => {
-      if (Date.now() - lastUsageFetch.current > 300_000) fetchUsage()
+      if (Date.now() - lastUsageFetch.current > 300_000 && activeToolIdRef.current) {
+        lastUsageFetch.current = Date.now()
+        window.editorApi.getUsageInfo(activeToolIdRef.current).then((info) => {
+          setUsageInfo(info)
+        })
+      }
       startInterval()
     }
     const onBlur = (): void => startInterval()
@@ -171,7 +206,7 @@ export default function StatusBar(): React.ReactElement {
       window.removeEventListener('focus', onFocus)
       window.removeEventListener('blur', onBlur)
     }
-  }, [fetchUsage])
+  }, [])
 
   // ── File language sensor (right) ────────────────────────────────────────────
   const langDisplay = currentLanguage ? (LANG_DISPLAY[currentLanguage] ?? currentLanguage) : null
