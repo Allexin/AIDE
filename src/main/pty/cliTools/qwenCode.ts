@@ -11,6 +11,18 @@ const LOG_CH = 'Qwen Code'
 const TOOL_NAME = 'Qwen Code'
 const TOOL_ID = 'qwen-code'
 
+const INACTIVITY_THRESHOLD = 5  // seconds of no data before signaling "waiting for input"
+
+/** Per-tab inactivity tracking state. */
+interface InactivityState {
+  counter: number
+  interval: ReturnType<typeof setInterval>
+}
+const inactivityByTab = new Map<string, InactivityState>()
+
+/** Per-tab signal callbacks, set by PtyManager at spawn time. */
+const signalByTab = new Map<string, (event: string) => void>()
+
 const DEFAULT_DAILY_LIMIT = 1000
 const USAGE_CACHE_PATH = join(homedir(), '.qwen', 'aide-usage-cache.json')
 const OAUTH_CREDS_PATH = join(homedir(), '.qwen', 'oauth_creds.json')
@@ -125,6 +137,38 @@ function getChatsDir(projectPath: string): string {
   return join(homedir(), '.qwen', 'projects', slug, 'chats')
 }
 
+/** Start or restart the inactivity timer for a tab. Called on first and subsequent PTY data. */
+function ensureInactivityTimer(tabId: string): void {
+  const existing = inactivityByTab.get(tabId)
+  if (existing) {
+    // Tab already has a running timer — just reset the counter
+    existing.counter = INACTIVITY_THRESHOLD
+    return
+  }
+
+  const state: InactivityState = {
+    counter: INACTIVITY_THRESHOLD,
+    interval: setInterval(() => {
+      state.counter--
+      if (state.counter === 0) {
+        signalByTab.get(tabId)?.('completeAndWait')
+      }
+      // Counter continues into negative; no repeated signals
+    }, 1000)
+  }
+  inactivityByTab.set(tabId, state)
+}
+
+/** Stop and clean up the inactivity timer + signal callback for a closed tab. */
+export function cleanupInactivity(tabId: string): void {
+  const state = inactivityByTab.get(tabId)
+  if (state) {
+    clearInterval(state.interval)
+    inactivityByTab.delete(tabId)
+  }
+  signalByTab.delete(tabId)
+}
+
 interface QwenRecord {
   sessionId: string
   timestamp: string
@@ -198,14 +242,18 @@ export const qwenCodeTool: CliTool = {
     return 'pending'
   },
 
-  detectTitleEvent(prevTitle: string | null, newTitle: string): string | null {
-    if (prevTitle === null) return null
-    // Qwen Code sets title with ✳ (U+2733) when waiting for input, same as Claude Code
-    const isWaiting = (t: string): boolean => t.codePointAt(0) === 0x2733
-    if (!isWaiting(prevTitle) && isWaiting(newTitle)) {
-      return 'completeAndWait'
-    }
-    return null
+  onPtyActivity(tabId: string): void {
+    ensureInactivityTimer(tabId)
+  },
+
+  /** Register the signal callback for a tab. Called by PtyManager at spawn time. */
+  registerSignalHandler(tabId: string, handler: (event: string) => void): void {
+    signalByTab.set(tabId, handler)
+  },
+
+  /** Remove the signal callback for a closed tab. */
+  deregisterTab(tabId: string): void {
+    cleanupInactivity(tabId)
   },
 
   contextInsert(relPath: string): string {
@@ -389,21 +437,6 @@ export const qwenCodeTool: CliTool = {
   async getLoginIdentifier(): Promise<string | null> {
     if (!existsSync(OAUTH_CREDS_PATH)) return null
     return 'Qwen Account'
-  },
-
-  async credentialsMatch(saved: Record<string, unknown>): Promise<boolean> {
-    if (!existsSync(OAUTH_CREDS_PATH)) return false
-    try {
-      const current = JSON.parse(readFileSync(OAUTH_CREDS_PATH, 'utf-8'))
-      // Match by refresh_token or access_token — these are the unique identifiers
-      const savedRefresh = saved.refresh_token as string | undefined
-      const savedAccess = saved.access_token as string | undefined
-      if (savedRefresh && current.refresh_token === savedRefresh) return true
-      if (savedAccess && current.access_token === savedAccess) return true
-      return false
-    } catch {
-      return false
-    }
   },
 
   async exportCredentials(): Promise<Record<string, unknown> | null> {

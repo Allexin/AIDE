@@ -15,6 +15,9 @@ const TOOL_NAME = 'Claude Code'
 /** Detected CLI version, parsed from the startup banner ("Claude Code vX.Y.Z"). */
 let detectedCliVersion: string | null = null
 
+/** Per-tab signal callbacks, set by PtyManager at spawn time. */
+const signalByTab = new Map<string, (event: string) => void>()
+
 const CLAUDE_JSON = join(homedir(), '.claude.json')
 
 /** Normalise a project path to the key format Claude uses in ~/.claude.json.
@@ -190,20 +193,6 @@ export const claudeCodeTool: CliTool = {
       return root.oauthAccount?.emailAddress ?? null
     } catch {
       return null
-    }
-  },
-
-  async credentialsMatch(saved: Record<string, unknown>): Promise<boolean> {
-    if (!existsSync(CLAUDE_JSON)) return false
-    try {
-      const root = JSON.parse(readFileSync(CLAUDE_JSON, 'utf-8'))
-      const currentOauth = root.oauthAccount
-      const savedOauth = saved.oauthAccount as Record<string, unknown> | undefined
-      if (!currentOauth || !savedOauth) return false
-      return currentOauth.accountUuid === savedOauth.accountUuid
-        && currentOauth.emailAddress === savedOauth.emailAddress
-    } catch {
-      return false
     }
   },
 
@@ -501,16 +490,24 @@ export const claudeCodeTool: CliTool = {
     }
   },
 
-  detectTitleEvent(prevTitle: string | null, newTitle: string): string | null {
+  detectTitleEvent(tabId: string, prevTitle: string | null, newTitle: string): void {
     // Detect transition into CompletedAndWaiting state:
     // Claude Code sets the title to a string starting with ✳ (U+2733) when it has
     // finished processing and is waiting for user input.
-    // prevTitle === null means this is the very first title (startup) — skip it.
     const isWaiting = (t: string): boolean => t.codePointAt(0) === 0x2733
     if (prevTitle !== null && !isWaiting(prevTitle) && isWaiting(newTitle)) {
-      return 'completeAndWait'
+      signalByTab.get(tabId)?.('completeAndWait')
     }
-    return null
+  },
+
+  /** Register the signal callback for a tab. Called by PtyManager at spawn time. */
+  registerSignalHandler(tabId: string, handler: (event: string) => void): void {
+    signalByTab.set(tabId, handler)
+  },
+
+  /** Remove the signal callback for a closed tab. */
+  deregisterTab(tabId: string): void {
+    signalByTab.delete(tabId)
   },
 
   getSessionPreview(projectPath: string, sessionId: string): Promise<Array<{ role: 'user' | 'assistant'; text: string }>> {

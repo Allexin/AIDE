@@ -295,6 +295,12 @@ interface SessionPickerAPI {
   openHistory: (sessionId: string, toolId: string, sessionTitle: string) => void
 }
 
+interface AccountSwitchConflict {
+  savedName: string
+  savedIdentifier: string
+  currentIdentifier: string
+}
+
 interface CliAccountInfo {
   id: string
   name: string
@@ -310,7 +316,7 @@ interface AccountManagerAPI {
   saveCurrent: (toolId: string, name: string) => Promise<CliAccountInfo | null>
   deleteAccount: (toolId: string, accountId: string) => Promise<void>
   updateAccount: (toolId: string, accountId: string) => Promise<CliAccountInfo | null>
-  loadAccount: (toolId: string, accountId: string) => Promise<boolean>
+  loadAccount: (toolId: string, accountId: string, autoSaveMode?: 'check' | 'force' | 'skip') => Promise<true | false | { conflict: AccountSwitchConflict }>
 }
 
 interface SettingsAPI {

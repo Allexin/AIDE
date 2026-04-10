@@ -25,7 +25,9 @@ import {
   listAccountInfos,
   saveAccount,
   deleteAccount as deleteStoredAccount,
-  updateAccount as updateStoredAccount
+  updateAccount as updateStoredAccount,
+  getActiveAccount,
+  setActiveAccount
 } from '../config/accountStorage'
 import { initCliLogger } from '../pty/cliTools/cliLogger'
 import { createSessionPickerWindow } from '../windows/sessionPicker'
@@ -864,14 +866,18 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     const identifier = await tool.getLoginIdentifier()
     if (!identifier) return null
 
-    // Check if current credentials match any saved account
-    if (tool.credentialsMatch) {
-      const saved = listAccounts(toolId)
-      for (const acc of saved) {
-        if (await tool.credentialsMatch(acc.credentials)) {
-          return { label: `${acc.name} (${identifier})`, saved: true }
-        }
-      }
+    // First: check tracked active account
+    const activeId = getActiveAccount(toolId)
+    if (activeId) {
+      const active = listAccounts(toolId).find((a) => a.id === activeId)
+      if (active) return { label: `${active.name} (${identifier})`, saved: true }
+    }
+
+    // Fallback: find by identifier string match (e.g. email for Claude Code)
+    const byIdentifier = listAccounts(toolId).find((a) => a.identifier === identifier)
+    if (byIdentifier) {
+      setActiveAccount(toolId, byIdentifier.id)
+      return { label: `${byIdentifier.name} (${identifier})`, saved: true }
     }
 
     return { label: `account not saved (${identifier})`, saved: false }
@@ -916,22 +922,46 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     return tool.getLoginIdentifier()
   })
 
-  /** Re-export current credentials into the matching saved account so tokens stay fresh. */
-  async function autoSaveCurrentCredentials(toolId: string): Promise<void> {
+  interface AccountSwitchConflict {
+    savedName: string
+    savedIdentifier: string
+    currentIdentifier: string
+  }
+
+  /**
+   * Re-export current credentials into the tracked active account so tokens stay fresh.
+   * Returns a ConflictInfo if the currently logged-in user doesn't match the saved account
+   * and forceOverwrite is false. Returns null if auto-save succeeded or was not needed.
+   */
+  async function autoSaveCurrentCredentials(
+    toolId: string,
+    forceOverwrite: boolean
+  ): Promise<AccountSwitchConflict | null> {
+    const activeId = getActiveAccount(toolId)
+    if (!activeId) return null
+
     const tool = getToolById(toolId)
-    if (!tool?.exportCredentials || !tool?.getLoginIdentifier || !tool?.credentialsMatch) return
-    const [creds, identifier] = await Promise.all([
+    if (!tool?.exportCredentials || !tool?.getLoginIdentifier) return null
+
+    const [creds, currentIdentifier] = await Promise.all([
       tool.exportCredentials(),
       tool.getLoginIdentifier()
     ])
-    if (!creds || !identifier) return
-    const saved = listAccounts(toolId)
-    for (const acc of saved) {
-      if (await tool.credentialsMatch(acc.credentials)) {
-        updateStoredAccount(toolId, acc.id, identifier, creds)
-        break
+    if (!creds || !currentIdentifier) return null
+
+    const saved = listAccounts(toolId).find((a) => a.id === activeId)
+    if (!saved) return null
+
+    if (!forceOverwrite && saved.identifier !== currentIdentifier) {
+      return {
+        savedName: saved.name,
+        savedIdentifier: saved.identifier,
+        currentIdentifier
       }
     }
+
+    updateStoredAccount(toolId, activeId, currentIdentifier, creds)
+    return null
   }
 
   /** Notify all editor windows that accounts changed so sensors refresh. */
@@ -956,6 +986,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     ])
     if (!creds || !identifier) return null
     const result = saveAccount(toolId, name, identifier, creds)
+    setActiveAccount(toolId, result.id)
     rebuildMenu()
     broadcastAccountsChanged()
     return result
@@ -978,19 +1009,31 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     ])
     if (!creds || !identifier) return null
     const result = updateStoredAccount(toolId, accountId, identifier, creds)
+    if (result) setActiveAccount(toolId, accountId)
     broadcastAccountsChanged()
     return result
   })
 
   // ── Accounts: load saved credentials into CLI tool ─────────────────────────
-  ipcMain.handle('accounts:load', async (_event, toolId: string, accountId: string) => {
+  // autoSaveMode: 'check' = detect conflict and return it | 'force' = overwrite regardless | 'skip' = skip auto-save
+  ipcMain.handle('accounts:load', async (
+    _event,
+    toolId: string,
+    accountId: string,
+    autoSaveMode: 'check' | 'force' | 'skip' = 'check'
+  ) => {
     const tool = getToolById(toolId)
     if (!tool?.importCredentials) return false
     const stored = listAccounts(toolId).find((a) => a.id === accountId)
     if (!stored) return false
-    // Auto-save current account's latest tokens before switching away
-    await autoSaveCurrentCredentials(toolId)
+
+    if (autoSaveMode !== 'skip') {
+      const conflict = await autoSaveCurrentCredentials(toolId, autoSaveMode === 'force')
+      if (conflict) return { conflict }
+    }
+
     await tool.importCredentials(stored.credentials)
+    setActiveAccount(toolId, accountId)
     broadcastAccountsChanged()
     return true
   })

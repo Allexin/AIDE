@@ -88,11 +88,6 @@ export interface CliTool {
    */
   getLoginIdentifier?(): Promise<string | null>
 
-  /** Check whether the given saved credentials match the currently active ones.
-   *  Used to find the matching saved account for status display.
-   */
-  credentialsMatch?(saved: Record<string, unknown>): Promise<boolean>
-
   /** Export the current credentials as a serialisable object.
    *  Returns null if not logged in.
    */
@@ -111,11 +106,12 @@ export interface CliTool {
    */
   getUsageInfo?(): Promise<UsageInfo | null>
 
-  /** Inspect a tab title transition and return a named event string if something notable
-   *  happened, or null if the transition is unremarkable.
+  /** Inspect a tab title transition and react if something notable happened
+   *  (e.g. detect asterisk signaling "waiting for input").
+   *  The tool should emit events back to the manager via the registered signal handler.
    *  prevTitle is null on the very first title assignment.
    */
-  detectTitleEvent?(prevTitle: string | null, newTitle: string): string | null
+  detectTitleEvent?(tabId: string, prevTitle: string | null, newTitle: string): void
 
   /** Return the last few conversation messages for a session, for preview in the session picker.
    *  Returns an empty array if the tool does not support session preview.
@@ -155,6 +151,20 @@ export interface CliTool {
    *  Each tool knows its own format — Claude uses message.content[], Qwen uses message.parts[] with thought flag.
    */
   parseThinkingBlocks?(line: string): string[]
+
+  /** Called by the PTY manager whenever data arrives from the PTY.
+   *  The tool can use this to track activity (e.g. reset an inactivity counter).
+   */
+  onPtyActivity?(tabId: string): void
+
+  /** Register a signal handler for a specific tab.
+   *  Called by PtyManager when a PTY tab is spawned. The tool uses this to
+   *  emit tab-level events (e.g. 'completeAndWait') back to the manager.
+   */
+  registerSignalHandler?(tabId: string, handler: (event: string) => void): void
+
+  /** Clean up tab-related state when a PTY tab is closed. */
+  deregisterTab?(tabId: string): void
 }
 
 export type HistoryBlock =

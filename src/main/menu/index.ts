@@ -10,7 +10,7 @@ import { openCliToolsWindow } from '../windows/cliTools'
 import { getRunningCount, killAllProcesses } from '../toolbar/processManager'
 import { registerCommand } from './commandRegistry'
 import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
-import { listAccounts, updateAccount as updateStoredAccount } from '../config/accountStorage'
+import { listAccounts, updateAccount as updateStoredAccount, getActiveAccount, setActiveAccount } from '../config/accountStorage'
 import { restartToolSessions } from '../pty/registry'
 
 // Injected by setupMenu — avoids circular dep with windows/editor.ts
@@ -185,21 +185,41 @@ async function handleOpenRecent(projectPath: string): Promise<void> {
   }
 }
 
-async function autoSaveCurrentCredentials(toolId: string): Promise<void> {
+/**
+ * Auto-save current credentials into the tracked active account before switching.
+ * Returns false if the user cancelled due to an identifier mismatch.
+ */
+async function autoSaveCurrentCredentials(toolId: string): Promise<boolean> {
+  const activeId = getActiveAccount(toolId)
+  if (!activeId) return true
+
   const t = getToolById(toolId)
-  if (!t?.exportCredentials || !t?.getLoginIdentifier || !t?.credentialsMatch) return
-  const [creds, identifier] = await Promise.all([
+  if (!t?.exportCredentials || !t?.getLoginIdentifier) return true
+
+  const [creds, currentIdentifier] = await Promise.all([
     t.exportCredentials(),
     t.getLoginIdentifier()
   ])
-  if (!creds || !identifier) return
-  const saved = listAccounts(toolId)
-  for (const acc of saved) {
-    if (await t.credentialsMatch(acc.credentials)) {
-      updateStoredAccount(toolId, acc.id, identifier, creds)
-      break
-    }
+  if (!creds || !currentIdentifier) return true
+
+  const saved = listAccounts(toolId).find((a) => a.id === activeId)
+  if (!saved) return true
+
+  if (saved.identifier !== currentIdentifier) {
+    const { response } = await dialog.showMessageBox({
+      type: 'question',
+      title: 'Account mismatch',
+      message: `Account "${saved.name}" was saved as ${saved.identifier}, but currently logged in as ${currentIdentifier}.\n\nOverwrite "${saved.name}" credentials with the current login?`,
+      buttons: ['Overwrite', 'Skip', 'Cancel'],
+      defaultId: 0,
+      cancelId: 2
+    })
+    if (response === 2) return false // Cancel — abort the switch entirely
+    if (response === 1) return true  // Skip — proceed without saving
   }
+
+  updateStoredAccount(toolId, activeId, currentIdentifier, creds)
+  return true
 }
 
 function broadcastAccountsChanged(): void {
@@ -260,9 +280,10 @@ export function rebuildMenu(): void {
             if (!t?.importCredentials) return
             const stored = listAccounts(tool.id).find((a) => a.id === acc.id)
             if (!stored) return
-            // Auto-save current account's latest tokens before switching away
-            await autoSaveCurrentCredentials(tool.id)
+            const proceed = await autoSaveCurrentCredentials(tool.id)
+            if (!proceed) return
             await t.importCredentials(stored.credentials)
+            setActiveAccount(tool.id, acc.id)
             restartToolSessions(tool.id)
             broadcastAccountsChanged()
           }

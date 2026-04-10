@@ -12,6 +12,12 @@ interface ToolInfo {
   name: string
 }
 
+interface AccountSwitchConflict {
+  savedName: string
+  savedIdentifier: string
+  currentIdentifier: string
+}
+
 interface AccountManagerAPI {
   getTools: () => Promise<ToolInfo[]>
   isLoggedIn: (toolId: string) => Promise<boolean>
@@ -20,7 +26,7 @@ interface AccountManagerAPI {
   saveCurrent: (toolId: string, name: string) => Promise<CliAccountInfo | null>
   deleteAccount: (toolId: string, accountId: string) => Promise<void>
   updateAccount: (toolId: string, accountId: string) => Promise<CliAccountInfo | null>
-  loadAccount: (toolId: string, accountId: string) => Promise<boolean>
+  loadAccount: (toolId: string, accountId: string, autoSaveMode?: 'check' | 'force' | 'skip') => Promise<true | false | { conflict: AccountSwitchConflict }>
 }
 
 const api = () => (window as unknown as { accountManagerApi: AccountManagerAPI }).accountManagerApi
@@ -34,6 +40,7 @@ export default function AccountManagerApp(): React.ReactElement {
   const [saveName, setSaveName] = useState('')
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [conflict, setConflict] = useState<(AccountSwitchConflict & { accountId: string }) | null>(null)
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
@@ -94,13 +101,15 @@ export default function AccountManagerApp(): React.ReactElement {
     }
   }
 
-  const handleLoad = async (accountId: string): Promise<void> => {
-    const ok = await api().loadAccount(activeToolId, accountId)
-    if (ok) {
+  const handleLoad = async (accountId: string, autoSaveMode: 'check' | 'force' | 'skip' = 'check'): Promise<void> => {
+    const result = await api().loadAccount(activeToolId, accountId, autoSaveMode)
+    if (result === true) {
       showToast('Account loaded — restart AIDE to apply')
       refresh(activeToolId)
-    } else {
+    } else if (result === false) {
       showToast('Failed to load account')
+    } else {
+      setConflict({ ...result.conflict, accountId })
     }
   }
 
@@ -192,6 +201,40 @@ export default function AccountManagerApp(): React.ReactElement {
           </button>
         </div>
       </div>
+
+      {/* Conflict dialog */}
+      {conflict && (
+        <div style={styles.overlay}>
+          <div style={styles.dialog}>
+            <div style={styles.dialogTitle}>Account mismatch</div>
+            <div style={styles.dialogBody}>
+              <p>Account <strong>{conflict.savedName}</strong> was saved as <strong>{conflict.savedIdentifier}</strong>.</p>
+              <p>Currently logged in as <strong>{conflict.currentIdentifier}</strong>.</p>
+              <p>Overwrite <strong>{conflict.savedName}</strong> credentials with the current login?</p>
+            </div>
+            <div style={styles.dialogActions}>
+              <button
+                style={styles.btn}
+                onClick={() => { setConflict(null); handleLoad(conflict.accountId, 'force') }}
+              >
+                Overwrite
+              </button>
+              <button
+                style={styles.secondaryBtn}
+                onClick={() => { setConflict(null); handleLoad(conflict.accountId, 'skip') }}
+              >
+                Skip &amp; Load
+              </button>
+              <button
+                style={styles.secondaryBtn}
+                onClick={() => setConflict(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast */}
       {toast && <div style={styles.toast}>{toast}</div>}
@@ -326,5 +369,50 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
     boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
     zIndex: 100
+  },
+  overlay: {
+    position: 'absolute',
+    inset: 0,
+    background: 'rgba(0,0,0,0.6)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 200
+  },
+  dialog: {
+    background: '#252526',
+    border: '1px solid #444',
+    borderRadius: 6,
+    padding: '20px 24px',
+    maxWidth: 380,
+    width: '90%',
+    boxShadow: '0 4px 16px rgba(0,0,0,0.5)'
+  },
+  dialogTitle: {
+    fontSize: 14,
+    fontWeight: 600,
+    color: '#ddd',
+    marginBottom: 12
+  },
+  dialogBody: {
+    fontSize: 13,
+    color: '#bbb',
+    lineHeight: 1.5,
+    marginBottom: 16
+  },
+  dialogActions: {
+    display: 'flex',
+    gap: 8,
+    justifyContent: 'flex-end'
+  },
+  secondaryBtn: {
+    padding: '6px 14px',
+    background: '#3c3c3c',
+    border: '1px solid #555',
+    borderRadius: 4,
+    color: '#ccc',
+    cursor: 'pointer',
+    fontSize: 13,
+    whiteSpace: 'nowrap' as const
   }
 }

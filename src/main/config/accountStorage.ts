@@ -3,6 +3,9 @@ import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { randomUUID } from 'crypto'
 
+/** Tracks which saved account is currently active (credentials on disk) for each tool. */
+type ActiveAccountsFile = Record<string, string | null>
+
 /** Full account record stored on disk (credentials included). */
 export interface CliAccount {
   id: string
@@ -27,8 +30,12 @@ interface AccountsFile {
 let accountsPath = ''
 let accounts: AccountsFile = {}
 
+let activeAccountsPath = ''
+let activeAccounts: ActiveAccountsFile = {}
+
 export function initAccountStorage(): void {
   accountsPath = join(app.getPath('userData'), 'aide-accounts.json')
+  activeAccountsPath = join(app.getPath('userData'), 'aide-active-accounts.json')
 
   if (existsSync(accountsPath)) {
     try {
@@ -37,10 +44,31 @@ export function initAccountStorage(): void {
       accounts = {}
     }
   }
+
+  if (existsSync(activeAccountsPath)) {
+    try {
+      activeAccounts = JSON.parse(readFileSync(activeAccountsPath, 'utf8'))
+    } catch {
+      activeAccounts = {}
+    }
+  }
 }
 
 function save(): void {
   writeFileSync(accountsPath, JSON.stringify(accounts, null, 2), 'utf8')
+}
+
+function saveActiveAccounts(): void {
+  writeFileSync(activeAccountsPath, JSON.stringify(activeAccounts, null, 2), 'utf8')
+}
+
+export function getActiveAccount(toolId: string): string | null {
+  return activeAccounts[toolId] ?? null
+}
+
+export function setActiveAccount(toolId: string, accountId: string | null): void {
+  activeAccounts[toolId] = accountId
+  saveActiveAccounts()
 }
 
 export function listAccounts(toolId: string): CliAccount[] {
@@ -78,6 +106,10 @@ export function deleteAccount(toolId: string, accountId: string): void {
   if (!accounts[toolId]) return
   accounts[toolId] = accounts[toolId].filter((a) => a.id !== accountId)
   save()
+  if (activeAccounts[toolId] === accountId) {
+    activeAccounts[toolId] = null
+    saveActiveAccounts()
+  }
 }
 
 export function updateAccount(

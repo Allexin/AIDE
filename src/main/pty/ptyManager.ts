@@ -203,6 +203,7 @@ export class PtyManager {
   closeTab(tabId: string): void {
     const tab = this.tabs.get(tabId)
     if (!tab) return
+    tab.tool.deregisterTab?.(tabId)
     this.titleBufs.delete(tabId)
     this.titleCache.delete(tabId)
     this.prevTitleCache.delete(tabId)
@@ -255,6 +256,7 @@ export class PtyManager {
     for (const unsub of this.toolWatchers.values()) unsub()
     this.toolWatchers.clear()
     for (const tab of this.tabs.values()) {
+      tab.tool.deregisterTab?.(tab.tabId)
       this.titleBufs.delete(tab.tabId)
       this.prevTitleCache.delete(tab.tabId)
       this.healthChecks.delete(tab.tabId)
@@ -376,8 +378,7 @@ export class PtyManager {
         this.prevTitleCache.set(tabId, title)
         this.titleCache.set(tabId, title)
         this.send('terminal:tab-title', { tabId, title })
-        const event = tab?.tool.detectTitleEvent?.(prev, title)
-        if (event) this.send('terminal:tab-event', { tabId, event })
+        tab?.tool.detectTitleEvent?.(tabId, prev, title)
       }
       this.titleBufs.delete(tabId)
     } else {
@@ -396,6 +397,11 @@ export class PtyManager {
       Object.assign(env, tool.getEnvOverrides())
     }
 
+    // Register per-tab signal handler so the tool can emit events (e.g. 'completeAndWait')
+    tool?.registerSignalHandler?.(tabId, (event) =>
+      this.send('terminal:tab-event', { tabId, event })
+    )
+
     const pty = nodePty.spawn('powershell.exe', [], {
       name: 'xterm-256color',
       cols: 80,
@@ -407,6 +413,7 @@ export class PtyManager {
     pty.onData((data) => {
       this.feedHealthCheck(tabId, data)
       this.extractTitle(tabId, data)
+      tool?.onPtyActivity?.(tabId)
       this.send('terminal:data', { tabId, data })
       if (this.rawLogEnabled) {
         const escaped = data.replace(/[^\x20-\x7e\t\n]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`)
