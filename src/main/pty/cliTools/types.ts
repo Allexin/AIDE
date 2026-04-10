@@ -177,4 +177,6 @@ export interface UsageInfo {
   level: 'normal' | 'warn' | 'critical'
   /** Epoch ms when the data was actually fetched from the API. */
   fetchedAt: number
+  /** When false, there is no usage limit — callers should not color-code based on level. */
+  hasLimit?: boolean
 }

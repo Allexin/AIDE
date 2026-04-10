@@ -81,7 +81,7 @@ export default function StatusBar(): React.ReactElement {
   const activeToolIdRef = useRef<string | null>(null)
 
   // ── Usage limits sensor (left, next to account) ────────────────────────────
-  const [usageInfo, setUsageInfo] = useState<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number } | null>(null)
+  const [usageInfo, setUsageInfo] = useState<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number; hasLimit?: boolean } | null>(null)
   const lastUsageFetch = useRef(0)
   const [usageAge, setUsageAge] = useState('')
 
@@ -254,9 +254,11 @@ export default function StatusBar(): React.ReactElement {
           <span
             style={{
               ...sensorStyle,
-              color: usageInfo.level === 'critical' ? '#f44747'
-                : usageInfo.level === 'warn' ? '#cca700'
-                : 'rgba(255,255,255,0.9)'
+              color: usageInfo.hasLimit === false
+                ? 'rgba(255,255,255,0.9)'
+                : usageInfo.level === 'critical' ? '#f44747'
+                  : usageInfo.level === 'warn' ? '#cca700'
+                  : 'rgba(255,255,255,0.9)'
             }}
             title={usageInfo.tooltip}
           >

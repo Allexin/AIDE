@@ -182,7 +182,7 @@ interface EditorAPI {
 
   // Accounts
   getAccountCurrentInfo: (toolId: string) => Promise<{ label: string; saved: boolean } | null>
-  getUsageInfo: (toolId: string) => Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number } | null>
+  getUsageInfo: (toolId: string) => Promise<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number; hasLimit?: boolean } | null>
   getContextInsertText: (toolId: string, relPath: string) => Promise<string | null>
   onCliLog: (cb: (channel: string, message: string) => void) => () => void
   onAccountsChanged: (cb: () => void) => () => void

@@ -2,7 +2,8 @@ import { existsSync, readdirSync, readFileSync, statSync, watch as fsWatch, writ
 import { execFile } from 'child_process'
 import { homedir, platform } from 'os'
 import { join } from 'path'
-import type { CliTool, CliSession, UsageInfo, HistoryEntry } from './types'
+import type { CliTool, CliSession, UsageInfo, HistoryEntry, SettingsField } from './types'
+import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
 import { readQwenSessionHistory, watchQwenSessionFile } from './qwenCodeScanner'
 
@@ -10,7 +11,7 @@ const LOG_CH = 'Qwen Code'
 const TOOL_NAME = 'Qwen Code'
 const TOOL_ID = 'qwen-code'
 
-const DAILY_LIMIT = 1000
+const DEFAULT_DAILY_LIMIT = 1000
 const USAGE_CACHE_PATH = join(homedir(), '.qwen', 'aide-usage-cache.json')
 const OAUTH_CREDS_PATH = join(homedir(), '.qwen', 'oauth_creds.json')
 
@@ -326,19 +327,54 @@ export const qwenCodeTool: CliTool = {
     }
   },
 
+  settingsFields(): SettingsField[] {
+    return [
+      {
+        key: 'dailyLimit',
+        label: 'Daily request limit',
+        description: 'Set to 0 if your account has no limit (the usage count will be shown without limit-based coloring)',
+        type: 'number',
+        default: DEFAULT_DAILY_LIMIT
+      }
+    ]
+  },
+
+  async getSettings(): Promise<Record<string, unknown>> {
+    return getToolConfig(TOOL_ID)
+  },
+
+  async updateSettings(values: Record<string, unknown>): Promise<void> {
+    updateToolConfig(TOOL_ID, values)
+  },
+
   async getUsageInfo(): Promise<UsageInfo | null> {
     try {
       const used = computeUsageToday()
-      const pct = Math.round((used / DAILY_LIMIT) * 100)
+      const dailyLimit = (getToolConfig(TOOL_ID).dailyLimit as number) ?? DEFAULT_DAILY_LIMIT
+      const hasLimit = dailyLimit > 0
+
+      if (!hasLimit) {
+        // No limit — show only usage count, no color coding
+        return {
+          summary: `~${used}`,
+          tooltip: `Qwen Code: ~${used} daily requests used (local estimate, no limit set)`,
+          level: 'normal',
+          fetchedAt: Date.now(),
+          hasLimit: false
+        }
+      }
+
+      const pct = Math.round((used / dailyLimit) * 100)
       const level: UsageInfo['level'] = pct >= 90 ? 'critical' : pct >= 70 ? 'warn' : 'normal'
       const resetTime = new Date()
       resetTime.setUTCHours(24, 0, 0, 0)
       const resetStr = resetTime.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
       return {
-        summary: `~${used}/${DAILY_LIMIT}`,
-        tooltip: `Qwen Code: ~${used} of ${DAILY_LIMIT} daily requests used (local estimate)\nResets at ${resetStr} UTC`,
+        summary: `~${used}/${dailyLimit}`,
+        tooltip: `Qwen Code: ~${used} of ${dailyLimit} daily requests used (local estimate)\nResets at ${resetStr} UTC`,
         level,
-        fetchedAt: Date.now()
+        fetchedAt: Date.now(),
+        hasLimit: true
       }
     } catch (e) {
       cliLog(LOG_CH, `[usage] error computing usage: ${e}`)
