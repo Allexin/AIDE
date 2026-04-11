@@ -142,7 +142,6 @@ Full interface (`src/main/pty/cliTools/types.ts`):
 |--------|-----------|-------------|
 | `isLoggedIn` | `() => Promise<boolean>` | Checks whether the user is authenticated. |
 | `getLoginIdentifier` | `() => Promise<string \| null>` | Returns the email or username of the current user. |
-| `credentialsMatch` | `(saved) => Promise<boolean>` | Checks whether saved credentials match the currently active ones. |
 | `exportCredentials` | `() => Promise<Record<string, unknown> \| null>` | Exports current credentials as a serialisable object. |
 | `importCredentials` | `(credentials) => Promise<void>` | Restores previously exported credentials. |
 | `clearCredentials` | `() => Promise<void>` | Deletes local credentials (does not revoke tokens server-side). |
@@ -836,23 +835,12 @@ async getLoginIdentifier(): Promise<string | null> {
 
 ### Full implementation with account switching
 
-AIDE supports saving multiple accounts. Four methods are required:
+AIDE supports saving multiple accounts. Three methods are required:
 
 ```typescript
 /** Keys from auth.json to persist as credentials */
 const CREDENTIAL_KEYS = ['token', 'email', 'userId'] as const
 const AUTH_PATH = join(homedir(), '.mytool', 'auth.json')
-
-async credentialsMatch(saved: Record<string, unknown>): Promise<boolean> {
-  if (!existsSync(AUTH_PATH)) return false
-  try {
-    const auth = JSON.parse(readFileSync(AUTH_PATH, 'utf-8'))
-    // Compare by a stable unique field
-    return auth.userId === saved.userId
-  } catch {
-    return false
-  }
-},
 
 async exportCredentials(): Promise<Record<string, unknown> | null> {
   if (!existsSync(AUTH_PATH)) return null
@@ -967,5 +955,4 @@ async getUsageInfo(): Promise<UsageInfo | null> {
 
 - [ ] Implemented `isLoggedIn`, `getLoginIdentifier`
 - [ ] Implemented `exportCredentials`, `importCredentials`, `clearCredentials` (for account switching)
-- [ ] Implemented `credentialsMatch` (for correct active account detection)
 - [ ] Implemented `getUsageInfo` with caching and 429 backoff
