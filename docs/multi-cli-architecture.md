@@ -48,6 +48,7 @@ Every CLI tool is described by a single object implementing `CliTool`
 
 | Member | Description |
 |--------|-------------|
+| `hasAccountSystem(): boolean` | Return `false` for tools with built-in account switching or where credential management is technically impossible. Return `true` for all others — account management must be implemented whenever the CLI's credential storage allows it. |
 | `isLoggedIn?(): Promise<boolean>` | Whether the user is currently authenticated |
 | `getLoginIdentifier?(): Promise<string \| null>` | Return email or username of the current user |
 | `credentialsMatch?(saved): Promise<boolean>` | Check if saved credentials match the active ones |
@@ -249,15 +250,17 @@ IPC:
 
 ## Settings — Accounts Section
 
-For each activated tool that implements `isLoggedIn`, Settings shows an account row:
+For each activated tool that implements `isLoggedIn` **and does not opt out via `hasAccountSystem() === false`**, Settings shows an account row:
 
 ```
 Claude Code    user@example.com     [Switch account]
 Aider          Not logged in        [Login]
 ```
 
+Tools that return `hasAccountSystem() === false` are excluded from `accounts:get-tools` and from the "Load Account" submenu. Their `getLoginIdentifier` result is still shown in the status bar (as a static label, without "not saved" warnings).
+
 IPC (all take `toolId` as first argument):
-- `accounts:get-tools` → `{ id, name, hasAccount, installed }[]`
+- `accounts:get-tools` → `{ id, name, hasAccount, installed }[]` (only tools with account system)
 - `accounts:get-login-identifier(toolId)` → `string | null`
 - `accounts:is-logged-in(toolId)` → `boolean`
 - `accounts:import-credentials(toolId, credentials)` → switch account
@@ -310,10 +313,15 @@ IPC:
 
 ```
 src/main/pty/cliTools/
-  types.ts          — CliTool interface, SettingsField, UsageInfo
-  registry.ts       — cliToolRegistry, getDefaultTool()
-  claudeCode.ts     — Claude Code implementation
-  plainShell.ts     — built-in fallback (new)
+  types.ts              — CliTool interface, SettingsField, UsageInfo
+  registry.ts           — cliToolRegistry, getDefaultTool()
+  claudeCode.ts         — Claude Code implementation
+  claudeCodeScanner.ts  — disk session scanner (Claude Code)
+  qwenCode.ts           — Qwen Code implementation
+  qwenCodeScanner.ts    — disk session scanner (Qwen Code)
+  openCode.ts           — OpenCode implementation (no account system)
+  openCodeScanner.ts    — disk session scanner (OpenCode, SQLite)
+  plainShell.ts         — built-in fallback
 
 src/main/config/
   appState.ts       — SavedSessionEntry gets toolId; AppState gets activatedTools

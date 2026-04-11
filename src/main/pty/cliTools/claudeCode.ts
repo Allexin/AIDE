@@ -176,6 +176,10 @@ export const claudeCodeTool: CliTool = {
     return 'pending'
   },
 
+  hasAccountSystem(): boolean {
+    return true
+  },
+
   async isLoggedIn(): Promise<boolean> {
     if (!existsSync(CLAUDE_JSON)) return false
     try {

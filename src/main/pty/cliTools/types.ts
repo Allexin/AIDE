@@ -101,6 +101,17 @@ export interface CliTool {
    */
   clearCredentials?(): Promise<void>
 
+  /** Whether AIDE should manage accounts for this tool.
+   *  Return false for tools that either:
+   *    (a) have their own built-in account switching (e.g. OpenCode's /auth menu), or
+   *    (b) make it technically impossible to implement credential export/import.
+   *  Return true for all other tools — account management must be implemented
+   *  whenever the CLI's credential storage allows it.
+   *  When false: tool is hidden from the Accounts UI and Load Account menu,
+   *  but getLoginIdentifier() is still called for the status bar.
+   */
+  hasAccountSystem(): boolean
+
   /** Return current usage/limit info for display in the status bar.
    *  The implementation decides what to show — the caller treats it opaquely.
    */

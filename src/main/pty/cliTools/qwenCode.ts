@@ -430,6 +430,10 @@ export const qwenCodeTool: CliTool = {
     }
   },
 
+  hasAccountSystem(): boolean {
+    return true
+  },
+
   async isLoggedIn(): Promise<boolean> {
     return existsSync(OAUTH_CREDS_PATH)
   },

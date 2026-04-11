@@ -22,5 +22,9 @@ export const plainShellTool: CliTool = {
 
   watchForNewSessions(_projectPath, _onNew) {
     return () => {}
+  },
+
+  hasAccountSystem(): boolean {
+    return false
   }
 }

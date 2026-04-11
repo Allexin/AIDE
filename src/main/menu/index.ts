@@ -252,11 +252,13 @@ export function rebuildMenu(): void {
   // Build "Load Account" submenu per tool
   const loadAccountSubmenu: Electron.MenuItemConstructorOptions[] = []
   for (const tool of getRegisteredTools()) {
+    const cliTool = getToolById(tool.id)
+    if (cliTool && !cliTool.hasAccountSystem()) continue
+
     const accs = listAccounts(tool.id)
     const toolSubmenu: Electron.MenuItemConstructorOptions[] = []
 
     // Logout item — clears credentials locally without revoking tokens
-    const cliTool = getToolById(tool.id)
     if (cliTool?.clearCredentials) {
       toolSubmenu.push({
         label: 'Logout',

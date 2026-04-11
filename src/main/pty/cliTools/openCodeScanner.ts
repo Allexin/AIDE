@@ -169,8 +169,15 @@ interface PartData {
   toolCallId?: string
   toolName?: string
   input?: unknown
-  state?: string
   args?: unknown
+  tool?: string
+  callID?: string
+  state?: {
+    status?: string
+    input?: unknown
+    output?: unknown
+    [key: string]: unknown
+  }
 }
 
 interface PartRow {
@@ -183,49 +190,45 @@ interface PartRow {
 
 // ── History parsing ───────────────────────────────────────────────────────────
 
-function parsePartData(partData: PartData): HistoryBlock | null {
+function parsePartData(partData: PartData): HistoryBlock[] {
   const text = partData.text ?? partData.content ?? ''
 
   switch (partData.type) {
     case 'text':
-      if (typeof text === 'string' && text.trim()) return { type: 'text', text }
+      if (typeof text === 'string' && text.trim()) return [{ type: 'text', text }]
       break
 
     case 'reasoning':
-      if (typeof text === 'string' && text.trim()) return { type: 'thinking', thinking: text }
+      if (typeof text === 'string' && text.trim()) return [{ type: 'thinking', thinking: text }]
       break
 
-    case 'tool-call':
-    case 'tool_call': {
-      const input = (partData.args ?? partData.input ?? {}) as Record<string, unknown>
-      if (partData.toolCallId || partData.toolName) {
-        return {
-          type: 'tool_use',
-          id: partData.toolCallId ?? '',
-          name: partData.toolName ?? 'unknown',
-          input
-        }
+    case 'tool': {
+      // Only emit tool blocks when output is available
+      if (partData.callID && partData.tool && partData.state?.output) {
+        const input = partData.state?.input
+        return [
+          {
+            type: 'tool_use',
+            id: partData.callID,
+            name: partData.tool,
+            input: typeof input === 'object' && input !== null ? input as Record<string, unknown> : {}
+          },
+          {
+            type: 'tool_result',
+            tool_use_id: partData.callID,
+            content: String(partData.state.output)
+          }
+        ]
       }
       break
     }
 
-    case 'tool-result':
-    case 'tool_result':
-      if (partData.toolCallId) {
-        return {
-          type: 'tool_result',
-          tool_use_id: partData.toolCallId,
-          content: typeof text === 'string' ? text : ''
-        }
-      }
-      break
-
-    // step-start, step-finish, snapshot, patch etc. — skip (metadata only)
+    // step-start, step-finish, patch etc. — skip (metadata only)
     default:
       break
   }
 
-  return null
+  return []
 }
 
 // ── Session history reader ────────────────────────────────────────────────────
@@ -260,8 +263,7 @@ export function readOpenCodeSessionHistory(sessionId: string): HistoryEntry[] {
       for (const partRow of partRows) {
         let partData: PartData
         try { partData = JSON.parse(partRow.data) as PartData } catch { continue }
-        const block = parsePartData(partData)
-        if (block) blocks.push(block)
+        blocks.push(...parsePartData(partData))
       }
 
       if (blocks.length > 0) entries.push({ role, blocks })
@@ -457,8 +459,7 @@ export function watchOpenCodeMessages(
           for (const partRow of partRows) {
             let partData: PartData
             try { partData = JSON.parse(partRow.data) as PartData } catch { continue }
-            const block = parsePartData(partData)
-            if (block) blocks.push(block)
+            blocks.push(...parsePartData(partData))
           }
 
           if (blocks.length > 0 && !stopped) onEntry({ role, blocks })
@@ -484,9 +485,14 @@ export function watchOpenCodeMessages(
     watcher = watch(watchTarget, scheduleCheck)
   } catch { /* ignore */ }
 
+  // Polling fallback (SQLite WAL watching can miss changes)
+  const POLL_INTERVAL = 5000
+  const pollInterval = setInterval(scheduleCheck, POLL_INTERVAL)
+
   return () => {
     stopped = true
     if (debounceTimer) clearTimeout(debounceTimer)
+    clearInterval(pollInterval)
     watcher?.close()
   }
 }

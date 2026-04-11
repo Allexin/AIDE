@@ -1,6 +1,6 @@
 {
   "name": "aide",
-  "version": "0.1.178",
+  "version": "0.1.189",
   "description": "AI-Driven Code Editor",
   "private": true,
   "main": "out/main/index.js",
@@ -19,8 +19,8 @@
     "@monaco-editor/react": "^4.7.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "better-sqlite3": "^11.10.0",
     "monaco-editor": "^0.55.1",
-    "better-sqlite3": "^11.0.0",
     "node-pty": "^1.1.0",
     "react-window": "^1.8.11",
     "zustand": "^5.0.0"

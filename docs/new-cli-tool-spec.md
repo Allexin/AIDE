@@ -80,7 +80,10 @@ src/main/pty/cliTools/
   yourToolScanner.ts    ← optional, if you need a separate parser file
 ```
 
-Both `claudeCode.ts` and `qwenCode.ts` are complete reference implementations — read them before starting. They illustrate two distinct patterns: OAuth-based auth with cloud API usage tracking (Claude Code) and local file-based usage counting (Qwen Code).
+`claudeCode.ts`, `qwenCode.ts`, and `openCode.ts` are complete reference implementations — read them before starting. They illustrate three distinct patterns:
+- **Claude Code** — OAuth-based auth, cloud API usage tracking, JSONL session files
+- **Qwen Code** — local file-based usage counting, JSONL session files
+- **OpenCode** — no account system (`hasAccountSystem() → false`), SQLite-based session storage
 
 ---
 
@@ -140,6 +143,7 @@ Full interface (`src/main/pty/cliTools/types.ts`):
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
+| `hasAccountSystem` | `() => boolean` | Required. Return `false` only for tools with built-in account switching or where credential management is technically impossible. Return `true` for all others. See [section 8](#8-accounts). |
 | `isLoggedIn` | `() => Promise<boolean>` | Checks whether the user is authenticated. |
 | `getLoginIdentifier` | `() => Promise<string \| null>` | Returns the email or username of the current user. |
 | `exportCredentials` | `() => Promise<Record<string, unknown> \| null>` | Exports current credentials as a serialisable object. |
@@ -803,7 +807,22 @@ getEnvOverrides(): Record<string, string> {
 
 ## 8. Accounts
 
-If the tool uses authentication, implement the accounts method group. They are displayed in Settings → Accounts.
+### When to implement vs. when to skip
+
+**Implement account management** when the CLI stores credentials in files that AIDE can read and write, and there is no built-in, convenient account-switching mechanism in the CLI itself. This covers the majority of tools.
+
+**Set `hasAccountSystem() { return false }`** in exactly two cases:
+1. The CLI already has **its own built-in account switching** (e.g. OpenCode's `/auth` menu), making AIDE-level credential management redundant or conflicting.
+2. It is **technically impossible** to implement credential export/import for this tool (e.g. the CLI uses OS-level credential stores that cannot be accessed programmatically).
+
+In all other cases where the CLI uses credentials, account management **must** be implemented — even if the implementation is minimal. Do not use `hasAccountSystem() → false` as a shortcut for skipping work.
+
+When `hasAccountSystem()` returns `false`:
+- The tool is excluded from the Accounts section in Settings.
+- The tool is excluded from the "Load Account" submenu in the application menu.
+- `getLoginIdentifier` is still called — its result is shown in the status bar as a static label (e.g. tool name or current model), without "not saved" warnings.
+
+---
 
 ### Minimum set
 

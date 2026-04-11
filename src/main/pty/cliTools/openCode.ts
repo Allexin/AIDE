@@ -3,18 +3,12 @@
  *
  * OpenCode (https://opencode.ai) is a TUI-based AI coding assistant.
  *
- * Session storage: SQLite database at
- *   Windows: %APPDATA%\opencode\opencode.db
- *   Unix:    ~/.local/share/opencode/opencode.db
- *
+ * Session storage: SQLite database at ~/.local/share/opencode/opencode.db
  * ProjectID: first git root-commit hash, cached in <project>/.git/opencode.
- * The scanner (openCodeScanner.ts) reads the DB directly using better-sqlite3.
- *
- * Auth: provider-based (Anthropic, OpenAI, GitHub Copilot, etc.).
- * Credentials are stored in auth.json inside the data directory.
+ * Active model: read from ~/.config/opencode/opencode.json and shown in status bar.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { execFile } from 'child_process'
 import { join } from 'path'
 import type { CliTool, CliSession, UsageInfo, SettingsField, HistoryEntry } from './types'
@@ -74,33 +68,30 @@ function cleanupTab(tabId: string): void {
   signalByTab.delete(tabId)
 }
 
-// ── Auth helpers ──────────────────────────────────────────────────────────────
+// ── Config helpers ────────────────────────────────────────────────────────────
 
-interface AuthCredential {
-  type: 'oauth' | 'api' | 'wellknown'
-  key?: string
-  accessToken?: string
-  refreshToken?: string
-  accountEmail?: string
-  accountId?: string
+interface OpenCodeConfig {
+  model?: string
+  provider?: Record<string, unknown>
+  [key: string]: unknown
 }
 
-function authPath(): string {
-  return join(getOpenCodeDataDir(), 'auth.json')
+function configPath(): string {
+  const { homedir } = require('os') as typeof import('os')
+  const configDir = process.env.XDG_CONFIG_HOME
+    ? join(process.env.XDG_CONFIG_HOME, 'opencode')
+    : join(homedir(), '.config', 'opencode')
+  return join(configDir, 'opencode.json')
 }
 
-function readAuth(): Record<string, AuthCredential> | null {
-  const p = authPath()
+function readConfig(): OpenCodeConfig | null {
+  const p = configPath()
   if (!existsSync(p)) return null
   try {
-    return JSON.parse(readFileSync(p, 'utf-8')) as Record<string, AuthCredential>
+    return JSON.parse(readFileSync(p, 'utf-8')) as OpenCodeConfig
   } catch {
     return null
   }
-}
-
-function writeAuth(auth: Record<string, AuthCredential>): void {
-  writeFileSync(authPath(), JSON.stringify(auth, null, 2), 'utf-8')
 }
 
 // ── Tool implementation ───────────────────────────────────────────────────────
@@ -309,59 +300,23 @@ export const openCodeTool: CliTool = {
     }
   },
 
-  // ── Auth / accounts ───────────────────────────────────────────────────────
+  // ── Login identifier ─────────────────────────────────────────────────────
   //
-  // OpenCode has no built-in account system — authentication is delegated to AI
-  // providers (Anthropic, OpenAI, GitHub Copilot, etc.). The entire auth.json
-  // object is treated as "credentials" for AIDE's account management: export
-  // captures the full object; import merges new providers into existing ones.
-
-  async isLoggedIn(): Promise<boolean> {
-    const auth = readAuth()
-    if (!auth) return false
-    return Object.keys(auth).length > 0
-  },
+  // OpenCode has a built-in /auth menu for account switching — no AIDE-level management needed.
 
   async getLoginIdentifier(): Promise<string | null> {
-    const auth = readAuth()
-    if (!auth) return null
-    const entries = Object.entries(auth)
-    if (entries.length === 0) return null
-    const labels = entries.map(([providerId, cred]) => {
-      if (cred.accountEmail) return `${providerId} (${cred.accountEmail})`
-      return providerId
-    })
-    return labels.join(', ')
+    return 'OpenCode CLI'
   },
 
-  async exportCredentials(): Promise<Record<string, unknown> | null> {
-    const auth = readAuth()
-    if (!auth || Object.keys(auth).length === 0) return null
-    return auth as Record<string, unknown>
+  hasAccountSystem(): boolean {
+    return false
   },
 
-  async importCredentials(credentials: Record<string, unknown>): Promise<void> {
-    try {
-      const existing = readAuth() ?? {}
-      const merged = { ...existing, ...(credentials as Record<string, AuthCredential>) }
-      writeAuth(merged)
-    } catch (e) {
-      cliLog(LOG_CH, `[credentials] failed to import: ${e}`)
-      throw e
-    }
-  },
-
-  async clearCredentials(): Promise<void> {
-    try {
-      writeAuth({})
-    } catch (e) {
-      cliLog(LOG_CH, `[credentials] failed to clear: ${e}`)
-    }
-  },
+  // ── Usage info ───────────────────────────────────────────────────────────
+  //
+  // OpenCode has no usage limits — returns null.
 
   async getUsageInfo(): Promise<UsageInfo | null> {
-    // OpenCode does not expose a usage/quota API.
-    // Provider-specific limits are managed on each provider's own dashboard.
     return null
   }
 }

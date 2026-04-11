@@ -863,8 +863,14 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   ipcMain.handle('accounts:get-current-info', async (_event, toolId: string) => {
     const tool = getToolById(toolId)
     if (!tool?.getLoginIdentifier) return null
+
     const identifier = await tool.getLoginIdentifier()
     if (!identifier) return null
+
+    // Tools without account system (e.g. OpenCode) — show identifier without "not saved"
+    if (!tool.hasAccountSystem()) {
+      return { label: identifier, saved: true }
+    }
 
     // First: check tracked active account
     const activeId = getActiveAccount(toolId)
@@ -900,7 +906,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   ipcMain.handle('accounts:get-tools', () => {
     const activated = getActivatedTools()
     return getRegisteredTools()
-      .filter((t) => activated.includes(t.id))
+      .filter((t) => activated.includes(t.id) && t.hasAccountSystem())
       .map((t) => ({
         id: t.id,
         name: t.name,
