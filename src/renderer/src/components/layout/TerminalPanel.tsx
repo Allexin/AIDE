@@ -46,6 +46,27 @@ interface FitFn {
   focus: () => void
 }
 
+const SGR_MOUSE_EVENT_RE = /^\x1b\[<(\d+);(\d+);(\d+)([mM])$/
+const X10_MOUSE_EVENT_RE = /^\x1b\[M[\x00-\xff]{3}$/
+const MOUSE_PRIVATE_MODES = new Set(['9', '1000', '1001', '1002', '1003', '1005', '1006', '1015', '1016'])
+
+function isMouseReportEvent(data: string): boolean {
+  return SGR_MOUSE_EVENT_RE.test(data) || X10_MOUSE_EVENT_RE.test(data)
+}
+
+function stripMouseModeControlSequences(data: string): string {
+  // Drop DEC private mouse mode toggles so xterm keeps normal text selection.
+  return data.replace(/\x1b\[\?([0-9;]+)([hl])/g, (_full, modes: string, action: string) => {
+    const kept = modes
+      .split(';')
+      .map((m) => m.trim())
+      .filter((m) => m.length > 0 && !MOUSE_PRIVATE_MODES.has(m))
+
+    if (kept.length === 0) return ''
+    return `\x1b[?${kept.join(';')}${action}`
+  })
+}
+
 // ── TerminalTab: one xterm.js instance per session tab ───────────────────────
 
 interface TerminalTabProps {
@@ -112,13 +133,17 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }: Termi
 
     // Forward keypresses to PTY
     terminal.onData((data) => {
+      // Some CLIs leave mouse-tracking enabled and xterm starts sending mouse
+      // reports (SGR/X10). If the CLI does not consume them, they appear as
+      // visible garbage in the prompt, so we drop those sequences here.
+      if (isMouseReportEvent(data)) return
       window.editorApi.terminalWrite(tabId, data)
     })
 
     // Subscribe to PTY data for this tab
     const removeData = window.editorApi.onTerminalData((receivedTabId, data) => {
       if (receivedTabId === tabId) {
-        terminal.write(data)
+        terminal.write(stripMouseModeControlSequences(data))
       }
     })
 
