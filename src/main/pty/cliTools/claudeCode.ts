@@ -104,8 +104,18 @@ export const claudeCodeTool: CliTool = {
   installUrl: 'https://claude.ai/download',
 
   async isInstalled(): Promise<boolean> {
-    return new Promise((resolve) => {
+    const inPath = await new Promise<boolean>((resolve) => {
       execFile('where', ['claude'], { timeout: 3000 }, (err) => resolve(!err))
+    })
+    if (inPath) return true
+    // where only finds executables; also check PowerShell functions/aliases
+    return new Promise<boolean>((resolve) => {
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-Command', 'Get-Command claude -ErrorAction SilentlyContinue'],
+        { timeout: 5000 },
+        (err, stdout) => resolve(!err && stdout.trim().length > 0)
+      )
     })
   },
 
