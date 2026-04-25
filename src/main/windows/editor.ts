@@ -96,7 +96,7 @@ export function openProjectAndTrack(
   thinkingRegistry.set(editorWin, thinkingWatcher)
   ptyMgr.onSessionAssigned = (tabId, sessionId, tool) => {
     const filePath = tool.getSessionFilePath?.(projectPath, sessionId) ?? null
-    thinkingWatcher.startWatching(tabId, sessionId, filePath, tool)
+    thinkingWatcher.startWatching(tabId, sessionId, projectPath, filePath, tool)
   }
   ptyMgr.onTabClosed = (tabId) => thinkingWatcher.stopWatching(tabId)
 

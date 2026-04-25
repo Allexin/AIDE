@@ -261,7 +261,7 @@ interface HistoryBlock {
   thinking?: string
   id?: string
   name?: string
-  input?: Record<string, unknown>
+  input?: unknown
   tool_use_id?: string
   content?: string | Array<{ type: string; text?: string }>
 }

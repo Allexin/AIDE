@@ -54,24 +54,74 @@ function decodeBlobToMessage(data: CursorStoreRow['data']): CursorStoreMessage |
     ? data
     : Buffer.from(data as Buffer | Uint8Array).toString('utf-8')
 
-  const start = raw.indexOf('{')
-  const end = raw.lastIndexOf('}')
-  if (start < 0 || end <= start) return null
+  const rolePattern = /"role"\s*:\s*"(user|assistant|tool|system)"/g
+  let match: RegExpExecArray | null
+  let hadStrongCandidate = false
 
-  try {
-    const parsed = JSON.parse(raw.slice(start, end + 1)) as CursorStoreMessage
-    if (!parsed || typeof parsed !== 'object') return null
-    return parsed
-  } catch {
+  const extractBalancedObject = (start: number): string | null => {
+    let end = -1
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let i = start; i < raw.length; i++) {
+      const ch = raw[i]
+      if (inString) {
+        if (escaped) {
+          escaped = false
+        } else if (ch === '\\') {
+          escaped = true
+        } else if (ch === '"') {
+          inString = false
+        }
+        continue
+      }
+      if (ch === '"') {
+        inString = true
+        continue
+      }
+      if (ch === '{') depth++
+      else if (ch === '}') {
+        depth--
+        if (depth === 0) {
+          end = i
+          break
+        }
+      }
+    }
+    if (end <= start) return null
+    return raw.slice(start, end + 1)
+  }
+
+  while ((match = rolePattern.exec(raw)) !== null) {
+    const roleKeyIndex = match.index
+    const start = raw.lastIndexOf('{', roleKeyIndex)
+    if (start < 0) continue
+
+    const window = raw.slice(roleKeyIndex, Math.min(raw.length, roleKeyIndex + 320))
+    const strong = window.includes('"content"') || window.includes('"parts"')
+    if (strong) hadStrongCandidate = true
+
+    const candidate = extractBalancedObject(start)
+    if (!candidate) continue
+    try {
+      const parsed = JSON.parse(candidate) as CursorStoreMessage
+      if (!parsed || typeof parsed !== 'object') continue
+      return parsed
+    } catch {
+      continue
+    }
+  }
+
+  if (hadStrongCandidate) {
     warnOnce(
       'store-json-schema',
-      'Cursor store.db blob payload is not valid JSON. Storage format may have changed; history parsing continues in best-effort mode.'
+      'Cursor store.db message payload is not valid JSON. Storage format may have changed; history parsing continues in best-effort mode.'
     )
-    return null
   }
+  return null
 }
 
-function asToolCallInput(value: unknown): Record<string, unknown> {
+function asToolCallInput(value: unknown): unknown {
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
     return value as Record<string, unknown>
   }
@@ -82,10 +132,11 @@ function asToolCallInput(value: unknown): Record<string, unknown> {
         return parsed as Record<string, unknown>
       }
     } catch {
-      // keep fallback
+      // Keep raw string payload (e.g. ApplyPatch FREEFORM patch).
     }
+    return value
   }
-  return {}
+  return value ?? {}
 }
 
 function asToolResultContent(
@@ -113,48 +164,102 @@ function asToolResultContent(
   }
 }
 
+function normalizeThinkingText(raw: string): string | null {
+  const noAnsi = raw.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+  const lines = noAnsi
+    .split('\n')
+    .map((line) =>
+      line
+        .replace(/^[\s|│┃┆┊┇┋]+/, '')
+        .replace(/[\s|│┃┆┊┇┋]+$/, '')
+    )
+    .filter((line) => line.length > 0)
+    .filter((line) => !/^…?\s*Thought for\b/i.test(line))
+    .filter((line) => !/^Thought for\b/i.test(line))
+
+  if (lines.length === 0) return null
+  const joined = lines.join('\n').trim()
+  if (!joined) return null
+  // Drop punctuation-only artifacts like ", , , ."
+  if (!/[\p{L}\p{N}]/u.test(joined)) return null
+  return joined
+}
+
 function parseMessageToEntry(msg: CursorStoreMessage): HistoryEntry | null {
   const role = msg.role
-  if (role !== 'user' && role !== 'assistant' && role !== 'tool') {
+  if (role !== 'user' && role !== 'assistant' && role !== 'tool' && role !== 'system') {
     warnOnce(
       'store-role-schema',
       `Cursor store message role is unsupported (role="${String(role ?? 'undefined')}"). This can indicate schema drift.`
     )
     return null
   }
-  if (!Array.isArray(msg.content)) {
+
+  let contentItems: unknown[] = []
+  if (Array.isArray(msg.content)) {
+    contentItems = msg.content
+  } else if (typeof msg.content === 'string' && msg.content.trim().length > 0) {
+    const prefix = role === 'system' ? '[system] ' : ''
+    contentItems = [{ type: 'text', text: `${prefix}${msg.content}` }]
+  } else if (msg.content && typeof msg.content === 'object') {
+    // Some Cursor rows store message payload as an object instead of content[].
+    const obj = msg.content as Record<string, unknown>
+    const text =
+      (typeof obj.text === 'string' && obj.text) ||
+      (typeof obj.message === 'string' && obj.message) ||
+      (typeof obj.content === 'string' && obj.content) ||
+      JSON.stringify(obj)
+    if (text.trim().length > 0) {
+      const prefix = role === 'system' ? '[system] ' : ''
+      contentItems = [{ type: 'text', text: `${prefix}${text}` }]
+    }
+  }
+
+  if (!Array.isArray(contentItems) || contentItems.length === 0) {
     warnOnce(
       'store-content-schema',
-      'Cursor store message content is not an array. This can indicate a Cursor schema change.'
+      `Cursor ${role} message content could not be parsed. This can indicate a Cursor schema change.`
     )
     return null
   }
 
   const blocks: HistoryBlock[] = []
+  const isAssistantLikeRole = role === 'assistant' || role === 'tool' || role === 'system'
 
-  for (const item of msg.content) {
+  for (const item of contentItems) {
     if (!item || typeof item !== 'object') continue
     const part = item as Record<string, unknown>
     const type = part.type
 
     if (type === 'text' && typeof part.text === 'string' && part.text.trim().length > 0) {
+      if (isAssistantLikeRole && /Thought for\b/i.test(part.text)) {
+        const normalizedThinking = normalizeThinkingText(part.text)
+        if (normalizedThinking) {
+          blocks.push({ type: 'thinking', thinking: normalizedThinking })
+          continue
+        }
+      }
       blocks.push({ type: 'text', text: part.text })
       continue
     }
 
-    if (type === 'reasoning' && typeof part.text === 'string' && part.text.trim().length > 0) {
-      blocks.push({ type: 'thinking', thinking: part.text })
+    if (type === 'reasoning' && typeof part.text === 'string') {
+      const normalizedThinking = normalizeThinkingText(part.text)
+      if (normalizedThinking) {
+        blocks.push({ type: 'thinking', thinking: normalizedThinking })
+      }
       continue
     }
 
     if (type === 'tool-call') {
       const toolCallId = typeof part.toolCallId === 'string' ? part.toolCallId : ''
       const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown'
+      const rawInput = part.args ?? part.input ?? part.arguments ?? {}
       blocks.push({
         type: 'tool_use',
         id: toolCallId,
         name: toolName,
-        input: asToolCallInput(part.args)
+        input: asToolCallInput(rawInput)
       })
       continue
     }
@@ -170,7 +275,7 @@ function parseMessageToEntry(msg: CursorStoreMessage): HistoryEntry | null {
   }
 
   if (blocks.length === 0) return null
-  return { role: role === 'tool' ? 'assistant' : role, blocks }
+  return { role: role === 'tool' || role === 'system' ? 'assistant' : role, blocks }
 }
 
 function listWorkspaceHashes(): string[] {

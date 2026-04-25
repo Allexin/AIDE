@@ -99,6 +99,26 @@ function parseEntry(line: string): CursorTranscriptEntry | null {
   }
 }
 
+function normalizeThinkingText(raw: string): string | null {
+  const noAnsi = raw.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+  const lines = noAnsi
+    .split('\n')
+    .map((line) =>
+      line
+        .replace(/^[\s|│┃┆┊┇┋]+/, '')
+        .replace(/[\s|│┃┆┊┇┋]+$/, '')
+    )
+    .filter((line) => line.length > 0)
+    .filter((line) => !/^…?\s*Thought for\b/i.test(line))
+    .filter((line) => !/^Thought for\b/i.test(line))
+
+  if (lines.length === 0) return null
+  const joined = lines.join('\n').trim()
+  if (!joined) return null
+  if (!/[\p{L}\p{N}]/u.test(joined)) return null
+  return joined
+}
+
 async function readEntries(filePath: string): Promise<CursorTranscriptEntry[]> {
   let content: string
   try {
@@ -389,6 +409,15 @@ export function parseCursorThinkingBlocks(line: string): string[] {
   if (!Array.isArray(content)) return []
 
   return content
-    .filter((b) => b && typeof b === 'object' && b.type === 'thinking' && typeof b.thinking === 'string' && b.thinking.length > 0)
-    .map((b) => String(b.thinking))
+    .filter((b) => b && typeof b === 'object')
+    .map((b) => {
+      if (b.type === 'thinking' && typeof b.thinking === 'string') {
+        return normalizeThinkingText(b.thinking)
+      }
+      if (b.type === 'reasoning' && typeof b.text === 'string') {
+        return normalizeThinkingText(b.text)
+      }
+      return null
+    })
+    .filter((v): v is string => !!v)
 }
