@@ -6,7 +6,7 @@ import { networkInterfaces } from 'os'
 import { app, BrowserWindow } from 'electron'
 import QRCode from 'qrcode'
 import type { PtyManager } from '../pty/ptyManager'
-import { generatePin, validatePin } from './auth'
+import { loadOrGeneratePin, regeneratePin, validatePin } from './auth'
 import { PtyBridge } from './ptyBridge'
 
 const DEFAULT_PORT = 3847
@@ -54,6 +54,7 @@ export class RemoteServer {
   private bridge: PtyBridge
   private pin = ''
   private port: number
+  private pinPath: string
 
   constructor(
     private ptyRegistry: Map<BrowserWindow, PtyManager>,
@@ -61,6 +62,7 @@ export class RemoteServer {
     port = DEFAULT_PORT
   ) {
     this.port = port
+    this.pinPath = join(app.getPath('userData'), 'remote-pin.txt')
     this.bridge = new PtyBridge(ptyRegistry)
     this.bridge.onLockChanged = (tabId, locked) => {
       for (const win of openProjects.values()) {
@@ -70,7 +72,7 @@ export class RemoteServer {
   }
 
   start(): void {
-    this.pin = generatePin()
+    this.pin = loadOrGeneratePin(this.pinPath)
     this.server = http.createServer((req, res) => this.handleHttp(req, res))
     this.wss = new WebSocketServer({ server: this.server })
     this.wss.on('connection', (ws) => this.handleConnection(ws))
@@ -142,6 +144,21 @@ export class RemoteServer {
     if (url === '/api/keyboard-config') {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify(this.getKeyboardConfig()))
+      return
+    }
+
+    if (url === '/api/regenerate-pin' && req.method === 'POST') {
+      this.pin = regeneratePin(this.pinPath)
+      const urls = this.getConnectionUrls()
+      Promise.all(
+        urls.map((u) => QRCode.toDataURL(u, { width: 220, margin: 1, color: { dark: '#000000', light: '#ffffff' } }))
+      ).then((qrDataUrls) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ urls, pin: this.pin, qrDataUrls }))
+      }).catch(() => {
+        res.writeHead(500)
+        res.end()
+      })
       return
     }
 
@@ -253,6 +270,12 @@ function makeConnectHtml(urls: string[], pin: string, qrDataUrls: string[]): str
     .url-item:hover { border-color: #666; }
     .hint { font-size: 11px; color: #555; }
     .urls { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+    .regen-btn {
+      font-size: 11px; color: #858585; background: none; border: 1px solid #3d3d3d;
+      border-radius: 4px; padding: 5px 12px; cursor: pointer; transition: border-color .15s;
+    }
+    .regen-btn:hover { border-color: #666; color: #ccc; }
+    .regen-btn:disabled { opacity: .4; cursor: default; }
   </style>
 </head>
 <body>
@@ -261,6 +284,7 @@ function makeConnectHtml(urls: string[], pin: string, qrDataUrls: string[]): str
   <div class="pin" id="pin-el"></div>
   <div class="urls" id="url-list"></div>
   <div class="hint">PIN is embedded in the URL — just tap the link</div>
+  <button class="regen-btn" id="regen-btn">New PIN</button>
   <script>
     var d = ${data}
     var activeIdx = 0
@@ -280,12 +304,32 @@ function makeConnectHtml(urls: string[], pin: string, qrDataUrls: string[]): str
           var btn = document.querySelectorAll('.url-item')[i]
           if (!btn) return
           var prev = btn.textContent
-          btn.textContent = '✓ Copied'
+          btn.textContent = '\\u2713 Copied'
           setTimeout(function() { btn.textContent = prev }, 1400)
         }).catch(function() {})
       }
     }
     renderQr(0); renderUrls()
+    document.getElementById('regen-btn').addEventListener('click', function() {
+      var btn = document.getElementById('regen-btn')
+      btn.disabled = true
+      btn.textContent = 'Generating...'
+      fetch('/api/regenerate-pin', { method: 'POST' })
+        .then(function(r) { return r.json() })
+        .then(function(newData) {
+          d = newData
+          activeIdx = 0
+          document.getElementById('pin-el').textContent = d.pin
+          renderQr(0)
+          renderUrls()
+          btn.textContent = 'New PIN'
+          btn.disabled = false
+        })
+        .catch(function() {
+          btn.textContent = 'New PIN'
+          btn.disabled = false
+        })
+    })
   </script>
 </body>
 </html>`

@@ -1,9 +1,26 @@
 import { randomInt } from 'crypto'
+import { readFileSync, writeFileSync } from 'fs'
 
 let currentPin = ''
 
-export function generatePin(): string {
-  currentPin = String(randomInt(100000, 999999))
+function makePin(): string {
+  return String(randomInt(100000, 999999))
+}
+
+export function loadOrGeneratePin(savePath: string): string {
+  try {
+    const saved = readFileSync(savePath, 'utf-8').trim()
+    if (/^\d{6}$/.test(saved)) {
+      currentPin = saved
+      return currentPin
+    }
+  } catch {}
+  return regeneratePin(savePath)
+}
+
+export function regeneratePin(savePath: string): string {
+  currentPin = makePin()
+  try { writeFileSync(savePath, currentPin, 'utf-8') } catch {}
   return currentPin
 }
 
