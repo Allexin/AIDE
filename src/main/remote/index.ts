@@ -76,6 +76,13 @@ export class RemoteServer {
     this.server = http.createServer((req, res) => this.handleHttp(req, res))
     this.wss = new WebSocketServer({ server: this.server })
     this.wss.on('connection', (ws) => this.handleConnection(ws))
+    this.server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        // Another AIDE instance is already serving remote access on this port.
+        this.server = null
+        this.wss = null
+      }
+    })
     this.server.listen(this.port)
   }
 
