@@ -9,7 +9,9 @@ import { releaseLock } from './lock'
 import { createPickerWindow } from './windows/picker'
 import { openProjectAndTrack } from './windows/editor'
 import { setupIpcHandlers } from './ipc'
-import { setupMenu, isSwitchingProject } from './menu'
+import { setupMenu, isSwitchingProject, setRemoteServer } from './menu'
+import { RemoteServer } from './remote'
+import { ptyRegistry } from './pty/registry'
 
 // Map of projectPath → editor BrowserWindow
 const openProjects = new Map<string, BrowserWindow>()
@@ -38,7 +40,12 @@ app.whenReady().then(() => {
   initAppConfig()
   initAppState()
   initAccountStorage()
-  setupIpcHandlers(openProjects)
+
+  const remoteServer = new RemoteServer(ptyRegistry, openProjects)
+  remoteServer.start()
+  setRemoteServer(remoteServer)
+
+  setupIpcHandlers(openProjects, remoteServer)
   initUpdater()
   setupMenu(openProjects, (path) => openProjectAndTrack(path, openProjects))
 

@@ -197,6 +197,10 @@ export interface EditorAPI {
   updaterDismissNotification: () => Promise<void>
   updaterOpenReleases: () => void
   onUpdaterStatusChanged: (cb: (status: UpdateStatus) => void) => () => void
+
+  // Remote access
+  onRemoteTabLockChanged: (cb: (tabId: string, locked: boolean) => void) => () => void
+  remoteTakeBack: (tabId: string) => void
 }
 
 interface ReleaseInfo {
@@ -446,7 +450,16 @@ const editorApi: EditorAPI = {
     const handler = (_: unknown, status: UpdateStatus): void => cb(status)
     ipcRenderer.on('updater:status-changed', handler)
     return () => ipcRenderer.removeListener('updater:status-changed', handler)
-  }
+  },
+
+  // Remote access
+  onRemoteTabLockChanged: (cb: (tabId: string, locked: boolean) => void) => {
+    const handler = (_: unknown, payload: { tabId: string; locked: boolean }): void =>
+      cb(payload.tabId, payload.locked)
+    ipcRenderer.on('remote:tab-lock-changed', handler)
+    return () => ipcRenderer.removeListener('remote:tab-lock-changed', handler)
+  },
+  remoteTakeBack: (tabId: string) => ipcRenderer.send('remote:take-back', tabId)
 }
 
 contextBridge.exposeInMainWorld('editorApi', editorApi)

@@ -72,15 +72,17 @@ function stripMouseModeControlSequences(data: string): string {
 interface TerminalTabProps {
   tabId: string
   isActive: boolean
+  isLocked: boolean
   onMount: (tabId: string, fit: FitFn) => void
   onUnmount: (tabId: string) => void
   onAttention: (tabId: string) => void
 }
 
-function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }: TerminalTabProps): React.ReactElement {
+function TerminalTab({ tabId, isActive, isLocked, onMount, onUnmount, onAttention }: TerminalTabProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
+  const isLockedRef = useRef(isLocked)
   // Ref so OSC handler can read current isActive without stale closure
   const isActiveRef = useRef(isActive)
   const onAttentionRef = useRef(onAttention)
@@ -88,6 +90,7 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }: Termi
   const focusedPanel = usePanelStore((s) => s.focusedPanel)
   const focusedPanelRef = useRef(focusedPanel)
 
+  useEffect(() => { isLockedRef.current = isLocked }, [isLocked])
   useEffect(() => { isActiveRef.current = isActive }, [isActive])
   useEffect(() => { onAttentionRef.current = onAttention }, [onAttention])
   useEffect(() => { focusedPanelRef.current = focusedPanel }, [focusedPanel])
@@ -131,8 +134,9 @@ function TerminalTab({ tabId, isActive, onMount, onUnmount, onAttention }: Termi
       focus: () => { terminal.focus() }
     })
 
-    // Forward keypresses to PTY
+    // Forward keypresses to PTY (blocked when tab is remotely locked)
     terminal.onData((data) => {
+      if (isLockedRef.current) return
       // Some CLIs leave mouse-tracking enabled and xterm starts sending mouse
       // reports (SGR/X10). If the CLI does not consume them, they appear as
       // visible garbage in the prompt, so we drop those sequences here.
@@ -225,7 +229,7 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   const { terminalCollapsed, collapsedWidthPx, toggleTerminalCollapse, focusTerminal, focusedPanel } =
     usePanelStore()
 
-  const { tabs, activeTabId, initialized, initWithTab, initWithTabs, addTab, setActiveTab, closeTab, resetTabs, updateSlug, updateSessionId, markExited, setAttention } =
+  const { tabs, activeTabId, initialized, remoteLockedTabs, initWithTab, initWithTabs, addTab, setActiveTab, closeTab, resetTabs, updateSlug, updateSessionId, markExited, setAttention, setRemoteLocked } =
     useSessionStore()
 
   const projectPath = useFileTreeStore((s) => s.projectPath)
@@ -363,6 +367,10 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
       resetTabs(newTabs)
     })
 
+    const removeRemoteLock = window.editorApi.onRemoteTabLockChanged((tabId, locked) => {
+      setRemoteLocked(tabId, locked)
+    })
+
     return () => {
       removeTitle()
       removeSessionId()
@@ -372,8 +380,9 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
       removeDeadSession()
       removeTabClosed()
       removeResetTabs()
+      removeRemoteLock()
     }
-  }, [updateSessionId, markExited, setActiveTab, addTab, updateSlug, closeTab, resetTabs])
+  }, [updateSessionId, markExited, setActiveTab, addTab, updateSlug, closeTab, resetTabs, setRemoteLocked])
 
   // Resize active terminal when the panel container resizes — but only when the
   // terminal panel has focus. When the editor takes focus the container shrinks,
@@ -460,9 +469,24 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
         <TabStrip
           tabs={tabs}
           activeTabId={activeTabId}
+          remoteLockedTabs={remoteLockedTabs}
           onSelectTab={handleSelectTab}
           onCloseTab={handleCloseTab}
         />
+
+        {/* 📱 Take back — shown when active tab is remotely locked */}
+        {activeTabId && remoteLockedTabs.has(activeTabId) && (
+          <button
+            title="Take back control from mobile"
+            style={{ ...headerBtnStyle, color: '#4fc3f7', fontSize: 13 }}
+            onClick={(e) => {
+              e.stopPropagation()
+              window.editorApi.remoteTakeBack(activeTabId)
+            }}
+          >
+            Take back
+          </button>
+        )}
 
         {/* [ history ] open history viewer for current tab */}
         {(() => {
@@ -523,6 +547,7 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
             key={tab.tabId}
             tabId={tab.tabId}
             isActive={tab.tabId === activeTabId}
+            isLocked={remoteLockedTabs.has(tab.tabId)}
             onMount={handleMount}
             onUnmount={handleUnmount}
             onAttention={handleAttention}
@@ -616,12 +641,13 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 interface TabButtonProps {
   tab: { tabId: string; sessionId: string | null; slug: string; exited: boolean; attention: boolean }
   isActive: boolean
+  isLocked: boolean
   canClose: boolean
   onSelect: () => void
   onClose: () => void
 }
 
-function TabButton({ tab, isActive, canClose, onSelect, onClose }: TabButtonProps): React.ReactElement {
+function TabButton({ tab, isActive, isLocked, canClose, onSelect, onClose }: TabButtonProps): React.ReactElement {
   const [dim, setDim] = useState(false)
   const [hovered, setHovered] = useState(false)
 
@@ -669,6 +695,7 @@ function TabButton({ tab, isActive, canClose, onSelect, onClose }: TabButtonProp
         gap: 4
       }}
     >
+      {isLocked && <span title="Remotely controlled" style={{ flexShrink: 0, fontSize: 12 }}>📱</span>}
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{tab.slug}</span>
       {canClose && (hovered || isActive) && (
         <span
@@ -698,11 +725,12 @@ function TabButton({ tab, isActive, canClose, onSelect, onClose }: TabButtonProp
 interface TabStripProps {
   tabs: Array<{ tabId: string; sessionId: string | null; slug: string; exited: boolean; attention: boolean }>
   activeTabId: string | null
+  remoteLockedTabs: Set<string>
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
 }
 
-function TabStrip({ tabs, activeTabId, onSelectTab, onCloseTab }: TabStripProps): React.ReactElement {
+function TabStrip({ tabs, activeTabId, remoteLockedTabs, onSelectTab, onCloseTab }: TabStripProps): React.ReactElement {
   const stripRef = useRef<HTMLDivElement>(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
   const [canScrollRight, setCanScrollRight] = useState(false)
@@ -748,6 +776,7 @@ function TabStrip({ tabs, activeTabId, onSelectTab, onCloseTab }: TabStripProps)
             key={tab.tabId}
             tab={tab}
             isActive={tab.tabId === activeTabId}
+            isLocked={remoteLockedTabs.has(tab.tabId)}
             canClose={tabs.length > 1}
             onSelect={() => onSelectTab(tab.tabId)}
             onClose={() => onCloseTab(tab.tabId)}

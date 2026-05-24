@@ -1,4 +1,5 @@
 import { Menu, MenuItem, BrowserWindow, dialog, app } from 'electron'
+import type { RemoteServer } from '../remote'
 import { basename } from 'path'
 import { existsSync } from 'fs'
 import { getAppState } from '../config/appState'
@@ -6,6 +7,7 @@ import { getAppConfig } from '../config/appConfig'
 import { createPickerWindow } from '../windows/picker'
 import { createAccountManagerWindow } from '../windows/accountManager'
 import { createSettingsWindow } from '../windows/settings'
+import { openRemoteConnectWindow } from '../windows/remoteConnect'
 import { openCliToolsWindow } from '../windows/cliTools'
 import { getRunningCount, killAllProcesses } from '../toolbar/processManager'
 import { registerCommand } from './commandRegistry'
@@ -17,6 +19,11 @@ import { restartToolSessions } from '../pty/registry'
 type OpenProjectFn = (path: string) => { success: boolean; error?: string }
 let openProjectsRef: Map<string, BrowserWindow> | null = null
 let openProjectFn: OpenProjectFn | null = null
+let remoteServerRef: RemoteServer | null = null
+
+export function setRemoteServer(server: RemoteServer): void {
+  remoteServerRef = server
+}
 
 // Per-window: does this editor have a file open?
 const editorFileOpenMap = new Map<BrowserWindow, boolean>()
@@ -297,6 +304,16 @@ export function rebuildMenu(): void {
   }
 
   const template: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: 'Remote Connect',
+      click: (): void => {
+        if (!remoteServerRef) {
+          dialog.showMessageBox({ type: 'info', title: 'AIDE', message: 'Remote server not available.' })
+          return
+        }
+        openRemoteConnectWindow(remoteServerRef.getPort())
+      }
+    },
     {
       label: 'File',
       submenu: [

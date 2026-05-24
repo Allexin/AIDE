@@ -47,6 +47,7 @@ export class PtyManager {
   private sessionAssignQueue: Promise<void> = Promise.resolve()
   private titleCache = new Map<string, string>()
   private prevTitleCache = new Map<string, string>()
+  private outputListeners = new Map<string, Set<(data: string) => void>>()
 
   onSessionAssigned?: (tabId: string, sessionId: string, tool: CliTool) => void
   onTabClosed?: (tabId: string) => void
@@ -208,6 +209,7 @@ export class PtyManager {
     this.titleCache.delete(tabId)
     this.prevTitleCache.delete(tabId)
     this.healthChecks.delete(tabId)
+    this.outputListeners.delete(tabId)
     try {
       tab.pty.kill()
     } catch {}
@@ -247,6 +249,13 @@ export class PtyManager {
     this.send('terminal:reset-tabs', newTabs)
   }
 
+  subscribeToOutput(tabId: string, cb: (data: string) => void): () => void {
+    let set = this.outputListeners.get(tabId)
+    if (!set) { set = new Set(); this.outputListeners.set(tabId, set) }
+    set.add(cb)
+    return () => { this.outputListeners.get(tabId)?.delete(cb) }
+  }
+
   /** Returns true if any open tab uses the given tool. */
   hasTool(toolId: string): boolean {
     return [...this.tabs.values()].some((t) => t.tool.id === toolId)
@@ -266,6 +275,7 @@ export class PtyManager {
     }
     this.tabs.clear()
     this.titleCache.clear()
+    this.outputListeners.clear()
   }
 
   getActiveSessions(): { tabId: string; sessionId: string | null; title: string; toolId: string }[] {
@@ -414,6 +424,7 @@ export class PtyManager {
       this.feedHealthCheck(tabId, data)
       this.extractTitle(tabId, data)
       tool?.onPtyActivity?.(tabId)
+      this.outputListeners.get(tabId)?.forEach((cb) => cb(data))
       this.send('terminal:data', { tabId, data })
       if (this.rawLogEnabled) {
         const escaped = data.replace(/[^\x20-\x7e\t\n]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`)

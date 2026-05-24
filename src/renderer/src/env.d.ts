@@ -226,6 +226,10 @@ interface EditorAPI {
   updaterDismissNotification: () => Promise<void>
   updaterOpenReleases: () => void
   onUpdaterStatusChanged: (cb: (status: UpdateStatus) => void) => () => void
+
+  // Remote access
+  onRemoteTabLockChanged: (cb: (tabId: string, locked: boolean) => void) => () => void
+  remoteTakeBack: (tabId: string) => void
 }
 
 interface ReleaseInfo {

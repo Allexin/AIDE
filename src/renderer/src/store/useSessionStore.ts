@@ -22,6 +22,7 @@ interface SessionState {
   tabs: SessionTab[]
   activeTabId: string | null
   initialized: boolean
+  remoteLockedTabs: Set<string>
 
   initWithTab: (tab: SessionTabInfo) => void
   initWithTabs: (tabs: SessionTabInfo[], activeTabId: string | null) => void
@@ -33,6 +34,7 @@ interface SessionState {
   closeTab: (tabId: string) => void
   resetTabs: (tabs: SessionTabInfo[]) => void
   setAttention: (tabId: string, attention: boolean) => void
+  setRemoteLocked: (tabId: string, locked: boolean) => void
 }
 
 function tabFromInfo(t: SessionTabInfo, slug?: string): SessionTab {
@@ -51,6 +53,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   tabs: [],
   activeTabId: null,
   initialized: false,
+  remoteLockedTabs: new Set<string>(),
 
   initWithTab: (tab: SessionTabInfo) =>
     set({
@@ -113,5 +116,12 @@ export const useSessionStore = create<SessionState>((set) => ({
   setAttention: (tabId: string, attention: boolean) =>
     set((state) => ({
       tabs: state.tabs.map((t) => (t.tabId === tabId ? { ...t, attention } : t))
-    }))
+    })),
+
+  setRemoteLocked: (tabId: string, locked: boolean) =>
+    set((state) => {
+      const next = new Set(state.remoteLockedTabs)
+      if (locked) { next.add(tabId) } else { next.delete(tabId) }
+      return { remoteLockedTabs: next }
+    })
 }))

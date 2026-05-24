@@ -77,7 +77,7 @@ function runGitSubcommand(
   })
 }
 
-export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void {
+export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remoteServer?: { forceReleaseTab: (tabId: string) => void }): void {
   // Wire up CLI logger so any cliLog() call broadcasts to all renderer windows
   initCliLogger(() => openProjects.values())
 
@@ -1107,5 +1107,10 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     const tabInfo = await ptyMgr.createNewSessionTab(effectiveToolId, getActivatedTools())
     editorWin.webContents.send('terminal:new-tab', tabInfo)
     pickerWin.close()
+  })
+
+  // ── Remote access ─────────────────────────────────────────────────────────────
+  ipcMain.on('remote:take-back', (_, tabId: string) => {
+    remoteServer?.forceReleaseTab(tabId)
   })
 }
