@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
+const PAGE_SIZE = 30
+
 interface PickerSession {
   sessionId: string
   summary: string
@@ -43,10 +45,27 @@ function formatRelativeTime(mtime: number): string {
   return new Date(mtime).toLocaleDateString()
 }
 
+function toEntry(ps: PickerSession, openTabs: SessionTabInfo[]): SessionEntry {
+  const openTab = openTabs.find((t) => t.sessionId === ps.sessionId)
+  return {
+    sessionId: ps.sessionId,
+    summary: ps.summary ?? '',
+    firstMessage: ps.firstMessage ?? '',
+    slug: ps.title,
+    mtime: ps.mtime,
+    toolId: ps.toolId,
+    openTabId: openTab ? openTab.tabId : null
+  }
+}
+
 export default function SessionPickerApp(): React.ReactElement {
   const [sessions, setSessions] = useState<SessionEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
   const [busy, setBusy] = useState(false)
+  const openTabsRef = useRef<SessionTabInfo[]>([])
+  const offsetRef = useRef(0)
 
   // Tool selector state
   const [activatedTools, setActivatedTools] = useState<{ id: string; name: string }[]>([])
@@ -54,22 +73,11 @@ export default function SessionPickerApp(): React.ReactElement {
   const [toolDropdownOpen, setToolDropdownOpen] = useState(false)
 
   useEffect(() => {
-    window.sessionPickerApi.getSessions().then(({ sessions, openTabs }) => {
-      const entries: SessionEntry[] = sessions.map((ps: PickerSession) => {
-        const openTab = openTabs.find(
-          (t: SessionTabInfo) => t.sessionId === ps.sessionId
-        )
-        return {
-          sessionId: ps.sessionId,
-          summary: ps.summary ?? '',
-          firstMessage: ps.firstMessage ?? '',
-          slug: ps.title,
-          mtime: ps.mtime,
-          toolId: ps.toolId,
-          openTabId: openTab ? openTab.tabId : null
-        }
-      })
-      setSessions(entries)
+    window.sessionPickerApi.getSessions(0, PAGE_SIZE).then(({ sessions, openTabs, total }) => {
+      openTabsRef.current = openTabs
+      offsetRef.current = sessions.length
+      setSessions(sessions.map((ps) => toEntry(ps, openTabs)))
+      setHasMore(sessions.length < total)
       setLoading(false)
     })
 
@@ -86,6 +94,26 @@ export default function SessionPickerApp(): React.ReactElement {
       setDefaultToolId(effectiveId)
     })
   }, [])
+
+  const loadMore = useCallback(() => {
+    if (loadingMore || !hasMore) return
+    setLoadingMore(true)
+    const offset = offsetRef.current
+    window.sessionPickerApi.getSessions(offset, PAGE_SIZE).then(({ sessions, total }) => {
+      const tabs = openTabsRef.current
+      setSessions((prev) => [...prev, ...sessions.map((ps) => toEntry(ps, tabs))])
+      offsetRef.current = offset + sessions.length
+      setHasMore(offset + sessions.length < total)
+      setLoadingMore(false)
+    })
+  }, [loadingMore, hasMore])
+
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) {
+      loadMore()
+    }
+  }, [loadMore])
 
   const handleSelect = (entry: SessionEntry): void => {
     if (busy) return
@@ -143,22 +171,29 @@ export default function SessionPickerApp(): React.ReactElement {
       </div>
 
       {/* Session list */}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div style={{ flex: 1, overflowY: 'auto' }} onScroll={handleScroll}>
         {loading ? (
           <div style={{ padding: 16, color: '#555', fontSize: 12 }}>Loading…</div>
         ) : sessions.length === 0 ? (
           <div style={{ padding: 16, color: '#555', fontSize: 12 }}>No sessions found</div>
         ) : (
-          sessions.map((entry) => (
-            <SessionRow
-              key={entry.sessionId}
-              entry={entry}
-              toolName={activatedTools.find((t) => t.id === entry.toolId)?.name ?? entry.toolId}
-              onSelect={handleSelect}
-              onOpenHistory={handleOpenHistory}
-              disabled={busy}
-            />
-          ))
+          <>
+            {sessions.map((entry) => (
+              <SessionRow
+                key={entry.sessionId}
+                entry={entry}
+                toolName={activatedTools.find((t) => t.id === entry.toolId)?.name ?? entry.toolId}
+                onSelect={handleSelect}
+                onOpenHistory={handleOpenHistory}
+                disabled={busy}
+              />
+            ))}
+            {loadingMore && (
+              <div style={{ padding: '8px 16px', color: '#555', fontSize: 12, textAlign: 'center' }}>
+                Loading more…
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -427,6 +462,9 @@ function SessionRow({ entry, toolName, onSelect, onOpenHistory, disabled }: Sess
             borderTop: '1px solid #2a2a2a'
           }}
         >
+          <div style={{ color: '#444', fontSize: 10, marginBottom: 6, fontFamily: 'monospace' }}>
+            {entry.sessionId}
+          </div>
           {loadingPreview && preview === null ? (
             <span style={{ color: '#555' }}>Loading…</span>
           ) : preview && preview.length > 0 ? (

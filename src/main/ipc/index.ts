@@ -421,12 +421,12 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   })
 
   // ── Session picker: get sessions (all activated tools + open tabs) ────────────
-  ipcMain.handle('session-picker:get-sessions', async (event) => {
+  ipcMain.handle('session-picker:get-sessions', async (event, offset: number = 0, limit: number = 30) => {
     const pickerWin = BrowserWindow.fromWebContents(event.sender)
-    if (!pickerWin) return { sessions: [], openTabs: [] }
+    if (!pickerWin) return { sessions: [], openTabs: [], total: 0 }
 
     const editorWin = pickerEditorMap.get(pickerWin)
-    if (!editorWin) return { sessions: [], openTabs: [] }
+    if (!editorWin) return { sessions: [], openTabs: [], total: 0 }
 
     const ptyMgr = ptyRegistry.get(editorWin)
     const openTabs = ptyMgr?.getTabs() ?? []
@@ -436,7 +436,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
       if (w === editorWin) { projectPath = p; break }
     }
 
-    if (!projectPath) return { sessions: [], openTabs }
+    if (!projectPath) return { sessions: [], openTabs, total: 0 }
 
     const activated = getActivatedTools()
     const allSessions: Array<{ sessionId: string; summary: string; firstMessage: string; title: string; mtime: number; toolId: string }> = []
@@ -460,9 +460,9 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
     }
 
     allSessions.sort((a, b) => b.mtime - a.mtime)
-    const maxSessions = getAppConfig().sessions.maxSessionsInPicker
+    const total = allSessions.length
 
-    return { sessions: allSessions.slice(0, maxSessions), openTabs }
+    return { sessions: allSessions.slice(offset, offset + limit), openTabs, total }
   })
 
   // ── Session picker: get session preview messages ──────────────────────────────
@@ -850,6 +850,11 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>): void
   // ── FS: copy file ─────────────────────────────────────────────────────────────
   ipcMain.handle('fs:copy-file', async (_event, src: string, dest: string) => {
     await fsAsync.copyFile(src, dest)
+  })
+
+  // ── FS: create empty file ─────────────────────────────────────────────────────
+  ipcMain.handle('fs:create-file', async (_event, filePath: string) => {
+    await fsAsync.writeFile(filePath, '', 'utf-8')
   })
 
   // ── Menu: editor file open state ──────────────────────────────────────────────

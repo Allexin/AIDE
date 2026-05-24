@@ -21,7 +21,7 @@ interface PreviewMessage {
 }
 
 interface SessionPickerAPI {
-  getSessions: () => Promise<{ sessions: PickerSession[]; openTabs: SessionTabInfo[] }>
+  getSessions: (offset?: number, limit?: number) => Promise<{ sessions: PickerSession[]; openTabs: SessionTabInfo[]; total: number }>
   getPreview: (sessionId: string, toolId: string) => Promise<PreviewMessage[]>
   switchTab: (tabId: string) => void
   resumeSession: (sessionId: string, toolId: string) => Promise<void>
@@ -34,7 +34,7 @@ interface SessionPickerAPI {
 }
 
 const sessionPickerApi: SessionPickerAPI = {
-  getSessions: () => ipcRenderer.invoke('session-picker:get-sessions'),
+  getSessions: (offset = 0, limit = 30) => ipcRenderer.invoke('session-picker:get-sessions', offset, limit),
   getPreview: (sessionId: string, toolId: string) => ipcRenderer.invoke('session-picker:get-preview', sessionId, toolId),
   switchTab: (tabId: string) => ipcRenderer.send('session-picker:switch-tab', tabId),
   resumeSession: (sessionId: string, toolId: string) => ipcRenderer.invoke('session-picker:resume-session', sessionId, toolId),

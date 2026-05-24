@@ -9,8 +9,9 @@ interface FileTreeState {
   expandedDirs: Set<string>
   gitStatus: GitStatusResult | null
   modifiedOnly: boolean
-  contextMenu: { x: number; y: number; filePath: string; relativePath: string } | null
+  contextMenu: { x: number; y: number; filePath: string; relativePath: string; isDir: boolean } | null
   loading: boolean
+  newFileDraft: { parentPath: string; name: string } | null
 
   init: (projectPath: string) => Promise<void>
   expandDir: (dirPath: string) => Promise<void>
@@ -20,7 +21,8 @@ interface FileTreeState {
   refresh: () => Promise<void>
   updateGitStatus: (status: GitStatusResult) => void
   handleFsChange: (event: { path: string }) => Promise<void>
-  setContextMenu: (menu: { x: number; y: number; filePath: string; relativePath: string } | null) => void
+  setContextMenu: (menu: { x: number; y: number; filePath: string; relativePath: string; isDir: boolean } | null) => void
+  setNewFileDraft: (draft: { parentPath: string; name: string } | null) => void
 }
 
 export const useFileTreeStore = create<FileTreeState>((set, get) => ({
@@ -31,6 +33,7 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
   modifiedOnly: false,
   contextMenu: null,
   loading: false,
+  newFileDraft: null,
 
   init: async (projectPath: string) => {
     set({ projectPath, loading: true, dirContents: new Map(), expandedDirs: new Set() })
@@ -158,5 +161,6 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
     }
   },
 
-  setContextMenu: (menu) => set({ contextMenu: menu })
+  setContextMenu: (menu) => set({ contextMenu: menu }),
+  setNewFileDraft: (name) => set({ newFileDraft: name })
 }))

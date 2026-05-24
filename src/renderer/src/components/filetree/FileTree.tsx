@@ -90,6 +90,13 @@ function makeCopyName(filename: string): string {
   return filename + '_Copy'
 }
 
+function freeNewFileName(dirNodes: TreeNode[]): string {
+  const names = new Set(dirNodes.map((n) => n.name.toLowerCase()))
+  let i = 1
+  while (names.has(`new-file-${i}.txt`)) i++
+  return `New-File-${i}.txt`
+}
+
 // ── Context menu ──────────────────────────────────────────────────────────────
 
 function ContextMenuSeparator(): React.ReactElement {
@@ -125,20 +132,24 @@ function ContextMenu({
   x,
   y,
   filePath,
+  isDir,
   relativePath,
   onClose,
   onDeleteRequest,
   onRenameRequest,
-  onDuplicateRequest
+  onDuplicateRequest,
+  onNewFileRequest
 }: {
   x: number
   y: number
   filePath: string
+  isDir: boolean
   relativePath: string
   onClose: () => void
   onDeleteRequest: () => void
   onRenameRequest: () => void
   onDuplicateRequest: () => void
+  onNewFileRequest: () => void
 }): React.ReactElement {
   const { viewDiff } = useEditorStore()
   const activeTabId = useSessionStore((s) => s.activeTabId)
@@ -188,12 +199,24 @@ function ContextMenu({
             onClose()
           }}
         />
-        <ContextMenuItem label="Add to context" onClick={handleAddToContext} />
+        {!isDir && <ContextMenuItem label="Add to context" onClick={handleAddToContext} />}
+        {!isDir && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              label="View Diff"
+              onClick={() => {
+                viewDiff(filePath, relativePath)
+                onClose()
+              }}
+            />
+          </>
+        )}
         <ContextMenuSeparator />
         <ContextMenuItem
-          label="View Diff"
+          label="New File"
           onClick={() => {
-            viewDiff(filePath, relativePath)
+            onNewFileRequest()
             onClose()
           }}
         />
@@ -205,13 +228,15 @@ function ContextMenu({
             onClose()
           }}
         />
-        <ContextMenuItem
-          label="Duplicate"
-          onClick={() => {
-            onDuplicateRequest()
-            onClose()
-          }}
-        />
+        {!isDir && (
+          <ContextMenuItem
+            label="Duplicate"
+            onClick={() => {
+              onDuplicateRequest()
+              onClose()
+            }}
+          />
+        )}
         <ContextMenuItem
           label="Delete"
           onClick={() => {
@@ -221,6 +246,134 @@ function ContextMenu({
         />
       </div>
     </>
+  )
+}
+
+// ── Empty-space context menu ──────────────────────────────────────────────────
+
+function EmptySpaceMenu({
+  x,
+  y,
+  onClose,
+  onNewFileRequest
+}: {
+  x: number
+  y: number
+  onClose: () => void
+  onNewFileRequest: () => void
+}): React.ReactElement {
+  return (
+    <>
+      <div
+        style={{ position: 'fixed', inset: 0, zIndex: 999 }}
+        onClick={onClose}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          onClose()
+        }}
+      />
+      <div
+        style={{
+          position: 'fixed',
+          left: x,
+          top: y,
+          zIndex: 1000,
+          background: '#252526',
+          border: '1px solid #454545',
+          borderRadius: 3,
+          padding: '4px 0',
+          minWidth: 140,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+          fontSize: 13
+        }}
+      >
+        <ContextMenuItem
+          label="New File"
+          onClick={() => {
+            onNewFileRequest()
+            onClose()
+          }}
+        />
+      </div>
+    </>
+  )
+}
+
+// ── Inline new-file input node ────────────────────────────────────────────────
+
+function NewFileInputNode({
+  depth,
+  defaultName,
+  onConfirm,
+  onCancel
+}: {
+  depth: number
+  defaultName: string
+  onConfirm: (name: string) => void
+  onCancel: () => void
+}): React.ReactElement {
+  const [value, setValue] = useState(defaultName)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const doneRef = useRef(false)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+    const dotIdx = defaultName.lastIndexOf('.')
+    if (dotIdx > 0) {
+      inputRef.current?.setSelectionRange(0, dotIdx)
+    } else {
+      inputRef.current?.select()
+    }
+  }, [defaultName])
+
+  const handleConfirm = (): void => {
+    if (doneRef.current) return
+    doneRef.current = true
+    const trimmed = value.trim()
+    if (trimmed) onConfirm(trimmed)
+    else onCancel()
+  }
+
+  const handleCancel = (): void => {
+    if (doneRef.current) return
+    doneRef.current = true
+    onCancel()
+  }
+
+  return (
+    <div
+      style={{
+        paddingLeft: depth * 16 + 8 + 14,
+        paddingRight: 8,
+        height: 22,
+        display: 'flex',
+        alignItems: 'center'
+      }}
+    >
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') handleConfirm()
+          else if (e.key === 'Escape') handleCancel()
+          e.stopPropagation()
+        }}
+        onBlur={handleConfirm}
+        style={{
+          width: '100%',
+          background: '#3c3c3c',
+          border: '1px solid #007fd4',
+          borderRadius: 2,
+          color: '#cccccc',
+          fontSize: 13,
+          padding: '0 4px',
+          height: 18,
+          outline: 'none',
+          boxSizing: 'border-box'
+        }}
+      />
+    </div>
   )
 }
 
@@ -473,13 +626,19 @@ interface NodeItemProps {
   // If set, use these children and treat the directory as always-expanded
   preloadedChildren?: AnyNode[]
   isModifiedOnly?: boolean
+  newFileDraft?: { parentPath: string; name: string } | null
+  onNewFileConfirm?: (parentPath: string, name: string) => void
+  onNewFileCancel?: () => void
 }
 
 function NodeItem({
   node,
   depth,
   preloadedChildren,
-  isModifiedOnly
+  isModifiedOnly,
+  newFileDraft,
+  onNewFileConfirm,
+  onNewFileCancel
 }: NodeItemProps): React.ReactElement {
   const [hovered, setHovered] = useState(false)
 
@@ -518,11 +677,11 @@ function NodeItem({
   }
 
   const handleContextMenu = (e: React.MouseEvent): void => {
-    if (!isDir) {
-      e.preventDefault()
-      setContextMenu({ x: e.clientX, y: e.clientY, filePath: node.path, relativePath: node.relativePath })
-    }
+    e.preventDefault()
+    setContextMenu({ x: e.clientX, y: e.clientY, filePath: node.path, relativePath: node.relativePath, isDir })
   }
+
+  const showDraftHere = isDir && isExpanded && newFileDraft?.parentPath === node.path
 
   return (
     <div>
@@ -575,16 +734,30 @@ function NodeItem({
         </span>
       </div>
 
-      {isDir &&
-        children.map((child) => (
-          <NodeItem
-            key={child.path}
-            node={child}
-            depth={depth + 1}
-            preloadedChildren={isModifiedOnly ? (child.children ?? []) : undefined}
-            isModifiedOnly={isModifiedOnly}
-          />
-        ))}
+      {isDir && isExpanded && (
+        <>
+          {showDraftHere && onNewFileConfirm && onNewFileCancel && (
+            <NewFileInputNode
+              depth={depth + 1}
+              defaultName={newFileDraft!.name}
+              onConfirm={(name) => onNewFileConfirm(node.path, name)}
+              onCancel={onNewFileCancel}
+            />
+          )}
+          {children.map((child) => (
+            <NodeItem
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              preloadedChildren={isModifiedOnly ? (child.children ?? []) : undefined}
+              isModifiedOnly={isModifiedOnly}
+              newFileDraft={newFileDraft}
+              onNewFileConfirm={onNewFileConfirm}
+              onNewFileCancel={onNewFileCancel}
+            />
+          ))}
+        </>
+      )}
     </div>
   )
 }
@@ -613,9 +786,12 @@ type DialogState =
   | null
 
 export default function FileTree(): React.ReactElement {
-  const { projectPath, dirContents, gitStatus, modifiedOnly, contextMenu, loading, setContextMenu } =
-    useFileTreeStore()
+  const {
+    projectPath, dirContents, gitStatus, modifiedOnly, contextMenu, loading,
+    setContextMenu, newFileDraft, setNewFileDraft, expandDir
+  } = useFileTreeStore()
   const [dialogState, setDialogState] = useState<DialogState>(null)
+  const [emptySpaceMenu, setEmptySpaceMenu] = useState<{ x: number; y: number } | null>(null)
   const closeDialog = (): void => setDialogState(null)
 
   const handleDeletePermanent = async (): Promise<void> => {
@@ -669,6 +845,46 @@ export default function FileTree(): React.ReactElement {
     closeDialog()
   }
 
+  // Determine the parent path for a new file: directory itself, or parent of a file
+  const startNewFile = async (targetPath: string, targetIsDir: boolean): Promise<void> => {
+    if (!projectPath) return
+    const sep = projectPath.includes('\\') ? '\\' : '/'
+    const parentPath = targetIsDir ? targetPath : getDirname(targetPath) || projectPath
+
+    // Ensure the directory is expanded so the inline input is visible
+    if (!useFileTreeStore.getState().expandedDirs.has(parentPath) && parentPath !== projectPath) {
+      await expandDir(parentPath)
+    }
+
+    const existingNodes = (dirContents.get(parentPath) as TreeNode[] | undefined) ?? []
+    const defaultName = freeNewFileName(existingNodes)
+    setNewFileDraft({ parentPath, name: defaultName })
+  }
+
+  const handleNewFileConfirm = async (parentPath: string, name: string): Promise<void> => {
+    if (!projectPath) return
+    const sep = parentPath.includes('\\') ? '\\' : '/'
+    const newPath = parentPath + sep + name
+    try {
+      await window.editorApi.fsCreateFile(newPath)
+      const relPath = newPath.slice(projectPath.length + 1).replace(/\\/g, '/')
+      useEditorStore.getState().openFileInEditor(newPath, relPath)
+    } catch (err) {
+      useToastStore.getState().show(`Failed to create file: ${String(err)}`)
+    }
+    setNewFileDraft(null)
+  }
+
+  const handleNewFileCancel = (): void => setNewFileDraft(null)
+
+  const handleEmptySpaceContextMenu = (e: React.MouseEvent): void => {
+    // Only trigger if the click landed directly on the scroll container (empty space)
+    if (e.target === e.currentTarget) {
+      e.preventDefault()
+      setEmptySpaceMenu({ x: e.clientX, y: e.clientY })
+    }
+  }
+
   if (loading || !projectPath) {
     return (
       <div style={centerStyle}>
@@ -716,10 +932,29 @@ export default function FileTree(): React.ReactElement {
     }
   } else {
     const rootNodes = (dirContents.get(projectPath) as AnyNode[]) ?? []
+    const showRootDraft = newFileDraft?.parentPath === projectPath
     treeContent = (
-      <div style={{ overflowY: 'auto', flex: 1 }}>
+      <div
+        style={{ overflowY: 'auto', flex: 1 }}
+        onContextMenu={handleEmptySpaceContextMenu}
+      >
+        {showRootDraft && (
+          <NewFileInputNode
+            depth={0}
+            defaultName={newFileDraft!.name}
+            onConfirm={(name) => handleNewFileConfirm(projectPath, name)}
+            onCancel={handleNewFileCancel}
+          />
+        )}
         {rootNodes.map((node) => (
-          <NodeItem key={node.path} node={node} depth={0} />
+          <NodeItem
+            key={node.path}
+            node={node}
+            depth={0}
+            newFileDraft={newFileDraft}
+            onNewFileConfirm={handleNewFileConfirm}
+            onNewFileCancel={handleNewFileCancel}
+          />
         ))}
       </div>
     )
@@ -734,6 +969,7 @@ export default function FileTree(): React.ReactElement {
           x={contextMenu.x}
           y={contextMenu.y}
           filePath={contextMenu.filePath}
+          isDir={contextMenu.isDir}
           relativePath={contextMenu.relativePath}
           onClose={() => setContextMenu(null)}
           onDeleteRequest={() =>
@@ -745,6 +981,18 @@ export default function FileTree(): React.ReactElement {
           onDuplicateRequest={() =>
             setDialogState({ type: 'duplicate', filePath: contextMenu.filePath })
           }
+          onNewFileRequest={() =>
+            startNewFile(contextMenu.filePath, contextMenu.isDir)
+          }
+        />
+      )}
+
+      {emptySpaceMenu && (
+        <EmptySpaceMenu
+          x={emptySpaceMenu.x}
+          y={emptySpaceMenu.y}
+          onClose={() => setEmptySpaceMenu(null)}
+          onNewFileRequest={() => startNewFile(projectPath, true)}
         />
       )}
 

@@ -200,6 +200,7 @@ interface EditorAPI {
   fsTrashFile: (filePath: string) => Promise<void>
   fsRenameFile: (oldPath: string, newPath: string) => Promise<void>
   fsCopyFile: (src: string, dest: string) => Promise<void>
+  fsCreateFile: (filePath: string) => Promise<void>
 
   // Thinking panel
   thinkingGetBlock: (tabId: string, index: number | 'last') => Promise<{ thinking: string; index: number; total: number } | null>
@@ -283,7 +284,7 @@ interface HistoryViewerAPI {
 }
 
 interface SessionPickerAPI {
-  getSessions: () => Promise<{ sessions: PickerSession[]; openTabs: SessionTabInfo[] }>
+  getSessions: (offset?: number, limit?: number) => Promise<{ sessions: PickerSession[]; openTabs: SessionTabInfo[]; total: number }>
   getPreview: (sessionId: string, toolId: string) => Promise<PreviewMessage[]>
   switchTab: (tabId: string) => void
   resumeSession: (sessionId: string, toolId: string) => Promise<void>

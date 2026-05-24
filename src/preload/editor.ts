@@ -167,6 +167,7 @@ export interface EditorAPI {
   fsTrashFile: (filePath: string) => Promise<void>
   fsRenameFile: (oldPath: string, newPath: string) => Promise<void>
   fsCopyFile: (src: string, dest: string) => Promise<void>
+  fsCreateFile: (filePath: string) => Promise<void>
 
   // Thinking panel
   thinkingGetBlock: (tabId: string, index: number | 'last') => Promise<{ thinking: string; index: number; total: number } | null>
@@ -409,6 +410,7 @@ const editorApi: EditorAPI = {
   fsTrashFile: (filePath) => ipcRenderer.invoke('fs:trash-file', filePath),
   fsRenameFile: (oldPath, newPath) => ipcRenderer.invoke('fs:rename-file', oldPath, newPath),
   fsCopyFile: (src, dest) => ipcRenderer.invoke('fs:copy-file', src, dest),
+  fsCreateFile: (filePath) => ipcRenderer.invoke('fs:create-file', filePath),
 
   // Thinking panel
   thinkingGetBlock: (tabId, index) => ipcRenderer.invoke('thinking:get-block', { tabId, index }),
