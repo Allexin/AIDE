@@ -324,9 +324,20 @@ interface AccountManagerAPI {
   loadAccount: (toolId: string, accountId: string, autoSaveMode?: 'check' | 'force' | 'skip') => Promise<true | false | { conflict: AccountSwitchConflict }>
 }
 
+interface RemoteCustomButton {
+  label: string
+  send: string
+}
+
+interface RemoteButtonRow {
+  buttons: RemoteCustomButton[]
+}
+
 interface RemoteConfig {
   enabled: boolean
   remoteHost: string
+  buttonSize: 'small' | 'medium' | 'large'
+  buttonRows: RemoteButtonRow[]
 }
 
 interface RemoteConnectAPI {

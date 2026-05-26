@@ -1093,7 +1093,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   // ── Settings: remote config ───────────────────────────────────────────────────
   ipcMain.handle('settings:get-remote', () => getAppConfig().remote)
 
-  ipcMain.handle('settings:save-remote', (_, remote: { enabled: boolean; remoteHost: string }) => {
+  ipcMain.handle('settings:save-remote', (_, remote: import('../config/appConfig').RemoteConfig) => {
     updateAppConfig({ remote })
   })
 

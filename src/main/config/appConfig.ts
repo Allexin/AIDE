@@ -50,9 +50,20 @@ export interface UpdatesConfig {
   notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly'
 }
 
+export interface RemoteCustomButton {
+  label: string
+  send: string  // escape-sequence notation: \r, \n, \t, \x03, \x1b, etc.
+}
+
+export interface RemoteButtonRow {
+  buttons: RemoteCustomButton[]
+}
+
 export interface RemoteConfig {
   enabled: boolean
   remoteHost: string // external host:port or hostname shown in connect QR dialog
+  buttonSize: 'small' | 'medium' | 'large'
+  buttonRows: RemoteButtonRow[]
 }
 
 export interface AppConfig {
@@ -96,7 +107,22 @@ const DEFAULTS: AppConfig = {
   },
   remote: {
     enabled: false,
-    remoteHost: ''
+    remoteHost: '',
+    buttonSize: 'medium',
+    buttonRows: [
+      {
+        buttons: [
+          { label: 'Ctrl+C', send: '\\x03' },
+          { label: 'Esc',    send: '\\x1b' },
+          { label: '↑',      send: '\\x1b[A' },
+          { label: '↓',      send: '\\x1b[B' },
+          { label: 'Tab',    send: '\\t' },
+          { label: 'Del',    send: '\\x1b[3~' },
+          { label: '⌫',      send: '\\x7f' },
+          { label: '↵',      send: '\\r' }
+        ]
+      }
+    ]
   },
   toolConfigs: {},
   toolbar: {

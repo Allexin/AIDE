@@ -9,7 +9,7 @@ import QRCode from 'qrcode'
 import type { PtyManager } from '../pty/ptyManager'
 import { loadOrGeneratePin, regeneratePin, validatePin } from './auth'
 import { PtyBridge } from './ptyBridge'
-import { getAppConfig } from '../config/appConfig'
+import { getAppConfig, type RemoteButtonRow } from '../config/appConfig'
 import { getToolById } from '../pty/cliTools/registry'
 import { readToolbarButtons as readProjectToolbarButtons, type ToolbarButton, isSplitter } from '../config/toolbarConfig'
 import { spawnButtonProcess, killButtonProcess, addProcessObserver, addOutputObserver, getRunningButtonIds } from '../toolbar/processManager'
@@ -18,30 +18,6 @@ import { addLogObserver } from '../pty/cliTools/cliLogger'
 const AGGREGATOR_PORT = 3847
 const SESSION_TTL = 24 * 60 * 60 * 1000  // 24 hours
 
-interface KeyboardButton {
-  label: string
-  send: string
-}
-
-interface KeyboardConfig {
-  buttons: KeyboardButton[]
-}
-
-// Default control buttons for mobile terminal.
-// Override by placing remote-keyboard.json in %APPDATA%/AIDE/ (userData dir).
-// Use Unicode escapes for control chars in the JSON file, e.g. "" for Ctrl+C.
-const DEFAULT_KEYBOARD_CONFIG: KeyboardConfig = {
-  buttons: [
-    { label: 'Ctrl+C', send: '\x03' },
-    { label: 'Esc',    send: '\x1b' },
-    { label: '↑',      send: '\x1b[A' },
-    { label: '↓',      send: '\x1b[B' },
-    { label: 'Tab',    send: '\t' },
-    { label: 'Del',    send: '\x1b[3~' },
-    { label: '⌫',      send: '\x7f' },
-    { label: '↵',      send: '\r' },
-  ]
-}
 
 interface RegistryEntry {
   port: number
@@ -467,21 +443,13 @@ export class RemoteServer {
         res.writeHead(404); res.end('Project not found'); return
       }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-      res.end(makeAggTerminalHtml(port, DEFAULT_KEYBOARD_CONFIG))
+      res.end(makeAggTerminalHtml(port))
       return
     }
 
     // Static assets — served directly, all instances share the same xterm files.
     if (path.startsWith('/static/')) {
       this.serveStatic(path.slice(8).split('?')[0], res)
-      return
-    }
-
-    // Keyboard config — proxy to the specific instance.
-    if (path === '/api/keyboard-config') {
-      const port = Number(urlObj.searchParams.get('port'))
-      if (!port) { res.writeHead(400); res.end(); return }
-      this.proxyToInstance(port, '/api/keyboard-config', res)
       return
     }
 
@@ -588,16 +556,6 @@ export class RemoteServer {
     }
   }
 
-  private getKeyboardConfig(): KeyboardConfig {
-    try {
-      const configPath = join(app.getPath('userData'), 'remote-keyboard.json')
-      const content = readFileSync(configPath, 'utf-8')
-      return JSON.parse(content) as KeyboardConfig
-    } catch {
-      return DEFAULT_KEYBOARD_CONFIG
-    }
-  }
-
   private handleTerminalHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
     const url = req.url ?? '/'
 
@@ -605,12 +563,6 @@ export class RemoteServer {
 
     if (url.startsWith('/static/')) {
       this.serveStatic(url.slice(8).split('?')[0], res)
-      return
-    }
-
-    if (url === '/api/keyboard-config') {
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify(this.getKeyboardConfig()))
       return
     }
 
@@ -671,7 +623,7 @@ export class RemoteServer {
 
     if (url === '/' || url.startsWith('/?') || url === '/terminal' || url.startsWith('/terminal?')) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-      res.end(TERMINAL_HTML)
+      res.end(makeTerminalHtml())
       return
     }
 
@@ -778,6 +730,24 @@ export class RemoteServer {
       this.logWatchers.delete(ws)
     })
   }
+}
+
+// --- HTML template helpers ---
+
+function parseEscServer(s: string): string {
+  return s
+    .replace(/\\x([0-9a-fA-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/\\u([0-9a-fA-F]{4})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/\\r/g, '\r')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\\\/g, '\\')
+}
+
+function processButtonRows(rows: RemoteButtonRow[]): Array<{ buttons: Array<{ label: string; send: string }> }> {
+  return rows.map((row) => ({
+    buttons: row.buttons.map((btn) => ({ label: btn.label, send: parseEscServer(btn.send) }))
+  }))
 }
 
 // --- HTML templates ---
@@ -1034,7 +1004,12 @@ const PICKER_HTML = `<!DOCTYPE html>
 
 // Terminal page served by the aggregator. All traffic goes through port 3847 —
 // the client never needs direct access to the instance's random port.
-function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): string {
+function makeAggTerminalHtml(port: number): string {
+  const remote = getAppConfig().remote
+  const btnConfigJson = safeJsJson({
+    size: remote.buttonSize ?? 'medium',
+    rows: processButtonRows(remote.buttonRows ?? [])
+  })
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -1075,6 +1050,10 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
     #tb-log { flex: 1; min-height: 0; overflow-y: auto; font: 11px/1.5 monospace; padding: 4px 8px; }
     #tb-log p { margin: 0; white-space: pre-wrap; word-break: break-all; color: #ccc; }
     #tb-log .tb-sep { color: #888; }
+    body.size-small .cbtn, body.size-small .tb-btn { padding: 3px 7px; font-size: 11px; }
+    body.size-large .cbtn, body.size-large .tb-btn { padding: 7px 14px; font-size: 14px; }
+    .tb-extra-row { flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: #252526; border-bottom: 1px solid #3d3d3d; overflow-x: auto; }
+    .tb-extra-row::-webkit-scrollbar { display: none; }
   </style>
 </head>
 <body>
@@ -1085,6 +1064,7 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
       <div id="tb-btn-list" style="display:flex;gap:4px;flex:1;overflow-x:auto;min-width:0;"></div>
       <button id="tb-close-btn">&#x25BC;</button>
     </div>
+    <div id="tb-extra-rows"></div>
     <div id="tb-tabs"></div>
     <div id="tb-log"></div>
   </div>
@@ -1097,14 +1077,14 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
     var activeTabId = params.get('tab') || null
     var wsReady = false
     var inputMode = false
-    var kbConfig = ${safeJsJson(defaultKbConfig)}
+    var btnConfig = ${btnConfigJson}
 
     var tbOpen = false
     var tbButtons = []
     var tbRunning = new Set()
-    var logChannels = []        // channel names from server
-    var logBuf = {}             // channel → string[]
-    var logActiveChannel = null // currently shown channel
+    var logChannels = []
+    var logBuf = {}
+    var logActiveChannel = null
 
     var statusMainEl = document.getElementById('status-main')
     var statusUsageEl = document.getElementById('status-usage')
@@ -1266,6 +1246,25 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
       return b
     }
 
+    function renderExtraRows() {
+      var container = document.getElementById('tb-extra-rows')
+      if (!container) return
+      container.innerHTML = ''
+      var rows = btnConfig.rows || []
+      for (var i = 1; i < rows.length; i++) {
+        var row = document.createElement('div')
+        row.className = 'tb-extra-row'
+        rows[i].buttons.forEach(function(btn) {
+          var b = document.createElement('button')
+          b.className = 'cbtn'
+          b.textContent = btn.label
+          b.title = btn.send
+          b.addEventListener('click', (function(s) { return function() { sk(s) } })(btn.send))
+          row.appendChild(b)
+        })
+        container.appendChild(row)
+      }
+    }
     function renderButtons() {
       inputMode = false
       ctrlBar.innerHTML = ''
@@ -1276,7 +1275,8 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
       tbTog.textContent = tbOpen ? '▼' : '▲'
       tbTog.addEventListener('click', function() { tbOpen ? closeShutter() : openShutter() })
       ctrlBar.appendChild(tbTog)
-      kbConfig.buttons.forEach(function(btn) {
+      var row0 = (btnConfig.rows && btnConfig.rows[0]) ? btnConfig.rows[0].buttons : []
+      row0.forEach(function(btn) {
         var b = document.createElement('button')
         b.className = 'cbtn'
         b.textContent = btn.label
@@ -1407,18 +1407,21 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
     new ResizeObserver(doResize).observe(document.getElementById('terminal'))
     applyViewport()
 
-    fetch('/api/keyboard-config?port=' + port)
-      .then(function(r) { return r.json() })
-      .then(function(cfg) { kbConfig = cfg; renderButtons() })
-      .catch(function() {})
-
+    document.body.classList.add('size-' + (btnConfig.size || 'medium'))
     renderButtons()
+    renderExtraRows()
   </script>
 </body>
 </html>`
 }
 
-const TERMINAL_HTML = `<!DOCTYPE html>
+function makeTerminalHtml(): string {
+  const remote = getAppConfig().remote
+  const btnConfigJson = safeJsJson({
+    size: remote.buttonSize ?? 'medium',
+    rows: processButtonRows(remote.buttonRows ?? [])
+  })
+  return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -1435,19 +1438,23 @@ const TERMINAL_HTML = `<!DOCTYPE html>
     #terminal { flex: 1; overflow: hidden; min-height: 0; }
     .xterm { height: 100%; }
     .xterm-viewport { overflow-y: auto !important; }
-    #ctrl-bar { flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 5px 8px; background: #252526; border-top: 1px solid #3d3d3d; overflow-x: auto; overflow-y: hidden; }
-    #ctrl-bar::-webkit-scrollbar { display: none; }
+    #btn-rows { flex-shrink: 0; display: flex; flex-direction: column; background: #252526; border-top: 1px solid #3d3d3d; }
+    .btn-row { display: flex; align-items: center; gap: 4px; padding: 5px 8px; overflow-x: auto; overflow-y: hidden; }
+    .btn-row:not(:last-child) { border-bottom: 1px solid #3d3d3d; }
+    .btn-row::-webkit-scrollbar { display: none; }
     .cbtn { padding: 5px 10px; font: 12px/1 monospace; color: #ccc; background: #3c3c3c; border: 1px solid #555; border-radius: 4px; cursor: pointer; white-space: nowrap; flex-shrink: 0; touch-action: manipulation; -webkit-user-select: none; user-select: none; }
     .cbtn:active { background: #505050; }
     .kb-btn { color: #4fc3f7; border-color: #4fc3f7; margin-left: auto; }
     #tinput { flex: 1; min-width: 0; padding: 5px 8px; font: 13px/1.4 monospace; color: #d4d4d4; background: #1e1e1e; border: 1px solid #555; border-radius: 4px; outline: none; resize: none; overflow-y: auto; }
     #tinput:focus { border-color: #4fc3f7; }
+    body.size-small .cbtn { padding: 3px 7px; font-size: 11px; }
+    body.size-large .cbtn { padding: 7px 14px; font-size: 14px; }
   </style>
 </head>
 <body>
   <div id="status"><span id="status-main">Connecting...</span><span id="status-usage"></span></div>
   <div id="terminal"></div>
-  <div id="ctrl-bar"></div>
+  <div id="btn-rows"></div>
   <script src="/static/xterm.js"></script>
   <script src="/static/addon-fit.js"></script>
   <script>
@@ -1456,7 +1463,7 @@ const TERMINAL_HTML = `<!DOCTYPE html>
     var activeTabId = params.get('tab') || null
     var wsReady = false
     var inputMode = false
-    var kbConfig = ${safeJsJson(DEFAULT_KEYBOARD_CONFIG)}
+    var btnConfig = ${btnConfigJson}
 
     var statusMainEl = document.getElementById('status-main')
     var statusUsageEl = document.getElementById('status-usage')
@@ -1536,7 +1543,7 @@ const TERMINAL_HTML = `<!DOCTYPE html>
       ws.send(JSON.stringify({ type: 'input', tabId: activeTabId, data: data }))
     }
 
-    // --- Control bar ---
+    // --- Button rows ---
     function makeKbBtn() {
       var b = document.createElement('button')
       b.className = 'cbtn kb-btn'
@@ -1544,24 +1551,45 @@ const TERMINAL_HTML = `<!DOCTYPE html>
       return b
     }
 
-    function renderButtons() {
+    function renderButtonRows() {
       inputMode = false
-      ctrlBar.innerHTML = ''
-      kbConfig.buttons.forEach(function(btn) {
-        var b = document.createElement('button')
-        b.className = 'cbtn'
-        b.textContent = btn.label
-        b.addEventListener('click', (function(s) { return function() { sk(s) } })(btn.send))
-        ctrlBar.appendChild(b)
+      var container = document.getElementById('btn-rows')
+      container.innerHTML = ''
+      var rows = btnConfig.rows || []
+      if (rows.length === 0) {
+        var emptyRow = document.createElement('div')
+        emptyRow.className = 'btn-row'
+        var kb = makeKbBtn()
+        kb.addEventListener('click', switchToInput)
+        emptyRow.appendChild(kb)
+        container.appendChild(emptyRow)
+        return
+      }
+      rows.forEach(function(rowData, rowIdx) {
+        var row = document.createElement('div')
+        row.className = 'btn-row'
+        rowData.buttons.forEach(function(btn) {
+          var b = document.createElement('button')
+          b.className = 'cbtn'
+          b.textContent = btn.label
+          b.addEventListener('click', (function(s) { return function() { sk(s) } })(btn.send))
+          row.appendChild(b)
+        })
+        if (rowIdx === rows.length - 1) {
+          var kb = makeKbBtn()
+          kb.addEventListener('click', switchToInput)
+          row.appendChild(kb)
+        }
+        container.appendChild(row)
       })
-      var kb = makeKbBtn()
-      kb.addEventListener('click', switchToInput)
-      ctrlBar.appendChild(kb)
     }
 
     function switchToInput() {
       inputMode = true
-      ctrlBar.innerHTML = ''
+      var container = document.getElementById('btn-rows')
+      container.innerHTML = ''
+      var row = document.createElement('div')
+      row.className = 'btn-row'
       var inp = document.createElement('textarea')
       inp.id = 'tinput'
       inp.rows = 3
@@ -1571,12 +1599,13 @@ const TERMINAL_HTML = `<!DOCTYPE html>
       inp.setAttribute('spellcheck', 'false')
       inp.placeholder = 'Type command... (Enter = newline, ⌨ = send)'
       inp.addEventListener('focus', function() {
-        setTimeout(function() { ctrlBar.scrollIntoView(false) }, 350)
+        setTimeout(function() { container.scrollIntoView(false) }, 350)
       })
-      ctrlBar.appendChild(inp)
+      row.appendChild(inp)
       var kb = makeKbBtn()
       kb.addEventListener('click', sendAndClose)
-      ctrlBar.appendChild(kb)
+      row.appendChild(kb)
+      container.appendChild(row)
       setTimeout(function() { inp.focus() }, 30)
     }
 
@@ -1585,7 +1614,7 @@ const TERMINAL_HTML = `<!DOCTYPE html>
       var LF = String.fromCharCode(10)
       var CR = String.fromCharCode(13)
       if (inp && inp.value) sk(inp.value.split(LF).join(CR) + CR)
-      renderButtons()
+      renderButtonRows()
     }
 
     // Tapping terminal while in input mode re-focuses the input
@@ -1658,13 +1687,9 @@ const TERMINAL_HTML = `<!DOCTYPE html>
     new ResizeObserver(doResize).observe(document.getElementById('terminal'))
     applyViewport()
 
-    // Load keyboard config from server — may override defaults if user has custom file
-    fetch('/api/keyboard-config')
-      .then(function(r) { return r.json() })
-      .then(function(cfg) { kbConfig = cfg; renderButtons() })
-      .catch(function() {})
-
-    renderButtons()
+    document.body.classList.add('size-' + (btnConfig.size || 'medium'))
+    renderButtonRows()
   </script>
 </body>
 </html>`
+}

@@ -24,9 +24,20 @@ export interface UpdatesConfig {
   notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly'
 }
 
+export interface RemoteCustomButton {
+  label: string
+  send: string
+}
+
+export interface RemoteButtonRow {
+  buttons: RemoteCustomButton[]
+}
+
 export interface RemoteConfig {
   enabled: boolean
   remoteHost: string
+  buttonSize: 'small' | 'medium' | 'large'
+  buttonRows: RemoteButtonRow[]
 }
 
 export interface SettingsAPI {

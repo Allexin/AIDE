@@ -9,9 +9,20 @@ interface UpdatesConfig {
   notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly'
 }
 
+interface RemoteCustomButton {
+  label: string
+  send: string
+}
+
+interface RemoteButtonRow {
+  buttons: RemoteCustomButton[]
+}
+
 interface RemoteConfig {
   enabled: boolean
   remoteHost: string
+  buttonSize: 'small' | 'medium' | 'large'
+  buttonRows: RemoteButtonRow[]
 }
 
 interface ToolSettingsEntry {
@@ -113,7 +124,7 @@ function ToolSettingsSection({ entry, onChange }: {
 export default function SettingsApp(): React.ReactElement {
   const [reasoning, setReasoning] = useState<ReasoningConfig>({ showPanel: false })
   const [updates, setUpdates] = useState<UpdatesConfig>({ notifyFrequency: 'daily' })
-  const [remote, setRemote] = useState<RemoteConfig>({ enabled: false, remoteHost: '' })
+  const [remote, setRemote] = useState<RemoteConfig>({ enabled: false, remoteHost: '', buttonSize: 'medium', buttonRows: [] })
   const [initialRemoteEnabled, setInitialRemoteEnabled] = useState(false)
   const [activatedTools, setActivatedTools] = useState<{ id: string; name: string }[]>([])
   const [selectedToolId, setSelectedToolId] = useState('')
@@ -266,6 +277,108 @@ export default function SettingsApp(): React.ReactElement {
             External address shown as an extra QR code in the Remote Connect dialog.<br />
             Leave blank to show local network URLs only.
           </p>
+        </div>
+
+        <div style={{ marginTop: 14 }}>
+          <label style={{ display: 'block', marginBottom: 8, color: '#999', fontSize: 12 }}>Button size</label>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {(['small', 'medium', 'large'] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setRemote({ ...remote, buttonSize: s })}
+                style={{
+                  padding: '4px 12px', border: '1px solid #555', borderRadius: 3,
+                  background: remote.buttonSize === s ? '#0e639c' : '#2a2a2a',
+                  color: remote.buttonSize === s ? '#fff' : '#ccc', fontSize: 12, cursor: 'pointer'
+                }}
+              >
+                {s[0].toUpperCase() + s.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ marginTop: 14 }}>
+          <label style={{ display: 'block', marginBottom: 8, color: '#999', fontSize: 12 }}>Button rows</label>
+          <p style={{ margin: '0 0 8px', fontSize: 11, color: '#777', lineHeight: 1.5 }}>
+            Row 1 is always visible. Additional rows appear in the shutter above the log.<br />
+            Use escape notation in Send: <code style={{ color: '#aaa' }}>\r</code> = Enter, <code style={{ color: '#aaa' }}>\x03</code> = Ctrl+C, <code style={{ color: '#aaa' }}>\x1b</code> = Esc.
+          </p>
+          {(remote.buttonRows ?? []).map((row, rowIdx) => (
+            <div key={rowIdx} style={{ border: '1px solid #333', borderRadius: 3, padding: '8px 10px', marginBottom: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <span style={{ fontSize: 11, color: '#777' }}>
+                  {rowIdx === 0 ? 'Row 1 — always visible' : `Row ${rowIdx + 1} — in shutter`}
+                </span>
+                {rowIdx > 0 && (
+                  <button
+                    onClick={() => {
+                      const rows = [...(remote.buttonRows ?? [])]
+                      rows.splice(rowIdx, 1)
+                      setRemote({ ...remote, buttonRows: rows })
+                    }}
+                    style={{ background: 'none', border: 'none', color: '#888', fontSize: 12, cursor: 'pointer', padding: 0 }}
+                  >
+                    Remove row
+                  </button>
+                )}
+              </div>
+              {row.buttons.map((btn, btnIdx) => (
+                <div key={btnIdx} style={{ display: 'flex', gap: 4, marginBottom: 4, alignItems: 'center' }}>
+                  <input
+                    value={btn.label}
+                    onChange={(e) => {
+                      const rows = (remote.buttonRows ?? []).map((r, ri) =>
+                        ri !== rowIdx ? r : { ...r, buttons: r.buttons.map((b, bi) => bi !== btnIdx ? b : { ...b, label: e.target.value }) }
+                      )
+                      setRemote({ ...remote, buttonRows: rows })
+                    }}
+                    placeholder="Label"
+                    style={{ ...inputStyle, width: 80, flex: '0 0 auto' }}
+                  />
+                  <input
+                    value={btn.send}
+                    onChange={(e) => {
+                      const rows = (remote.buttonRows ?? []).map((r, ri) =>
+                        ri !== rowIdx ? r : { ...r, buttons: r.buttons.map((b, bi) => bi !== btnIdx ? b : { ...b, send: e.target.value }) }
+                      )
+                      setRemote({ ...remote, buttonRows: rows })
+                    }}
+                    placeholder="\r  \x03  text…"
+                    style={{ ...inputStyle, flex: 1, fontFamily: 'monospace', fontSize: 12 }}
+                  />
+                  <button
+                    onClick={() => {
+                      const rows = (remote.buttonRows ?? []).map((r, ri) =>
+                        ri !== rowIdx ? r : { ...r, buttons: r.buttons.filter((_, bi) => bi !== btnIdx) }
+                      )
+                      setRemote({ ...remote, buttonRows: rows })
+                    }}
+                    style={{ background: 'none', border: 'none', color: '#888', fontSize: 16, cursor: 'pointer', padding: '0 4px', flex: '0 0 auto', lineHeight: 1 }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <button
+                onClick={() => {
+                  const rows = (remote.buttonRows ?? []).map((r, ri) =>
+                    ri !== rowIdx ? r : { ...r, buttons: [...r.buttons, { label: '', send: '' }] }
+                  )
+                  setRemote({ ...remote, buttonRows: rows })
+                }}
+                style={{ fontSize: 11, color: '#4fc3f7', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
+              >
+                + Add button
+              </button>
+            </div>
+          ))}
+          <button
+            onClick={() => setRemote({ ...remote, buttonRows: [...(remote.buttonRows ?? []), { buttons: [] }] })}
+            style={{ fontSize: 11, color: '#4fc3f7', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
+          >
+            + Add row
+          </button>
         </div>
 
         {activatedTools.length > 0 && (
