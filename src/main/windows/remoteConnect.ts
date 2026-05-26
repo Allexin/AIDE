@@ -18,8 +18,10 @@ export function openRemoteConnectWindow(port: number): void {
     icon: join(__dirname, '../../app_icon.ico'),
     backgroundColor: '#1e1e1e',
     webPreferences: {
+      preload: join(__dirname, '../preload/remoteConnect.js'),
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      sandbox: false
     }
   })
 

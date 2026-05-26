@@ -24,6 +24,11 @@ export interface UpdatesConfig {
   notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly'
 }
 
+export interface RemoteConfig {
+  enabled: boolean
+  remoteHost: string
+}
+
 export interface SettingsAPI {
   getReasoningConfig: () => Promise<ReasoningConfig>
   saveReasoningConfig: (config: ReasoningConfig) => Promise<void>
@@ -34,6 +39,10 @@ export interface SettingsAPI {
   resizeWindow: (height: number) => void
   getUpdatesConfig: () => Promise<UpdatesConfig>
   saveUpdatesConfig: (config: UpdatesConfig) => Promise<void>
+  getRemoteConfig: () => Promise<RemoteConfig>
+  saveRemoteConfig: (config: RemoteConfig) => Promise<void>
+  getActivatedTools: () => Promise<{ id: string; name: string }[]>
+  askAiAboutRemote: (toolId: string) => Promise<void>
 }
 
 const settingsApi: SettingsAPI = {
@@ -45,7 +54,11 @@ const settingsApi: SettingsAPI = {
   getLoginIdentifier: (toolId) => ipcRenderer.invoke('accounts:get-login-identifier', toolId),
   resizeWindow: (height) => ipcRenderer.send('settings:resize', height),
   getUpdatesConfig: () => ipcRenderer.invoke('settings:get-updates'),
-  saveUpdatesConfig: (config) => ipcRenderer.invoke('settings:save-updates', config)
+  saveUpdatesConfig: (config) => ipcRenderer.invoke('settings:save-updates', config),
+  getRemoteConfig: () => ipcRenderer.invoke('settings:get-remote'),
+  saveRemoteConfig: (config) => ipcRenderer.invoke('settings:save-remote', config),
+  getActivatedTools: () => ipcRenderer.invoke('settings:get-activated-tools'),
+  askAiAboutRemote: (toolId) => ipcRenderer.invoke('settings:ask-ai-remote', toolId)
 }
 
 contextBridge.exposeInMainWorld('settingsApi', settingsApi)

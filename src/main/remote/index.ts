@@ -1,7 +1,6 @@
 import http from 'http'
 import { readFileSync } from 'fs'
 import { join, basename } from 'path'
-import { spawn, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
 import { WebSocket, WebSocketServer } from 'ws'
 import { networkInterfaces } from 'os'
@@ -12,6 +11,9 @@ import { loadOrGeneratePin, regeneratePin, validatePin } from './auth'
 import { PtyBridge } from './ptyBridge'
 import { getAppConfig } from '../config/appConfig'
 import { getToolById } from '../pty/cliTools/registry'
+import { readToolbarButtons as readProjectToolbarButtons, type ToolbarButton, isSplitter } from '../config/toolbarConfig'
+import { spawnButtonProcess, killButtonProcess, addProcessObserver, addOutputObserver, getRunningButtonIds } from '../toolbar/processManager'
+import { addLogObserver } from '../pty/cliTools/cliLogger'
 
 const AGGREGATOR_PORT = 3847
 const SESSION_TTL = 24 * 60 * 60 * 1000  // 24 hours
@@ -48,13 +50,6 @@ interface RegistryEntry {
   lastSeen: number
 }
 
-interface TbButton {
-  id: string
-  icon: string
-  tooltip: string
-  command: string
-}
-
 function getLocalIps(): string[] {
   const ips: string[] = []
   const nets = networkInterfaces()
@@ -81,9 +76,10 @@ export class RemoteServer {
   private lastUnauthNotify = 0
   private cleanupInterval: ReturnType<typeof setInterval> | null = null
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null
-  private toolbarProcs = new Map<string, ChildProcess>()
-  private toolbarLogBuf: Array<{ buttonId: string; line: string }> = []
   private toolbarWatchers = new Set<WebSocket>()
+  private logBuf = new Map<string, string[]>()       // channel → last 500 lines
+  private logWatchers = new Set<WebSocket>()
+  private unsubObservers: Array<() => void> = []
 
   private bridge: PtyBridge
   private pin = ''
@@ -107,6 +103,23 @@ export class RemoteServer {
 
     this.pin = loadOrGeneratePin(this.pinPath)
 
+    // Mirror toolbar process events to web clients
+    this.unsubObservers.push(
+      addProcessObserver((win, event, buttonId, exitCode) => {
+        if (![...this.openProjects.values()].includes(win)) return
+        const msg = JSON.stringify({ type: 'toolbar-event', buttonId, event: event === 'started' ? 'started' : 'stopped', exitCode: exitCode ?? null })
+        for (const w of this.toolbarWatchers) {
+          if (w.readyState === WebSocket.OPEN) w.send(msg)
+        }
+      }),
+      addOutputObserver((channelName, line) => {
+        this.receiveLogLine(channelName, line)
+      }),
+      addLogObserver((channel, message) => {
+        this.receiveLogLine(channel, message)
+      })
+    )
+
     this.ownServer = http.createServer((req, res) => this.handleTerminalHttp(req, res))
     this.ownWss = new WebSocketServer({ server: this.ownServer })
     this.ownWss.on('connection', (ws) => this.handleConnection(ws))
@@ -118,13 +131,13 @@ export class RemoteServer {
   }
 
   stop(): void {
+    for (const unsub of this.unsubObservers) unsub()
+    this.unsubObservers = []
     this.stopHeartbeat()
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval)
       this.cleanupInterval = null
     }
-    for (const proc of this.toolbarProcs.values()) proc.kill()
-    this.toolbarProcs.clear()
     if (this.aggregatorServer === null && this.ownPort > 0) {
       this.postUnregister().catch(() => {})
     }
@@ -153,68 +166,27 @@ export class RemoteServer {
     this.bridge.forceRelease(tabId)
   }
 
-  private readToolbarButtons(): TbButton[] {
+  private getProjectButtons(): ToolbarButton[] {
     const projectPath = [...this.openProjects.keys()][0]
     if (!projectPath) return []
-    const merged = new Map<string, TbButton>()
-    for (const rel of ['aide/toolbar.json', '.aide/toolbar.json']) {
-      try {
-        const items = JSON.parse(readFileSync(join(projectPath, rel), 'utf-8')) as Array<Record<string, unknown>>
-        for (const it of items) {
-          if (it.type === 'splitter' || typeof it.id !== 'string' || typeof it.command !== 'string') continue
-          const rawIcon = typeof it.icon === 'string' ? it.icon : '▶'
-          const isFilePath = rawIcon.startsWith('.') || rawIcon.startsWith('/') || rawIcon.startsWith('file://') || /^[A-Za-z]:[\\/]/.test(rawIcon)
-          merged.set(it.id, {
-            id: it.id,
-            icon: isFilePath ? '▶' : rawIcon,
-            tooltip: typeof it.tooltip === 'string' ? it.tooltip : it.id,
-            command: it.command
-          })
-        }
-      } catch { /* file not found or invalid JSON */ }
-    }
-    return [...merged.values()]
+    return readProjectToolbarButtons(projectPath).filter((item): item is ToolbarButton => !isSplitter(item))
   }
 
-  private spawnToolbarButton(buttonId: string): void {
-    if (this.toolbarProcs.has(buttonId)) return
-    const btn = this.readToolbarButtons().find((b) => b.id === buttonId)
-    if (!btn) return
-    const projectPath = [...this.openProjects.keys()][0]
-    const proc = spawn(btn.command, [], { shell: true, cwd: projectPath ?? undefined })
-    this.toolbarProcs.set(buttonId, proc)
-    this.broadcastToolbarState(buttonId, 'started')
-    const pushLine = (line: string): void => {
-      this.toolbarLogBuf.push({ buttonId, line })
-      if (this.toolbarLogBuf.length > 2000) this.toolbarLogBuf.shift()
-      const msg = JSON.stringify({ type: 'toolbar-output', buttonId, line })
-      for (const w of this.toolbarWatchers) {
+  private receiveLogLine(channel: string, line: string): void {
+    if (!this.logBuf.has(channel)) {
+      this.logBuf.set(channel, [])
+      const msg = JSON.stringify({ type: 'log-channels', channels: [...this.logBuf.keys()] })
+      for (const w of this.logWatchers) {
         if (w.readyState === WebSocket.OPEN) w.send(msg)
       }
     }
-    proc.stdout?.on('data', (chunk: Buffer) => {
-      chunk.toString().split('\n').forEach((l) => { if (l) pushLine(l) })
-    })
-    proc.stderr?.on('data', (chunk: Buffer) => {
-      chunk.toString().split('\n').forEach((l) => { if (l) pushLine(l) })
-    })
-    proc.on('close', (code) => {
-      this.toolbarProcs.delete(buttonId)
-      this.broadcastToolbarState(buttonId, 'stopped', code)
-    })
-  }
-
-  private broadcastToolbarState(buttonId: string, event: 'started' | 'stopped', exitCode?: number | null): void {
-    const msg = JSON.stringify({ type: 'toolbar-event', buttonId, event, exitCode: exitCode ?? null })
-    for (const w of this.toolbarWatchers) {
+    const buf = this.logBuf.get(channel)!
+    buf.push(line)
+    if (buf.length > 500) buf.shift()
+    const msg = JSON.stringify({ type: 'log-line', channel, line })
+    for (const w of this.logWatchers) {
       if (w.readyState === WebSocket.OPEN) w.send(msg)
     }
-  }
-
-  private killToolbarButton(buttonId: string): void {
-    const proc = this.toolbarProcs.get(buttonId)
-    if (proc) proc.kill()
-    // toolbarProcs entry is removed when the 'close' event fires
   }
 
   private getProjectName(): string {
@@ -755,21 +727,47 @@ export class RemoteServer {
             if (activeTabId === msg.tabId) activeTabId = null
             break
           case 'toolbar-list': {
-            const buttons = this.readToolbarButtons()
-            const runningIds = [...this.toolbarProcs.keys()]
-            send({ type: 'toolbar-buttons', buttons, runningIds })
-            for (const entry of this.toolbarLogBuf.slice(-200)) {
-              send({ type: 'toolbar-output', buttonId: entry.buttonId, line: entry.line })
-            }
+            const buttons = this.getProjectButtons()
+            const win = [...this.openProjects.values()][0]
+            const runningIds = win && !win.isDestroyed() ? getRunningButtonIds(win) : []
+            const safeButtons = buttons.map((b) => ({
+              id: b.id,
+              icon: (b.icon.startsWith('.') || b.icon.startsWith('/') || b.icon.startsWith('file://') || /^[A-Za-z]:[\\/]/.test(b.icon)) ? '▶' : b.icon,
+              tooltip: b.tooltip
+            }))
+            send({ type: 'toolbar-buttons', buttons: safeButtons, runningIds })
             this.toolbarWatchers.add(ws)
             break
           }
-          case 'toolbar-run':
-            this.spawnToolbarButton(String(msg.buttonId ?? ''))
+          case 'toolbar-run': {
+            const buttonId = String(msg.buttonId ?? '')
+            const win = [...this.openProjects.values()][0]
+            if (win && !win.isDestroyed()) {
+              const projectPath = [...this.openProjects.keys()][0]
+              const button = this.getProjectButtons().find((b) => b.id === buttonId)
+              if (button && projectPath) spawnButtonProcess(win, button, projectPath)
+            }
             break
-          case 'toolbar-kill':
-            this.killToolbarButton(String(msg.buttonId ?? ''))
+          }
+          case 'toolbar-kill': {
+            const buttonId = String(msg.buttonId ?? '')
+            const win = [...this.openProjects.values()][0]
+            if (win && !win.isDestroyed()) killButtonProcess(win, buttonId)
             break
+          }
+          case 'log-subscribe': {
+            send({ type: 'log-channels', channels: [...this.logBuf.keys()] })
+            const ch = String(msg.channel ?? '')
+            if (ch && this.logBuf.has(ch)) {
+              for (const line of this.logBuf.get(ch)!) send({ type: 'log-line', channel: ch, line })
+            } else {
+              for (const [channel, lines] of this.logBuf) {
+                for (const line of lines.slice(-100)) send({ type: 'log-line', channel, line })
+              }
+            }
+            this.logWatchers.add(ws)
+            break
+          }
         }
       } catch {}
     })
@@ -777,6 +775,7 @@ export class RemoteServer {
     ws.on('close', () => {
       this.bridge.releaseAll(ws)
       this.toolbarWatchers.delete(ws)
+      this.logWatchers.delete(ws)
     })
   }
 }
@@ -1068,9 +1067,14 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
     .tb-btn.tb-running { border-color: #4fc3f7; color: #4fc3f7; }
     .tb-btn:active { background: #505050; }
     #tb-close-btn { flex-shrink: 0; background: none; border: none; color: #666; cursor: pointer; font-size: 16px; padding: 4px 8px; touch-action: manipulation; margin-left: auto; }
-    #tb-log { flex: 1; overflow-y: auto; font: 11px/1.5 monospace; padding: 4px 8px; }
+    #tb-tabs { flex-shrink: 0; display: flex; background: #252526; border-bottom: 1px solid #3d3d3d; overflow-x: auto; }
+    #tb-tabs::-webkit-scrollbar { display: none; }
+    .tb-tab { padding: 2px 12px; font: 11px/24px monospace; color: #666; background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+    .tb-tab.tb-tab-active { color: #ccc; border-bottom-color: #007acc; }
+    .tb-tab:hover:not(.tb-tab-active) { color: #aaa; }
+    #tb-log { flex: 1; min-height: 0; overflow-y: auto; font: 11px/1.5 monospace; padding: 4px 8px; }
     #tb-log p { margin: 0; white-space: pre-wrap; word-break: break-all; color: #ccc; }
-    #tb-log .tb-sep { color: #555; }
+    #tb-log .tb-sep { color: #888; }
   </style>
 </head>
 <body>
@@ -1081,6 +1085,7 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
       <div id="tb-btn-list" style="display:flex;gap:4px;flex:1;overflow-x:auto;min-width:0;"></div>
       <button id="tb-close-btn">&#x25BC;</button>
     </div>
+    <div id="tb-tabs"></div>
     <div id="tb-log"></div>
   </div>
   <div id="ctrl-bar"></div>
@@ -1097,6 +1102,9 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
     var tbOpen = false
     var tbButtons = []
     var tbRunning = new Set()
+    var logChannels = []        // channel names from server
+    var logBuf = {}             // channel → string[]
+    var logActiveChannel = null // currently shown channel
 
     var statusMainEl = document.getElementById('status-main')
     var statusUsageEl = document.getElementById('status-usage')
@@ -1175,8 +1183,16 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
 
     function openShutter() {
       tbOpen = true
+      logChannels = []
+      logBuf = {}
+      logActiveChannel = null
+      document.getElementById('tb-tabs').innerHTML = ''
+      document.getElementById('tb-log').innerHTML = ''
       document.getElementById('toolbar-shutter').classList.add('open')
-      if (wsReady) ws.send(JSON.stringify({ type: 'toolbar-list' }))
+      if (wsReady) {
+        ws.send(JSON.stringify({ type: 'toolbar-list' }))
+        ws.send(JSON.stringify({ type: 'log-subscribe' }))
+      }
       if (!inputMode) renderButtons()
     }
     function closeShutter() {
@@ -1197,7 +1213,6 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
             if (tbRunning.has(id)) {
               ws.send(JSON.stringify({ type: 'toolbar-kill', buttonId: id }))
             } else {
-              addTbSep('► ' + tip)
               ws.send(JSON.stringify({ type: 'toolbar-run', buttonId: id }))
             }
           }
@@ -1205,21 +1220,42 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
         list.appendChild(b)
       })
     }
-    function addTbLine(line) {
-      var log = document.getElementById('tb-log')
-      var p = document.createElement('p')
-      p.textContent = line
-      log.appendChild(p)
-      log.scrollTop = log.scrollHeight
-      while (log.children.length > 2000) log.removeChild(log.firstChild)
+    function renderLogTabs() {
+      var tabs = document.getElementById('tb-tabs')
+      tabs.innerHTML = ''
+      logChannels.forEach(function(ch) {
+        var btn = document.createElement('button')
+        btn.className = 'tb-tab' + (logActiveChannel === ch ? ' tb-tab-active' : '')
+        btn.textContent = ch
+        btn.addEventListener('click', (function(c) { return function() { switchLogChannel(c) } })(ch))
+        tabs.appendChild(btn)
+      })
     }
-    function addTbSep(text) {
+    function switchLogChannel(channel) {
+      logActiveChannel = channel
+      renderLogTabs()
       var log = document.getElementById('tb-log')
-      var p = document.createElement('p')
-      p.className = 'tb-sep'
-      p.textContent = text
-      log.appendChild(p)
+      log.innerHTML = ''
+      var lines = logBuf[channel] || []
+      lines.forEach(function(line) {
+        var p = document.createElement('p')
+        p.textContent = line
+        log.appendChild(p)
+      })
       log.scrollTop = log.scrollHeight
+    }
+    function appendLogLine(channel, line) {
+      if (!logBuf[channel]) logBuf[channel] = []
+      logBuf[channel].push(line)
+      if (logBuf[channel].length > 500) logBuf[channel].shift()
+      if (logActiveChannel === channel) {
+        var log = document.getElementById('tb-log')
+        var p = document.createElement('p')
+        p.textContent = line
+        log.appendChild(p)
+        log.scrollTop = log.scrollHeight
+        while (log.children.length > 500) log.removeChild(log.firstChild)
+      }
     }
     document.getElementById('tb-close-btn').addEventListener('click', closeShutter)
 
@@ -1302,7 +1338,10 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
         } else {
           ws.send(JSON.stringify({ type: 'list-tabs' }))
         }
-        if (tbOpen) ws.send(JSON.stringify({ type: 'toolbar-list' }))
+        if (tbOpen) {
+          ws.send(JSON.stringify({ type: 'toolbar-list' }))
+          ws.send(JSON.stringify({ type: 'log-subscribe' }))
+        }
       } else if (msg.type === 'auth-fail') {
         setStatus('Auth failed — session expired, reload the page')
       } else if (msg.type === 'tabs') {
@@ -1324,13 +1363,23 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
         tbButtons = msg.buttons || []
         tbRunning = new Set(msg.runningIds || [])
         renderTbButtons()
-      } else if (msg.type === 'toolbar-output') {
-        addTbLine(msg.line)
       } else if (msg.type === 'toolbar-event') {
         if (msg.event === 'started') tbRunning.add(msg.buttonId)
         else tbRunning.delete(msg.buttonId)
         renderTbButtons()
-        if (msg.event === 'stopped') addTbSep('✓ done (exit ' + msg.exitCode + ')')
+      } else if (msg.type === 'log-channels') {
+        var newChannels = msg.channels || []
+        var hadChannels = logChannels.length > 0
+        logChannels = newChannels
+        renderLogTabs()
+        if (!hadChannels && logChannels.length > 0) switchLogChannel(logChannels[0])
+      } else if (msg.type === 'log-line') {
+        if (logChannels.indexOf(msg.channel) < 0) {
+          logChannels.push(msg.channel)
+          renderLogTabs()
+          if (logActiveChannel === null) switchLogChannel(msg.channel)
+        }
+        appendLogLine(msg.channel, msg.line)
       }
     }
 

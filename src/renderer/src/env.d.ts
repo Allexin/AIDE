@@ -324,6 +324,15 @@ interface AccountManagerAPI {
   loadAccount: (toolId: string, accountId: string, autoSaveMode?: 'check' | 'force' | 'skip') => Promise<true | false | { conflict: AccountSwitchConflict }>
 }
 
+interface RemoteConfig {
+  enabled: boolean
+  remoteHost: string
+}
+
+interface RemoteConnectAPI {
+  openSettings: () => void
+}
+
 interface SettingsAPI {
   getReasoningConfig: () => Promise<{ showPanel: boolean }>
   saveReasoningConfig: (config: { showPanel: boolean }) => Promise<void>
@@ -334,6 +343,10 @@ interface SettingsAPI {
   resizeWindow: (height: number) => void
   getUpdatesConfig: () => Promise<{ notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly' }>
   saveUpdatesConfig: (config: { notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly' }) => Promise<void>
+  getRemoteConfig: () => Promise<RemoteConfig>
+  saveRemoteConfig: (config: RemoteConfig) => Promise<void>
+  getActivatedTools: () => Promise<{ id: string; name: string }[]>
+  askAiAboutRemote: (toolId: string) => Promise<void>
 }
 
 interface SettingsField {
@@ -368,4 +381,5 @@ declare interface Window {
   settingsApi: SettingsAPI
   cliToolsApi: CliToolsAPI
   historyViewerApi: HistoryViewerAPI
+  remoteConnectApi?: RemoteConnectAPI
 }

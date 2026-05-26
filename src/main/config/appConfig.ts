@@ -50,6 +50,11 @@ export interface UpdatesConfig {
   notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly'
 }
 
+export interface RemoteConfig {
+  enabled: boolean
+  remoteHost: string // external host:port or hostname shown in connect QR dialog
+}
+
 export interface AppConfig {
   editor: EditorConfig
   ui: UiConfig
@@ -58,6 +63,7 @@ export interface AppConfig {
   toolbar: ToolbarAppConfig
   reasoning: ReasoningConfig
   updates: UpdatesConfig
+  remote: RemoteConfig
   toolConfigs: Record<string, Record<string, unknown>>
 }
 
@@ -87,6 +93,10 @@ const DEFAULTS: AppConfig = {
   },
   updates: {
     notifyFrequency: 'daily'
+  },
+  remote: {
+    enabled: false,
+    remoteHost: ''
   },
   toolConfigs: {},
   toolbar: {
@@ -127,6 +137,7 @@ export function initAppConfig(): void {
         git: { ...DEFAULTS.git, ...(parsed.git ?? {}) },
         reasoning: { ...DEFAULTS.reasoning, ...(parsed.reasoning ?? {}) },
         updates: { ...DEFAULTS.updates, ...(parsed.updates ?? {}) },
+        remote: { ...DEFAULTS.remote, ...(parsed.remote ?? {}) },
         toolConfigs: { ...DEFAULTS.toolConfigs, ...(parsed.toolConfigs ?? {}) },
         toolbar: {
           sounds: {

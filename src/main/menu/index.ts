@@ -307,6 +307,21 @@ export function rebuildMenu(): void {
     {
       label: 'Remote Connect',
       click: (): void => {
+        if (!getAppConfig().remote.enabled) {
+          const parent = [...(openProjectsRef?.values() ?? [])].find((w) => !w.isDestroyed())
+          dialog.showMessageBox({
+            type: 'info',
+            title: 'Remote Access Disabled',
+            message: 'Remote access is disabled.',
+            detail: 'Enable it in Settings → Remote Access.',
+            buttons: ['Open Settings', 'Cancel'],
+            defaultId: 0,
+            cancelId: 1
+          }).then(({ response }) => {
+            if (response === 0) createSettingsWindow(parent)
+          })
+          return
+        }
         if (!remoteServerRef) {
           dialog.showMessageBox({ type: 'info', title: 'AIDE', message: 'Remote server not available.' })
           return

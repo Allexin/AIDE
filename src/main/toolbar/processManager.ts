@@ -11,6 +11,25 @@ interface RunningProcess {
 // Per-window process registry — keyed by button id
 const windowProcesses = new Map<BrowserWindow, Map<string, RunningProcess>>()
 
+type ProcessObserver = (win: BrowserWindow, event: 'started' | 'exited', buttonId: string, exitCode?: number | null) => void
+type OutputObserver = (channelName: string, line: string) => void
+const processObservers = new Set<ProcessObserver>()
+const outputObservers = new Set<OutputObserver>()
+
+export function addProcessObserver(fn: ProcessObserver): () => void {
+  processObservers.add(fn)
+  return () => { processObservers.delete(fn) }
+}
+
+export function addOutputObserver(fn: OutputObserver): () => void {
+  outputObservers.add(fn)
+  return () => { outputObservers.delete(fn) }
+}
+
+export function getRunningButtonIds(win: BrowserWindow): string[] {
+  return [...getMap(win).keys()]
+}
+
 function getMap(win: BrowserWindow): Map<string, RunningProcess> {
   if (!windowProcesses.has(win)) windowProcesses.set(win, new Map())
   return windowProcesses.get(win)!
@@ -60,8 +79,8 @@ export function spawnButtonProcess(
   const proc = spawn(command, [], { cwd, shell: true, windowsHide: true })
 
   map.set(button.id, { proc, button })
+  for (const obs of processObservers) obs(win, 'started', button.id)
   if (!win.isDestroyed()) {
-    // Collect channel names to clear (autoClear defaults to true)
     const clearChannels: string[] = []
     if (button.autoClear !== false && button.channels) {
       if (button.channels.stdout) clearChannels.push(button.channels.stdout.name)
@@ -79,8 +98,9 @@ export function spawnButtonProcess(
         .split('\n')
         .forEach((line) => {
           const t = line.replace(/\r$/, '')
-          if (t && !win.isDestroyed()) {
-            win.webContents.send('toolbar:output', { channelName, line: t, attention: false, flash: button.channels!.stdout!.flash ?? false })
+          if (t) {
+            for (const obs of outputObservers) obs(channelName, t)
+            if (!win.isDestroyed()) win.webContents.send('toolbar:output', { channelName, line: t, attention: false, flash: button.channels!.stdout!.flash ?? false })
           }
         })
     })
@@ -97,8 +117,9 @@ export function spawnButtonProcess(
         .split('\n')
         .forEach((line) => {
           const t = line.replace(/\r$/, '')
-          if (t && !win.isDestroyed()) {
-            win.webContents.send('toolbar:output', { channelName, line: t, attention, flash: stderrFlash })
+          if (t) {
+            for (const obs of outputObservers) obs(channelName, t)
+            if (!win.isDestroyed()) win.webContents.send('toolbar:output', { channelName, line: t, attention, flash: stderrFlash })
           }
         })
     })
@@ -106,9 +127,9 @@ export function spawnButtonProcess(
 
   // Process exited normally
   proc.on('close', (code) => {
-    // If removed from map by killButtonProcess, skip — it already notified the renderer
     if (!map.has(button.id)) return
     map.delete(button.id)
+    for (const obs of processObservers) obs(win, 'exited', button.id, code)
     if (!win.isDestroyed()) {
       win.webContents.send('toolbar:process-exited', { buttonId: button.id, exitCode: code })
     }
@@ -144,8 +165,7 @@ export function killButtonProcess(win: BrowserWindow, buttonId: string): void {
   // Remove BEFORE killing — 'close' event handler skips if not found in map
   map.delete(buttonId)
   forceKill(entry.proc)
-
-  // Notify renderer immediately (don't wait for OS to report process exit)
+  for (const obs of processObservers) obs(win, 'exited', buttonId, null)
   if (!win.isDestroyed()) {
     win.webContents.send('toolbar:process-exited', { buttonId, exitCode: null })
   }

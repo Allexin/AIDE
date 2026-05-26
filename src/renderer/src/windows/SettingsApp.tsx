@@ -9,6 +9,11 @@ interface UpdatesConfig {
   notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly'
 }
 
+interface RemoteConfig {
+  enabled: boolean
+  remoteHost: string
+}
+
 interface ToolSettingsEntry {
   toolId: string
   name: string
@@ -108,6 +113,10 @@ function ToolSettingsSection({ entry, onChange }: {
 export default function SettingsApp(): React.ReactElement {
   const [reasoning, setReasoning] = useState<ReasoningConfig>({ showPanel: false })
   const [updates, setUpdates] = useState<UpdatesConfig>({ notifyFrequency: 'daily' })
+  const [remote, setRemote] = useState<RemoteConfig>({ enabled: false, remoteHost: '' })
+  const [initialRemoteEnabled, setInitialRemoteEnabled] = useState(false)
+  const [activatedTools, setActivatedTools] = useState<{ id: string; name: string }[]>([])
+  const [selectedToolId, setSelectedToolId] = useState('')
   const [toolSettings, setToolSettings] = useState<ToolSettingsEntry[]>([])
   const [accountTools, setAccountTools] = useState<AccountToolEntry[]>([])
   const [accountIdentifiers, setAccountIdentifiers] = useState<Record<string, string | null>>({})
@@ -117,6 +126,14 @@ export default function SettingsApp(): React.ReactElement {
   useEffect(() => {
     window.settingsApi.getReasoningConfig().then(setReasoning)
     window.settingsApi.getUpdatesConfig().then(setUpdates)
+    window.settingsApi.getRemoteConfig().then((cfg) => {
+      setRemote(cfg)
+      setInitialRemoteEnabled(cfg.enabled)
+    })
+    window.settingsApi.getActivatedTools().then((tools) => {
+      setActivatedTools(tools)
+      if (tools.length > 0) setSelectedToolId(tools[0].id)
+    })
     window.settingsApi.getToolSettings().then(setToolSettings)
     window.settingsApi.getAccountTools().then(async (tools) => {
       setAccountTools(tools)
@@ -143,7 +160,8 @@ export default function SettingsApp(): React.ReactElement {
   const handleSave = async (): Promise<void> => {
     const saves: Promise<void>[] = [
       window.settingsApi.saveReasoningConfig(reasoning),
-      window.settingsApi.saveUpdatesConfig(updates)
+      window.settingsApi.saveUpdatesConfig(updates),
+      window.settingsApi.saveRemoteConfig(remote)
     ]
     for (const entry of toolSettings) {
       saves.push(window.settingsApi.updateToolSettings(entry.toolId, entry.values))
@@ -151,6 +169,11 @@ export default function SettingsApp(): React.ReactElement {
     await Promise.all(saves)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
+  }
+
+  const handleAskAiRemote = (): void => {
+    if (!selectedToolId) return
+    void window.settingsApi.askAiAboutRemote(selectedToolId)
   }
 
   const updateToolValues = (toolId: string, values: Record<string, unknown>): void => {
@@ -208,6 +231,68 @@ export default function SettingsApp(): React.ReactElement {
             Updates are always checked daily. This controls how often a notification dialog appears.
           </p>
         </div>
+      </fieldset>
+
+      <fieldset style={fieldsetStyle}>
+        <legend style={legendStyle}>Remote Access</legend>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 4 }}>
+          <input
+            type="checkbox"
+            checked={remote.enabled}
+            onChange={(e) => setRemote({ ...remote, enabled: e.target.checked })}
+          />
+          Allow remote connect
+        </label>
+
+        {remote.enabled !== initialRemoteEnabled && (
+          <p style={{ margin: '0 0 10px 24px', fontSize: 11, color: '#f5a623', lineHeight: 1.5 }}>
+            Restart all AIDE instances for this change to take effect.
+          </p>
+        )}
+
+        <div style={{ marginTop: 12, marginBottom: 10 }}>
+          <label style={{ display: 'block', marginBottom: 4, color: '#999', fontSize: 12 }}>
+            Remote host (optional)
+          </label>
+          <input
+            type="text"
+            placeholder="e.g. 100.64.1.5:3847 or abc123.trycloudflare.com"
+            value={remote.remoteHost}
+            onChange={(e) => setRemote({ ...remote, remoteHost: e.target.value })}
+            style={inputStyle}
+          />
+          <p style={{ margin: '4px 0 0', fontSize: 11, color: '#777', lineHeight: 1.5 }}>
+            External address shown as an extra QR code in the Remote Connect dialog.<br />
+            Leave blank to show local network URLs only.
+          </p>
+        </div>
+
+        {activatedTools.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+            <select
+              value={selectedToolId}
+              onChange={(e) => setSelectedToolId(e.target.value)}
+              style={{ ...inputStyle, width: 'auto', flex: '0 0 auto' }}
+            >
+              {activatedTools.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleAskAiRemote}
+              style={{
+                padding: '6px 14px', background: '#0e639c', border: 'none',
+                borderRadius: 3, color: '#fff', fontSize: 13, cursor: 'pointer', flexShrink: 0
+              }}
+            >
+              Ask AI
+            </button>
+            <span style={{ fontSize: 11, color: '#777' }}>
+              Help me set up secure internet access
+            </span>
+          </div>
+        )}
       </fieldset>
 
       <fieldset style={fieldsetStyle}>

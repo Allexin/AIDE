@@ -171,7 +171,7 @@ export class PtyManager {
 
     this.waitForReady(tabInfo.tabId).then((result) => {
       if (result === 'ok' && this.tabs.has(tabInfo.tabId)) {
-        this.write(tabInfo.tabId, prompt + '\r')
+        this.write(tabInfo.tabId, prompt.replace(/\n+/g, ' ').trim() + '\r')
       }
     })
 
