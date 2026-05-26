@@ -1,6 +1,7 @@
 import http from 'http'
 import { readFileSync } from 'fs'
 import { join, basename } from 'path'
+import { spawn, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
 import { WebSocket, WebSocketServer } from 'ws'
 import { networkInterfaces } from 'os'
@@ -47,6 +48,13 @@ interface RegistryEntry {
   lastSeen: number
 }
 
+interface TbButton {
+  id: string
+  icon: string
+  tooltip: string
+  command: string
+}
+
 function getLocalIps(): string[] {
   const ips: string[] = []
   const nets = networkInterfaces()
@@ -73,6 +81,9 @@ export class RemoteServer {
   private lastUnauthNotify = 0
   private cleanupInterval: ReturnType<typeof setInterval> | null = null
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null
+  private toolbarProcs = new Map<string, ChildProcess>()
+  private toolbarLogBuf: Array<{ buttonId: string; line: string }> = []
+  private toolbarWatchers = new Set<WebSocket>()
 
   private bridge: PtyBridge
   private pin = ''
@@ -112,6 +123,8 @@ export class RemoteServer {
       clearInterval(this.cleanupInterval)
       this.cleanupInterval = null
     }
+    for (const proc of this.toolbarProcs.values()) proc.kill()
+    this.toolbarProcs.clear()
     if (this.aggregatorServer === null && this.ownPort > 0) {
       this.postUnregister().catch(() => {})
     }
@@ -138,6 +151,70 @@ export class RemoteServer {
 
   forceReleaseTab(tabId: string): void {
     this.bridge.forceRelease(tabId)
+  }
+
+  private readToolbarButtons(): TbButton[] {
+    const projectPath = [...this.openProjects.keys()][0]
+    if (!projectPath) return []
+    const merged = new Map<string, TbButton>()
+    for (const rel of ['aide/toolbar.json', '.aide/toolbar.json']) {
+      try {
+        const items = JSON.parse(readFileSync(join(projectPath, rel), 'utf-8')) as Array<Record<string, unknown>>
+        for (const it of items) {
+          if (it.type === 'splitter' || typeof it.id !== 'string' || typeof it.command !== 'string') continue
+          const rawIcon = typeof it.icon === 'string' ? it.icon : '▶'
+          const isFilePath = rawIcon.startsWith('.') || rawIcon.startsWith('/') || rawIcon.startsWith('file://') || /^[A-Za-z]:[\\/]/.test(rawIcon)
+          merged.set(it.id, {
+            id: it.id,
+            icon: isFilePath ? '▶' : rawIcon,
+            tooltip: typeof it.tooltip === 'string' ? it.tooltip : it.id,
+            command: it.command
+          })
+        }
+      } catch { /* file not found or invalid JSON */ }
+    }
+    return [...merged.values()]
+  }
+
+  private spawnToolbarButton(buttonId: string): void {
+    if (this.toolbarProcs.has(buttonId)) return
+    const btn = this.readToolbarButtons().find((b) => b.id === buttonId)
+    if (!btn) return
+    const projectPath = [...this.openProjects.keys()][0]
+    const proc = spawn(btn.command, [], { shell: true, cwd: projectPath ?? undefined })
+    this.toolbarProcs.set(buttonId, proc)
+    this.broadcastToolbarState(buttonId, 'started')
+    const pushLine = (line: string): void => {
+      this.toolbarLogBuf.push({ buttonId, line })
+      if (this.toolbarLogBuf.length > 2000) this.toolbarLogBuf.shift()
+      const msg = JSON.stringify({ type: 'toolbar-output', buttonId, line })
+      for (const w of this.toolbarWatchers) {
+        if (w.readyState === WebSocket.OPEN) w.send(msg)
+      }
+    }
+    proc.stdout?.on('data', (chunk: Buffer) => {
+      chunk.toString().split('\n').forEach((l) => { if (l) pushLine(l) })
+    })
+    proc.stderr?.on('data', (chunk: Buffer) => {
+      chunk.toString().split('\n').forEach((l) => { if (l) pushLine(l) })
+    })
+    proc.on('close', (code) => {
+      this.toolbarProcs.delete(buttonId)
+      this.broadcastToolbarState(buttonId, 'stopped', code)
+    })
+  }
+
+  private broadcastToolbarState(buttonId: string, event: 'started' | 'stopped', exitCode?: number | null): void {
+    const msg = JSON.stringify({ type: 'toolbar-event', buttonId, event, exitCode: exitCode ?? null })
+    for (const w of this.toolbarWatchers) {
+      if (w.readyState === WebSocket.OPEN) w.send(msg)
+    }
+  }
+
+  private killToolbarButton(buttonId: string): void {
+    const proc = this.toolbarProcs.get(buttonId)
+    if (proc) proc.kill()
+    // toolbarProcs entry is removed when the 'close' event fires
   }
 
   private getProjectName(): string {
@@ -364,16 +441,18 @@ export class RemoteServer {
       return
     }
 
-    // PIN in URL (from QR code) → create session and redirect to picker.
+    // PIN in URL (from QR code) → create session and serve picker immediately.
+    // No redirect: SameSite=Strict cookies are blocked on follow-redirects
+    // initiated from cross-site contexts (QR scan, external navigation).
     const pinParam = urlObj.searchParams.get('pin')
     if (pinParam && validatePin(pinParam)) {
       const sessionToken = randomUUID()
       this.sessions.set(sessionToken, Date.now() + SESSION_TTL)
-      res.writeHead(302, {
-        'Set-Cookie': `aide-session=${sessionToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
-        'Location': '/'
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Set-Cookie': `aide-session=${sessionToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`
       })
-      res.end()
+      res.end(PICKER_HTML)
       return
     }
 
@@ -675,12 +754,29 @@ export class RemoteServer {
             this.bridge.releaseTab(ws, String(msg.tabId ?? ''))
             if (activeTabId === msg.tabId) activeTabId = null
             break
+          case 'toolbar-list': {
+            const buttons = this.readToolbarButtons()
+            const runningIds = [...this.toolbarProcs.keys()]
+            send({ type: 'toolbar-buttons', buttons, runningIds })
+            for (const entry of this.toolbarLogBuf.slice(-200)) {
+              send({ type: 'toolbar-output', buttonId: entry.buttonId, line: entry.line })
+            }
+            this.toolbarWatchers.add(ws)
+            break
+          }
+          case 'toolbar-run':
+            this.spawnToolbarButton(String(msg.buttonId ?? ''))
+            break
+          case 'toolbar-kill':
+            this.killToolbarButton(String(msg.buttonId ?? ''))
+            break
         }
       } catch {}
     })
 
     ws.on('close', () => {
       this.bridge.releaseAll(ws)
+      this.toolbarWatchers.delete(ws)
     })
   }
 }
@@ -964,11 +1060,29 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
     .kb-btn { color: #4fc3f7; border-color: #4fc3f7; margin-left: auto; }
     #tinput { flex: 1; min-width: 0; padding: 5px 8px; font: 13px/1.4 monospace; color: #d4d4d4; background: #1e1e1e; border: 1px solid #555; border-radius: 4px; outline: none; resize: none; overflow-y: auto; }
     #tinput:focus { border-color: #4fc3f7; }
+    #toolbar-shutter { flex-shrink: 0; height: 0; overflow: hidden; background: #1e1e1e; display: flex; flex-direction: column; border-top: 2px solid #007acc; transition: height 0.2s ease; }
+    #toolbar-shutter.open { height: 45vh; }
+    #tb-head { display: flex; align-items: center; gap: 4px; padding: 5px 8px; background: #252526; border-bottom: 1px solid #3d3d3d; flex-shrink: 0; overflow-x: auto; }
+    #tb-head::-webkit-scrollbar { display: none; }
+    .tb-btn { padding: 5px 10px; font-size: 15px; line-height: 1; background: #3c3c3c; border: 1px solid #555; border-radius: 4px; cursor: pointer; color: #ccc; white-space: nowrap; flex-shrink: 0; touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+    .tb-btn.tb-running { border-color: #4fc3f7; color: #4fc3f7; }
+    .tb-btn:active { background: #505050; }
+    #tb-close-btn { flex-shrink: 0; background: none; border: none; color: #666; cursor: pointer; font-size: 16px; padding: 4px 8px; touch-action: manipulation; margin-left: auto; }
+    #tb-log { flex: 1; overflow-y: auto; font: 11px/1.5 monospace; padding: 4px 8px; }
+    #tb-log p { margin: 0; white-space: pre-wrap; word-break: break-all; color: #ccc; }
+    #tb-log .tb-sep { color: #555; }
   </style>
 </head>
 <body>
   <div id="status"><span id="status-main">Connecting...</span><span id="status-usage"></span></div>
   <div id="terminal"></div>
+  <div id="toolbar-shutter">
+    <div id="tb-head">
+      <div id="tb-btn-list" style="display:flex;gap:4px;flex:1;overflow-x:auto;min-width:0;"></div>
+      <button id="tb-close-btn">&#x25BC;</button>
+    </div>
+    <div id="tb-log"></div>
+  </div>
   <div id="ctrl-bar"></div>
   <script src="/static/xterm.js"></script>
   <script src="/static/addon-fit.js"></script>
@@ -979,6 +1093,10 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
     var wsReady = false
     var inputMode = false
     var kbConfig = ${safeJsJson(defaultKbConfig)}
+
+    var tbOpen = false
+    var tbButtons = []
+    var tbRunning = new Set()
 
     var statusMainEl = document.getElementById('status-main')
     var statusUsageEl = document.getElementById('status-usage')
@@ -1055,6 +1173,56 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
       ws.send(JSON.stringify({ type: 'input', tabId: activeTabId, data: data }))
     }
 
+    function openShutter() {
+      tbOpen = true
+      document.getElementById('toolbar-shutter').classList.add('open')
+      if (wsReady) ws.send(JSON.stringify({ type: 'toolbar-list' }))
+      if (!inputMode) renderButtons()
+    }
+    function closeShutter() {
+      tbOpen = false
+      document.getElementById('toolbar-shutter').classList.remove('open')
+      if (!inputMode) renderButtons()
+    }
+    function renderTbButtons() {
+      var list = document.getElementById('tb-btn-list')
+      list.innerHTML = ''
+      tbButtons.forEach(function(btn) {
+        var b = document.createElement('button')
+        b.className = 'tb-btn' + (tbRunning.has(btn.id) ? ' tb-running' : '')
+        b.textContent = btn.icon
+        b.title = btn.tooltip
+        b.addEventListener('click', (function(id, tip) {
+          return function() {
+            if (tbRunning.has(id)) {
+              ws.send(JSON.stringify({ type: 'toolbar-kill', buttonId: id }))
+            } else {
+              addTbSep('► ' + tip)
+              ws.send(JSON.stringify({ type: 'toolbar-run', buttonId: id }))
+            }
+          }
+        })(btn.id, btn.tooltip))
+        list.appendChild(b)
+      })
+    }
+    function addTbLine(line) {
+      var log = document.getElementById('tb-log')
+      var p = document.createElement('p')
+      p.textContent = line
+      log.appendChild(p)
+      log.scrollTop = log.scrollHeight
+      while (log.children.length > 2000) log.removeChild(log.firstChild)
+    }
+    function addTbSep(text) {
+      var log = document.getElementById('tb-log')
+      var p = document.createElement('p')
+      p.className = 'tb-sep'
+      p.textContent = text
+      log.appendChild(p)
+      log.scrollTop = log.scrollHeight
+    }
+    document.getElementById('tb-close-btn').addEventListener('click', closeShutter)
+
     function makeKbBtn() {
       var b = document.createElement('button')
       b.className = 'cbtn kb-btn'
@@ -1065,6 +1233,13 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
     function renderButtons() {
       inputMode = false
       ctrlBar.innerHTML = ''
+      var tbTog = document.createElement('button')
+      tbTog.className = 'cbtn'
+      tbTog.style.color = '#4fc3f7'
+      tbTog.title = 'Toolbar'
+      tbTog.textContent = tbOpen ? '▼' : '▲'
+      tbTog.addEventListener('click', function() { tbOpen ? closeShutter() : openShutter() })
+      ctrlBar.appendChild(tbTog)
       kbConfig.buttons.forEach(function(btn) {
         var b = document.createElement('button')
         b.className = 'cbtn'
@@ -1127,6 +1302,7 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
         } else {
           ws.send(JSON.stringify({ type: 'list-tabs' }))
         }
+        if (tbOpen) ws.send(JSON.stringify({ type: 'toolbar-list' }))
       } else if (msg.type === 'auth-fail') {
         setStatus('Auth failed — session expired, reload the page')
       } else if (msg.type === 'tabs') {
@@ -1144,6 +1320,17 @@ function makeAggTerminalHtml(port: number, defaultKbConfig: KeyboardConfig): str
         setStatus('Error: ' + msg.message)
       } else if (msg.type === 'tab-closed') {
         if (msg.tabId === activeTabId) setStatus('Session closed')
+      } else if (msg.type === 'toolbar-buttons') {
+        tbButtons = msg.buttons || []
+        tbRunning = new Set(msg.runningIds || [])
+        renderTbButtons()
+      } else if (msg.type === 'toolbar-output') {
+        addTbLine(msg.line)
+      } else if (msg.type === 'toolbar-event') {
+        if (msg.event === 'started') tbRunning.add(msg.buttonId)
+        else tbRunning.delete(msg.buttonId)
+        renderTbButtons()
+        if (msg.event === 'stopped') addTbSep('✓ done (exit ' + msg.exitCode + ')')
       }
     }
 
