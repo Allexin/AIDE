@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import type { SettingsField } from '../../../shared/settingsTypes'
 
 interface ReasoningConfig {
@@ -38,11 +38,19 @@ interface AccountToolEntry {
   hasAccount: boolean
 }
 
+type TabId = 'general' | 'cli' | 'remote'
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: 'general', label: 'General' },
+  { id: 'cli', label: 'CLI Settings' },
+  { id: 'remote', label: 'Remote Access' }
+]
+
 const fieldsetStyle: React.CSSProperties = {
   border: '1px solid #444',
   borderRadius: 4,
   padding: '12px 16px',
-  margin: '16px 0 0'
+  margin: '0 0 14px'
 }
 
 const legendStyle: React.CSSProperties = {
@@ -122,6 +130,7 @@ function ToolSettingsSection({ entry, onChange }: {
 }
 
 export default function SettingsApp(): React.ReactElement {
+  const [activeTab, setActiveTab] = useState<TabId>('general')
   const [reasoning, setReasoning] = useState<ReasoningConfig>({ showPanel: false })
   const [updates, setUpdates] = useState<UpdatesConfig>({ notifyFrequency: 'daily' })
   const [remote, setRemote] = useState<RemoteConfig>({ enabled: false, remoteHost: '', buttonSize: 'medium', buttonRows: [] })
@@ -132,7 +141,6 @@ export default function SettingsApp(): React.ReactElement {
   const [accountTools, setAccountTools] = useState<AccountToolEntry[]>([])
   const [accountIdentifiers, setAccountIdentifiers] = useState<Record<string, string | null>>({})
   const [saved, setSaved] = useState(false)
-  const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     window.settingsApi.getReasoningConfig().then(setReasoning)
@@ -156,16 +164,6 @@ export default function SettingsApp(): React.ReactElement {
       }
       setAccountIdentifiers(ids)
     })
-  }, [])
-
-  useEffect(() => {
-    const el = rootRef.current
-    if (!el) return
-    const observer = new ResizeObserver(() => {
-      window.settingsApi.resizeWindow(el.offsetHeight)
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
   }, [])
 
   const handleSave = async (): Promise<void> => {
@@ -193,240 +191,286 @@ export default function SettingsApp(): React.ReactElement {
     )
   }
 
+  const tabBtnStyle = (id: TabId): React.CSSProperties => ({
+    padding: '7px 18px',
+    background: 'none',
+    border: 'none',
+    borderBottom: activeTab === id ? '2px solid #0e639c' : '2px solid transparent',
+    color: activeTab === id ? '#fff' : '#999',
+    fontSize: 13,
+    cursor: 'pointer',
+    marginBottom: -1,
+    outline: 'none'
+  })
+
   return (
-    <div ref={rootRef} style={{ padding: 24, color: '#ccc', fontFamily: 'Segoe UI, sans-serif', fontSize: 13 }}>
-      <h2 style={{ margin: '0 0 20px', fontSize: 16, color: '#e0e0e0' }}>Settings</h2>
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', color: '#ccc', fontFamily: 'Segoe UI, sans-serif', fontSize: 13, background: '#1e1e1e' }}>
 
-      {/* Accounts section */}
-      {accountTools.length > 0 && (
-        <fieldset style={{ ...fieldsetStyle, margin: '0 0 0' }}>
-          <legend style={legendStyle}>Accounts</legend>
-          {accountTools.map((tool) => (
-            <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <span style={{ fontWeight: 600, color: '#d4d4d4' }}>{tool.name}</span>
-              <span style={{ fontSize: 12, color: '#999' }}>
-                {accountIdentifiers[tool.id] ?? 'Not logged in'}
-              </span>
-            </div>
+      {/* Header */}
+      <div style={{ flexShrink: 0, padding: '14px 20px 0' }}>
+        <h2 style={{ margin: '0 0 10px', fontSize: 15, color: '#e0e0e0' }}>Settings</h2>
+        <div style={{ display: 'flex', borderBottom: '1px solid #333' }}>
+          {TABS.map((tab) => (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={tabBtnStyle(tab.id)}>
+              {tab.label}
+            </button>
           ))}
-        </fieldset>
-      )}
-
-      {/* Per-tool settings */}
-      {toolSettings.map((entry) => (
-        <ToolSettingsSection
-          key={entry.toolId}
-          entry={entry}
-          onChange={(values) => updateToolValues(entry.toolId, values)}
-        />
-      ))}
-
-      <fieldset style={fieldsetStyle}>
-        <legend style={legendStyle}>Updates</legend>
-
-        <div style={{ marginBottom: 10 }}>
-          <label style={{ display: 'block', marginBottom: 4, color: '#999', fontSize: 12 }}>
-            Notify about new versions
-          </label>
-          <select
-            value={updates.notifyFrequency}
-            onChange={(e) => setUpdates({ ...updates, notifyFrequency: e.target.value as UpdatesConfig['notifyFrequency'] })}
-            style={{ ...inputStyle }}
-          >
-            <option value="never">Never</option>
-            <option value="daily">Every day</option>
-            <option value="weekly">Every week</option>
-            <option value="monthly">Every month</option>
-          </select>
-          <p style={{ margin: '4px 0 0', fontSize: 11, color: '#777', lineHeight: 1.5 }}>
-            Updates are always checked daily. This controls how often a notification dialog appears.
-          </p>
         </div>
-      </fieldset>
+      </div>
 
-      <fieldset style={fieldsetStyle}>
-        <legend style={legendStyle}>Remote Access</legend>
+      {/* Scrollable content */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px 0' }}>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 4 }}>
-          <input
-            type="checkbox"
-            checked={remote.enabled}
-            onChange={(e) => setRemote({ ...remote, enabled: e.target.checked })}
-          />
-          Allow remote connect
-        </label>
+        {/* General tab */}
+        {activeTab === 'general' && (
+          <>
+            {accountTools.length > 0 && (
+              <fieldset style={fieldsetStyle}>
+                <legend style={legendStyle}>Accounts</legend>
+                {accountTools.map((tool) => (
+                  <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <span style={{ fontWeight: 600, color: '#d4d4d4' }}>{tool.name}</span>
+                    <span style={{ fontSize: 12, color: '#999' }}>
+                      {accountIdentifiers[tool.id] ?? 'Not logged in'}
+                    </span>
+                  </div>
+                ))}
+              </fieldset>
+            )}
 
-        {remote.enabled !== initialRemoteEnabled && (
-          <p style={{ margin: '0 0 10px 24px', fontSize: 11, color: '#f5a623', lineHeight: 1.5 }}>
-            Restart all AIDE instances for this change to take effect.
-          </p>
+            <fieldset style={fieldsetStyle}>
+              <legend style={legendStyle}>Updates</legend>
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ display: 'block', marginBottom: 4, color: '#999', fontSize: 12 }}>
+                  Notify about new versions
+                </label>
+                <select
+                  value={updates.notifyFrequency}
+                  onChange={(e) => setUpdates({ ...updates, notifyFrequency: e.target.value as UpdatesConfig['notifyFrequency'] })}
+                  style={{ ...inputStyle }}
+                >
+                  <option value="never">Never</option>
+                  <option value="daily">Every day</option>
+                  <option value="weekly">Every week</option>
+                  <option value="monthly">Every month</option>
+                </select>
+                <p style={{ margin: '4px 0 0', fontSize: 11, color: '#777', lineHeight: 1.5 }}>
+                  Updates are always checked daily. This controls how often a notification dialog appears.
+                </p>
+              </div>
+            </fieldset>
+
+            <fieldset style={fieldsetStyle}>
+              <legend style={legendStyle}>Reasoning</legend>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={reasoning.showPanel}
+                  onChange={(e) => setReasoning({ ...reasoning, showPanel: e.target.checked })}
+                />
+                Show reasoning panel
+              </label>
+              <p style={{ margin: 0, fontSize: 11, color: '#777', lineHeight: 1.5 }}>
+                Displays AI reasoning blocks above the log panel.<br />
+                Data may be absent if your client requests responses with reasoning disabled.
+              </p>
+            </fieldset>
+          </>
         )}
 
-        <div style={{ marginTop: 12, marginBottom: 10 }}>
-          <label style={{ display: 'block', marginBottom: 4, color: '#999', fontSize: 12 }}>
-            Remote host (optional)
-          </label>
-          <input
-            type="text"
-            placeholder="e.g. 100.64.1.5:3847 or abc123.trycloudflare.com"
-            value={remote.remoteHost}
-            onChange={(e) => setRemote({ ...remote, remoteHost: e.target.value })}
-            style={inputStyle}
-          />
-          <p style={{ margin: '4px 0 0', fontSize: 11, color: '#777', lineHeight: 1.5 }}>
-            External address shown as an extra QR code in the Remote Connect dialog.<br />
-            Leave blank to show local network URLs only.
-          </p>
-        </div>
-
-        <div style={{ marginTop: 14 }}>
-          <label style={{ display: 'block', marginBottom: 8, color: '#999', fontSize: 12 }}>Button size</label>
-          <div style={{ display: 'flex', gap: 6 }}>
-            {(['small', 'medium', 'large'] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => setRemote({ ...remote, buttonSize: s })}
-                style={{
-                  padding: '4px 12px', border: '1px solid #555', borderRadius: 3,
-                  background: remote.buttonSize === s ? '#0e639c' : '#2a2a2a',
-                  color: remote.buttonSize === s ? '#fff' : '#ccc', fontSize: 12, cursor: 'pointer'
-                }}
-              >
-                {s[0].toUpperCase() + s.slice(1)}
-              </button>
+        {/* CLI Settings tab */}
+        {activeTab === 'cli' && (
+          <>
+            {toolSettings.length === 0 && (
+              <p style={{ color: '#777', fontSize: 12 }}>No CLI tool settings available.</p>
+            )}
+            {toolSettings.map((entry) => (
+              <ToolSettingsSection
+                key={entry.toolId}
+                entry={entry}
+                onChange={(values) => updateToolValues(entry.toolId, values)}
+              />
             ))}
-          </div>
-        </div>
+          </>
+        )}
 
-        <div style={{ marginTop: 14 }}>
-          <label style={{ display: 'block', marginBottom: 8, color: '#999', fontSize: 12 }}>Button rows</label>
-          <p style={{ margin: '0 0 8px', fontSize: 11, color: '#777', lineHeight: 1.5 }}>
-            Row 1 is always visible. Additional rows appear in the shutter above the log.<br />
-            Use escape notation in Send: <code style={{ color: '#aaa' }}>\r</code> = Enter, <code style={{ color: '#aaa' }}>\x03</code> = Ctrl+C, <code style={{ color: '#aaa' }}>\x1b</code> = Esc.
-          </p>
-          {(remote.buttonRows ?? []).map((row, rowIdx) => (
-            <div key={rowIdx} style={{ border: '1px solid #333', borderRadius: 3, padding: '8px 10px', marginBottom: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <span style={{ fontSize: 11, color: '#777' }}>
-                  {rowIdx === 0 ? 'Row 1 — always visible' : `Row ${rowIdx + 1} — in shutter`}
-                </span>
-                {rowIdx > 0 && (
-                  <button
-                    onClick={() => {
-                      const rows = [...(remote.buttonRows ?? [])]
-                      rows.splice(rowIdx, 1)
-                      setRemote({ ...remote, buttonRows: rows })
-                    }}
-                    style={{ background: 'none', border: 'none', color: '#888', fontSize: 12, cursor: 'pointer', padding: 0 }}
-                  >
-                    Remove row
-                  </button>
-                )}
+        {/* Remote Access tab */}
+        {activeTab === 'remote' && (
+          <>
+            <fieldset style={fieldsetStyle}>
+              <legend style={legendStyle}>Connection</legend>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={remote.enabled}
+                  onChange={(e) => setRemote({ ...remote, enabled: e.target.checked })}
+                />
+                Allow remote connect
+              </label>
+
+              {remote.enabled !== initialRemoteEnabled && (
+                <p style={{ margin: '0 0 10px 24px', fontSize: 11, color: '#f5a623', lineHeight: 1.5 }}>
+                  Restart all AIDE instances for this change to take effect.
+                </p>
+              )}
+
+              <div style={{ marginTop: 12, marginBottom: 10 }}>
+                <label style={{ display: 'block', marginBottom: 4, color: '#999', fontSize: 12 }}>
+                  Remote host (optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. 100.64.1.5:3847 or abc123.trycloudflare.com"
+                  value={remote.remoteHost}
+                  onChange={(e) => setRemote({ ...remote, remoteHost: e.target.value })}
+                  style={inputStyle}
+                />
+                <p style={{ margin: '4px 0 0', fontSize: 11, color: '#777', lineHeight: 1.5 }}>
+                  External address shown as an extra QR code in the Remote Connect dialog.<br />
+                  Leave blank to show local network URLs only.
+                </p>
               </div>
-              {row.buttons.map((btn, btnIdx) => (
-                <div key={btnIdx} style={{ display: 'flex', gap: 4, marginBottom: 4, alignItems: 'center' }}>
-                  <input
-                    value={btn.label}
-                    onChange={(e) => {
-                      const rows = (remote.buttonRows ?? []).map((r, ri) =>
-                        ri !== rowIdx ? r : { ...r, buttons: r.buttons.map((b, bi) => bi !== btnIdx ? b : { ...b, label: e.target.value }) }
-                      )
-                      setRemote({ ...remote, buttonRows: rows })
+
+              {activatedTools.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                  <select
+                    value={selectedToolId}
+                    onChange={(e) => setSelectedToolId(e.target.value)}
+                    style={{ ...inputStyle, width: 'auto', flex: '0 0 auto' }}
+                  >
+                    {activatedTools.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={handleAskAiRemote}
+                    style={{
+                      padding: '6px 14px', background: '#0e639c', border: 'none',
+                      borderRadius: 3, color: '#fff', fontSize: 13, cursor: 'pointer', flexShrink: 0
                     }}
-                    placeholder="Label"
-                    style={{ ...inputStyle, width: 80, flex: '0 0 auto' }}
-                  />
-                  <input
-                    value={btn.send}
-                    onChange={(e) => {
-                      const rows = (remote.buttonRows ?? []).map((r, ri) =>
-                        ri !== rowIdx ? r : { ...r, buttons: r.buttons.map((b, bi) => bi !== btnIdx ? b : { ...b, send: e.target.value }) }
-                      )
-                      setRemote({ ...remote, buttonRows: rows })
-                    }}
-                    placeholder="\r  \x03  text…"
-                    style={{ ...inputStyle, flex: 1, fontFamily: 'monospace', fontSize: 12 }}
-                  />
+                  >
+                    Ask AI
+                  </button>
+                  <span style={{ fontSize: 11, color: '#777' }}>
+                    Help me set up secure internet access
+                  </span>
+                </div>
+              )}
+            </fieldset>
+
+            <fieldset style={fieldsetStyle}>
+              <legend style={legendStyle}>Button rows</legend>
+
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', marginBottom: 8, color: '#999', fontSize: 12 }}>Button size</label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {(['small', 'medium', 'large'] as const).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setRemote({ ...remote, buttonSize: s })}
+                      style={{
+                        padding: '4px 12px', border: '1px solid #555', borderRadius: 3,
+                        background: remote.buttonSize === s ? '#0e639c' : '#2a2a2a',
+                        color: remote.buttonSize === s ? '#fff' : '#ccc', fontSize: 12, cursor: 'pointer'
+                      }}
+                    >
+                      {s[0].toUpperCase() + s.slice(1)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <p style={{ margin: '0 0 8px', fontSize: 11, color: '#777', lineHeight: 1.5 }}>
+                Row 1 is always visible. Additional rows appear in the shutter above the log.<br />
+                Use escape notation in Send: <code style={{ color: '#aaa' }}>\r</code> = Enter,{' '}
+                <code style={{ color: '#aaa' }}>\x03</code> = Ctrl+C,{' '}
+                <code style={{ color: '#aaa' }}>\x1b</code> = Esc.
+              </p>
+
+              {(remote.buttonRows ?? []).map((row, rowIdx) => (
+                <div key={rowIdx} style={{ border: '1px solid #333', borderRadius: 3, padding: '8px 10px', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <span style={{ fontSize: 11, color: '#777' }}>
+                      {rowIdx === 0 ? 'Row 1 — always visible' : `Row ${rowIdx + 1} — in shutter`}
+                    </span>
+                    {rowIdx > 0 && (
+                      <button
+                        onClick={() => {
+                          const rows = [...(remote.buttonRows ?? [])]
+                          rows.splice(rowIdx, 1)
+                          setRemote({ ...remote, buttonRows: rows })
+                        }}
+                        style={{ background: 'none', border: 'none', color: '#888', fontSize: 12, cursor: 'pointer', padding: 0 }}
+                      >
+                        Remove row
+                      </button>
+                    )}
+                  </div>
+                  {row.buttons.map((btn, btnIdx) => (
+                    <div key={btnIdx} style={{ display: 'flex', gap: 4, marginBottom: 4, alignItems: 'center' }}>
+                      <input
+                        value={btn.label}
+                        onChange={(e) => {
+                          const rows = (remote.buttonRows ?? []).map((r, ri) =>
+                            ri !== rowIdx ? r : { ...r, buttons: r.buttons.map((b, bi) => bi !== btnIdx ? b : { ...b, label: e.target.value }) }
+                          )
+                          setRemote({ ...remote, buttonRows: rows })
+                        }}
+                        placeholder="Label"
+                        style={{ ...inputStyle, width: 80, flex: '0 0 auto' }}
+                      />
+                      <input
+                        value={btn.send}
+                        onChange={(e) => {
+                          const rows = (remote.buttonRows ?? []).map((r, ri) =>
+                            ri !== rowIdx ? r : { ...r, buttons: r.buttons.map((b, bi) => bi !== btnIdx ? b : { ...b, send: e.target.value }) }
+                          )
+                          setRemote({ ...remote, buttonRows: rows })
+                        }}
+                        placeholder="\r  \x03  text…"
+                        style={{ ...inputStyle, flex: 1, fontFamily: 'monospace', fontSize: 12 }}
+                      />
+                      <button
+                        onClick={() => {
+                          const rows = (remote.buttonRows ?? []).map((r, ri) =>
+                            ri !== rowIdx ? r : { ...r, buttons: r.buttons.filter((_, bi) => bi !== btnIdx) }
+                          )
+                          setRemote({ ...remote, buttonRows: rows })
+                        }}
+                        style={{ background: 'none', border: 'none', color: '#888', fontSize: 16, cursor: 'pointer', padding: '0 4px', flex: '0 0 auto', lineHeight: 1 }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
                   <button
                     onClick={() => {
                       const rows = (remote.buttonRows ?? []).map((r, ri) =>
-                        ri !== rowIdx ? r : { ...r, buttons: r.buttons.filter((_, bi) => bi !== btnIdx) }
+                        ri !== rowIdx ? r : { ...r, buttons: [...r.buttons, { label: '', send: '' }] }
                       )
                       setRemote({ ...remote, buttonRows: rows })
                     }}
-                    style={{ background: 'none', border: 'none', color: '#888', fontSize: 16, cursor: 'pointer', padding: '0 4px', flex: '0 0 auto', lineHeight: 1 }}
+                    style={{ fontSize: 11, color: '#4fc3f7', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
                   >
-                    ×
+                    + Add button
                   </button>
                 </div>
               ))}
               <button
-                onClick={() => {
-                  const rows = (remote.buttonRows ?? []).map((r, ri) =>
-                    ri !== rowIdx ? r : { ...r, buttons: [...r.buttons, { label: '', send: '' }] }
-                  )
-                  setRemote({ ...remote, buttonRows: rows })
-                }}
+                onClick={() => setRemote({ ...remote, buttonRows: [...(remote.buttonRows ?? []), { buttons: [] }] })}
                 style={{ fontSize: 11, color: '#4fc3f7', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
               >
-                + Add button
+                + Add row
               </button>
-            </div>
-          ))}
-          <button
-            onClick={() => setRemote({ ...remote, buttonRows: [...(remote.buttonRows ?? []), { buttons: [] }] })}
-            style={{ fontSize: 11, color: '#4fc3f7', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
-          >
-            + Add row
-          </button>
-        </div>
-
-        {activatedTools.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
-            <select
-              value={selectedToolId}
-              onChange={(e) => setSelectedToolId(e.target.value)}
-              style={{ ...inputStyle, width: 'auto', flex: '0 0 auto' }}
-            >
-              {activatedTools.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
-            <button
-              onClick={handleAskAiRemote}
-              style={{
-                padding: '6px 14px', background: '#0e639c', border: 'none',
-                borderRadius: 3, color: '#fff', fontSize: 13, cursor: 'pointer', flexShrink: 0
-              }}
-            >
-              Ask AI
-            </button>
-            <span style={{ fontSize: 11, color: '#777' }}>
-              Help me set up secure internet access
-            </span>
-          </div>
+            </fieldset>
+          </>
         )}
-      </fieldset>
 
-      <fieldset style={fieldsetStyle}>
-        <legend style={legendStyle}>Reasoning</legend>
+      </div>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
-          <input
-            type="checkbox"
-            checked={reasoning.showPanel}
-            onChange={(e) => setReasoning({ ...reasoning, showPanel: e.target.checked })}
-          />
-          Show reasoning panel
-        </label>
-
-        <p style={{ margin: 0, fontSize: 11, color: '#777', lineHeight: 1.5 }}>
-          Displays AI reasoning blocks above the log panel.<br />
-          Data may be absent if your client requests responses with reasoning disabled.
-        </p>
-      </fieldset>
-
-      <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 12 }}>
+      {/* Footer */}
+      <div style={{ flexShrink: 0, padding: '10px 20px', borderTop: '1px solid #2a2a2a', display: 'flex', alignItems: 'center', gap: 12 }}>
         <button
           onClick={handleSave}
           style={{

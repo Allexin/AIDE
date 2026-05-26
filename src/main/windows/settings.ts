@@ -11,8 +11,10 @@ export function createSettingsWindow(parentWin?: BrowserWindow): BrowserWindow {
   }
 
   const win = new BrowserWindow({
-    width: 500,
-    height: 350,
+    width: 620,
+    height: 560,
+    minWidth: 480,
+    minHeight: 400,
     resizable: true,
     title: 'AIDE Settings',
     icon: join(__dirname, '../../app_icon.ico'),
