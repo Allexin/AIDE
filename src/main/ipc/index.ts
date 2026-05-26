@@ -37,6 +37,7 @@ import {
   killButtonProcess
 } from '../toolbar/processManager'
 import { setEditorFileOpen, rebuildMenu } from '../menu'
+import { createSettingsWindow } from '../windows/settings'
 import { thinkingRegistry } from '../thinking/thinkingRegistry'
 
 // Helper: spawn one git subcommand, stream stdout/stderr lines, return success/error.
@@ -1087,6 +1088,39 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   ipcMain.handle('settings:get-updates', () => getAppConfig().updates)
   ipcMain.handle('settings:save-updates', (_, config: UpdatesConfig) => {
     updateAppConfig({ updates: config })
+  })
+
+  // ── Settings: remote config ───────────────────────────────────────────────────
+  ipcMain.handle('settings:get-remote', () => getAppConfig().remote)
+
+  ipcMain.handle('settings:save-remote', (_, remote: { enabled: boolean; remoteHost: string }) => {
+    updateAppConfig({ remote })
+  })
+
+  ipcMain.handle('settings:get-activated-tools', () => {
+    const activated = getActivatedTools()
+    return getRegisteredTools()
+      .filter((t) => activated.includes(t.id))
+      .map((t) => ({ id: t.id, name: t.name }))
+  })
+
+  ipcMain.handle('settings:ask-ai-remote', async (_event, toolId: string) => {
+    // Find first available editor window with a PTY manager
+    const entry = [...ptyRegistry.entries()].find(([win]) => !win.isDestroyed())
+    if (!entry) return
+    const [win, ptyMgr] = entry
+    const prompt = `I need help setting up secure internet access to AIDE (a desktop app I use). AIDE has a remote access feature that works on the local network automatically on port 3847 — I need it accessible from outside my home network. I am an end user and do not have access to AIDE source code. Here are the options I know of: (1) Cloudflare Tunnel — run "cloudflared tunnel --url localhost:3847", gives a public HTTPS URL, no VPS needed, but may be blocked by some ISPs/firewalls; (2) Tailscale — mesh VPN, install on PC and phone, gives a private IP, no public URL, requires app on every device; (3) SSH Reverse Tunnel through your own VPS — ssh -N -R forwards port 3847, set up nginx + HTTPS on VPS, works through most firewalls, requires a Linux VPS; (4) NAT Port Forwarding — open port 3847 on your home router and forward it to your PC, simplest if you have router access, requires knowing your home IP; (5) Static IP — if your ISP provides a static public IP, combine with port forwarding for a permanent address; (6) Dynamic DNS (DDNS) — if your home IP changes, use a DDNS service (e.g. DuckDNS, No-IP) to get a stable hostname that always points to your current IP, combine with port forwarding. Please clearly explain all these options covering ease of setup, security, reliability, cost, and requirements — then ask me which one fits my situation. Once I choose, give me step-by-step setup instructions for Windows 11. After setup I will paste the external address into AIDE Settings → Remote Access → Remote host field.`
+
+    const tabInfo = await ptyMgr.createNewSessionWithPrompt(prompt, toolId, getActivatedTools())
+    if (tabInfo) {
+      win.webContents.send('terminal:new-tab', tabInfo)
+      win.focus()
+    }
+  })
+
+  // ── Remote: open settings from connect window ────────────────────────────────
+  ipcMain.on('remote:open-settings', () => {
+    createSettingsWindow()
   })
 
   // ── Session picker: new session ───────────────────────────────────────────────
