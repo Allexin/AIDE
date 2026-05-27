@@ -78,7 +78,7 @@ function runGitSubcommand(
   })
 }
 
-export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remoteServer?: { forceReleaseTab: (tabId: string) => void }): void {
+export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remoteServer?: { forceReleaseTab: (tabId: string) => void; refreshProjects?: () => void }): void {
   // Wire up CLI logger so any cliLog() call broadcasts to all renderer windows
   initCliLogger(() => openProjects.values())
 
@@ -90,7 +90,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
 
   // ── Picker: open a project path ─────────────────────────────────────────────
   ipcMain.handle('project:open', async (event, projectPath: string) => {
-    const result = openProjectAndTrack(projectPath, openProjects)
+    const result = openProjectAndTrack(projectPath, openProjects, () => remoteServer?.refreshProjects?.())
 
     if (result.success) {
       // Close the picker that triggered this

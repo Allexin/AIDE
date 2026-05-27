@@ -22,6 +22,7 @@ const SESSION_TTL = 24 * 60 * 60 * 1000  // 24 hours
 interface RegistryEntry {
   port: number
   projectName: string
+  projectPath: string
   pin: string
   lastSeen: number
 }
@@ -98,7 +99,7 @@ export class RemoteServer {
 
     this.ownServer = http.createServer((req, res) => this.handleTerminalHttp(req, res))
     this.ownWss = new WebSocketServer({ server: this.ownServer })
-    this.ownWss.on('connection', (ws) => this.handleConnection(ws))
+    this.ownWss.on('connection', (ws, req) => this.handleConnection(ws, req))
 
     this.ownServer.listen(0, () => {
       this.ownPort = (this.ownServer!.address() as { port: number }).port
@@ -142,8 +143,17 @@ export class RemoteServer {
     this.bridge.forceRelease(tabId)
   }
 
-  private getProjectButtons(): ToolbarButton[] {
-    const projectPath = [...this.openProjects.keys()][0]
+  refreshProjects(): void {
+    if (this.ownPort === 0) return
+    if (this.aggregatorServer) {
+      this.registerSelf()
+    } else {
+      this.postRegister().catch(() => {})
+    }
+  }
+
+  private getProjectButtons(projectPath?: string): ToolbarButton[] {
+    projectPath ??= [...this.openProjects.keys()][0]
     if (!projectPath) return []
     return readProjectToolbarButtons(projectPath).filter((item): item is ToolbarButton => !isSplitter(item))
   }
@@ -165,10 +175,21 @@ export class RemoteServer {
     }
   }
 
-  private getProjectName(): string {
-    const keys = [...this.openProjects.keys()]
-    if (keys.length === 0) return 'AIDE'
-    return basename(keys[0]) || 'AIDE'
+  private getProjectName(projectPath: string): string {
+    return basename(projectPath) || 'AIDE'
+  }
+
+  private getOpenProjectEntries(): Array<{ projectPath: string; projectName: string }> {
+    return [...this.openProjects.keys()].map((projectPath) => ({
+      projectPath,
+      projectName: this.getProjectName(projectPath)
+    }))
+  }
+
+  private findProjectWindow(projectPath: string | null | undefined): BrowserWindow | null {
+    if (!projectPath) return null
+    const win = this.openProjects.get(projectPath)
+    return win && !win.isDestroyed() ? win : null
   }
 
   // --- Session management ---
@@ -240,19 +261,24 @@ export class RemoteServer {
   }
 
   private registerSelf(): void {
-    this.registry.set(`${this.ownPort}`, {
-      port: this.ownPort,
-      projectName: this.getProjectName(),
-      pin: this.pin,
-      lastSeen: Date.now()
-    })
+    this.removeRegistryEntriesForPort(this.ownPort)
+    const now = Date.now()
+    for (const project of this.getOpenProjectEntries()) {
+      this.registry.set(this.registryKey(this.ownPort, project.projectPath), {
+        port: this.ownPort,
+        projectName: project.projectName,
+        projectPath: project.projectPath,
+        pin: this.pin,
+        lastSeen: now
+      })
+    }
   }
 
   private postRegister(): Promise<void> {
     return new Promise((resolve, reject) => {
       const body = JSON.stringify({
         port: this.ownPort,
-        projectName: this.getProjectName(),
+        projects: this.getOpenProjectEntries(),
         pin: this.pin
       })
       const req = http.request(
@@ -294,6 +320,16 @@ export class RemoteServer {
       req.on('error', reject)
       req.end(body)
     })
+  }
+
+  private registryKey(port: number, projectPath: string): string {
+    return `${port}:${projectPath}`
+  }
+
+  private removeRegistryEntriesForPort(port: number): void {
+    for (const [key, entry] of this.registry) {
+      if (entry.port === port) this.registry.delete(key)
+    }
   }
 
   // --- Aggregator HTTP handler (port 3847) ---
@@ -355,13 +391,25 @@ export class RemoteServer {
       req.on('data', (chunk: Buffer) => { body += chunk.toString() })
       req.on('end', () => {
         try {
-          const data = JSON.parse(body) as { port: number; projectName: string; pin: string }
-          this.registry.set(`${data.port}`, {
-            port: data.port,
-            projectName: data.projectName,
-            pin: data.pin,
-            lastSeen: Date.now()
-          })
+          const data = JSON.parse(body) as {
+            port: number
+            projectName?: string
+            projectPath?: string
+            projects?: Array<{ projectPath: string; projectName: string }>
+            pin: string
+          }
+          this.removeRegistryEntriesForPort(data.port)
+          const projects = data.projects ?? [{ projectPath: data.projectPath ?? String(data.port), projectName: data.projectName ?? 'AIDE' }]
+          const now = Date.now()
+          for (const project of projects) {
+            this.registry.set(this.registryKey(data.port, project.projectPath), {
+              port: data.port,
+              projectName: project.projectName,
+              projectPath: project.projectPath,
+              pin: data.pin,
+              lastSeen: now
+            })
+          }
           res.writeHead(200); res.end()
         } catch {
           res.writeHead(400); res.end()
@@ -376,7 +424,7 @@ export class RemoteServer {
       req.on('end', () => {
         try {
           const data = JSON.parse(body) as { port: number }
-          this.registry.delete(`${data.port}`)
+          this.removeRegistryEntriesForPort(data.port)
         } catch {}
         res.writeHead(200); res.end()
       })
@@ -429,7 +477,8 @@ export class RemoteServer {
     if (path === '/api/projects') {
       const projects = [...this.registry.values()].map((e) => ({
         port: e.port,
-        projectName: e.projectName
+        projectName: e.projectName,
+        projectId: e.projectPath
       }))
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify(projects))
@@ -439,11 +488,12 @@ export class RemoteServer {
     // Terminal page — proxied through aggregator so only port 3847 is needed externally.
     if (path === '/terminal') {
       const port = Number(urlObj.searchParams.get('port'))
-      if (!port || !this.registry.has(String(port))) {
+      const projectId = urlObj.searchParams.get('project') ?? ''
+      if (!port || !this.registry.has(this.registryKey(port, projectId))) {
         res.writeHead(404); res.end('Project not found'); return
       }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-      res.end(makeAggTerminalHtml(port))
+      res.end(makeAggTerminalHtml(port, projectId))
       return
     }
 
@@ -479,9 +529,10 @@ export class RemoteServer {
 
     const urlObj = new URL(req.url ?? '/', 'http://x')
     const port = Number(urlObj.searchParams.get('port'))
-    if (!port || !this.registry.has(String(port))) { ws.close(1008, 'Unknown project'); return }
+    const projectId = urlObj.searchParams.get('project') ?? ''
+    if (!port || !this.registry.has(this.registryKey(port, projectId))) { ws.close(1008, 'Unknown project'); return }
 
-    const upstream = new WebSocket(`ws://127.0.0.1:${port}/ws`)
+    const upstream = new WebSocket(`ws://127.0.0.1:${port}/ws?project=${encodeURIComponent(projectId)}`)
     let upstreamAuthed = false
     let clientAuthPending = false
     const clientQueue: string[] = []
@@ -633,9 +684,10 @@ export class RemoteServer {
 
   // --- WebSocket handler (own instance server) ---
 
-  private handleConnection(ws: WebSocket): void {
+  private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
     let authenticated = false
     let activeTabId: string | null = null
+    const projectPath = new URL(req.url ?? '/', 'http://x').searchParams.get('project') ?? ''
 
     const send = (data: object): void => {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data))
@@ -657,9 +709,11 @@ export class RemoteServer {
         }
 
         switch (msg.type) {
-          case 'list-tabs':
-            send({ type: 'tabs', tabs: this.bridge.getAllTabs() })
+          case 'list-tabs': {
+            const projectWin = this.findProjectWindow(projectPath)
+            send({ type: 'tabs', tabs: projectWin ? this.bridge.getTabsForWindow(projectWin) : this.bridge.getAllTabs() })
             break
+          }
           case 'take-tab': {
             const tabId = String(msg.tabId ?? '')
             const cols = Number(msg.cols ?? 80)
@@ -679,8 +733,8 @@ export class RemoteServer {
             if (activeTabId === msg.tabId) activeTabId = null
             break
           case 'toolbar-list': {
-            const buttons = this.getProjectButtons()
-            const win = [...this.openProjects.values()][0]
+            const buttons = this.getProjectButtons(projectPath)
+            const win = this.findProjectWindow(projectPath) ?? [...this.openProjects.values()][0]
             const runningIds = win && !win.isDestroyed() ? getRunningButtonIds(win) : []
             const safeButtons = buttons.map((b) => ({
               id: b.id,
@@ -693,17 +747,16 @@ export class RemoteServer {
           }
           case 'toolbar-run': {
             const buttonId = String(msg.buttonId ?? '')
-            const win = [...this.openProjects.values()][0]
+            const win = this.findProjectWindow(projectPath)
             if (win && !win.isDestroyed()) {
-              const projectPath = [...this.openProjects.keys()][0]
-              const button = this.getProjectButtons().find((b) => b.id === buttonId)
+              const button = this.getProjectButtons(projectPath).find((b) => b.id === buttonId)
               if (button && projectPath) spawnButtonProcess(win, button, projectPath)
             }
             break
           }
           case 'toolbar-kill': {
             const buttonId = String(msg.buttonId ?? '')
-            const win = [...this.openProjects.values()][0]
+            const win = this.findProjectWindow(projectPath)
             if (win && !win.isDestroyed()) killButtonProcess(win, buttonId)
             break
           }
@@ -983,7 +1036,7 @@ const PICKER_HTML = `<!DOCTYPE html>
             list.innerHTML = '<div class="empty">No projects available.</div>'
           } else {
             list.innerHTML = projects.map(function(p) {
-              var url = '/terminal?port=' + p.port
+              var url = '/terminal?port=' + p.port + '&project=' + encodeURIComponent(p.projectId)
               return '<div class="item">' +
                 '<span class="name">' + p.projectName.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</span>' +
                 '<a class="open" href="' + url + '">Open</a>' +
@@ -1004,12 +1057,13 @@ const PICKER_HTML = `<!DOCTYPE html>
 
 // Terminal page served by the aggregator. All traffic goes through port 3847 —
 // the client never needs direct access to the instance's random port.
-function makeAggTerminalHtml(port: number): string {
+function makeAggTerminalHtml(port: number, projectId: string): string {
   const remote = getAppConfig().remote
   const btnConfigJson = safeJsJson({
     size: remote.buttonSize ?? 'medium',
     rows: processButtonRows(remote.buttonRows ?? [])
   })
+  const projectIdJson = safeJsJson(projectId)
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -1073,6 +1127,7 @@ function makeAggTerminalHtml(port: number): string {
   <script src="/static/addon-fit.js"></script>
   <script>
     var port = ${port}
+    var projectId = ${projectIdJson}
     var params = new URLSearchParams(location.search)
     var activeTabId = params.get('tab') || null
     var wsReady = false
@@ -1090,7 +1145,21 @@ function makeAggTerminalHtml(port: number): string {
     var statusUsageEl = document.getElementById('status-usage')
     var ctrlBar = document.getElementById('ctrl-bar')
     var usagePollTimer = null
+    var ws = null
+    var reconnectTimer = null
+    var reconnectDelay = 1000
+    var shouldReconnect = true
     function setStatus(t) { statusMainEl.textContent = t }
+    function isConnected() { return wsReady && ws && ws.readyState === WebSocket.OPEN }
+    function updateInputState() {
+      var inp = document.getElementById('tinput')
+      if (inp) inp.disabled = !isConnected()
+    }
+    function sendWs(data) {
+      if (!isConnected()) return false
+      ws.send(JSON.stringify(data))
+      return true
+    }
     function fetchUsage() {
       if (!activeTabId) return
       fetch('/api/usage?port=' + port + '&tab=' + encodeURIComponent(activeTabId))
@@ -1154,11 +1223,11 @@ function makeAggTerminalHtml(port: number): string {
 
     // --- WebSocket (through aggregator on same host/port) ---
     var proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    var ws = new WebSocket(proto + '://' + location.host + '/ws?port=' + port)
+    var wsUrl = proto + '://' + location.host + '/ws?port=' + port + '&project=' + encodeURIComponent(projectId)
 
     function sk(data) {
-      if (!activeTabId || !wsReady) return
-      ws.send(JSON.stringify({ type: 'input', tabId: activeTabId, data: data }))
+      if (!activeTabId) return false
+      return sendWs({ type: 'input', tabId: activeTabId, data: data })
     }
 
     function openShutter() {
@@ -1169,9 +1238,9 @@ function makeAggTerminalHtml(port: number): string {
       document.getElementById('tb-tabs').innerHTML = ''
       document.getElementById('tb-log').innerHTML = ''
       document.getElementById('toolbar-shutter').classList.add('open')
-      if (wsReady) {
-        ws.send(JSON.stringify({ type: 'toolbar-list' }))
-        ws.send(JSON.stringify({ type: 'log-subscribe' }))
+      if (isConnected()) {
+        sendWs({ type: 'toolbar-list' })
+        sendWs({ type: 'log-subscribe' })
       }
       if (!inputMode) renderButtons()
     }
@@ -1191,9 +1260,9 @@ function makeAggTerminalHtml(port: number): string {
         b.addEventListener('click', (function(id, tip) {
           return function() {
             if (tbRunning.has(id)) {
-              ws.send(JSON.stringify({ type: 'toolbar-kill', buttonId: id }))
+              sendWs({ type: 'toolbar-kill', buttonId: id })
             } else {
-              ws.send(JSON.stringify({ type: 'toolbar-run', buttonId: id }))
+              sendWs({ type: 'toolbar-run', buttonId: id })
             }
           }
         })(btn.id, btn.tooltip))
@@ -1299,6 +1368,7 @@ function makeAggTerminalHtml(port: number): string {
       inp.setAttribute('autocapitalize', 'off')
       inp.setAttribute('spellcheck', 'false')
       inp.placeholder = 'Type command... (Enter = newline, ⌨ = send)'
+      inp.disabled = !isConnected()
       inp.addEventListener('focus', function() {
         setTimeout(function() { ctrlBar.scrollIntoView(false) }, 350)
       })
@@ -1313,7 +1383,11 @@ function makeAggTerminalHtml(port: number): string {
       var inp = document.getElementById('tinput')
       var LF = String.fromCharCode(10)
       var CR = String.fromCharCode(13)
-      if (inp && inp.value) sk(inp.value.split(LF).join(CR) + CR)
+      if (inp && inp.value && !sk(inp.value.split(LF).join(CR) + CR)) {
+        setStatus('Disconnected — reconnecting...')
+        updateInputState()
+        return
+      }
       renderButtons()
     }
 
@@ -1324,25 +1398,60 @@ function makeAggTerminalHtml(port: number): string {
       }
     })
 
-    ws.onopen = function() { ws.send(JSON.stringify({ type: 'auth', token: '' })) }
+    function connectWs() {
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      wsReady = false
+      updateInputState()
+      setStatus(reconnectDelay === 1000 ? 'Connecting...' : 'Reconnecting...')
+      ws = new WebSocket(wsUrl)
+      ws.onopen = function() {
+        ws.send(JSON.stringify({ type: 'auth', token: '' }))
+      }
+      ws.onmessage = handleWsMessage
+      ws.onclose = function() {
+        wsReady = false
+        stopUsagePoll()
+        updateInputState()
+        if (shouldReconnect) scheduleReconnect()
+      }
+      ws.onerror = function() {
+        wsReady = false
+        stopUsagePoll()
+        updateInputState()
+        setStatus('Connection error — reconnecting...')
+      }
+    }
 
-    ws.onmessage = function(e) {
+    function scheduleReconnect() {
+      if (reconnectTimer) return
+      setStatus('Disconnected — reconnecting in ' + Math.round(reconnectDelay / 1000) + 's')
+      reconnectTimer = setTimeout(function() {
+        reconnectTimer = null
+        reconnectDelay = Math.min(reconnectDelay * 2, 10000)
+        connectWs()
+      }, reconnectDelay)
+    }
+
+    function handleWsMessage(e) {
       var msg = JSON.parse(e.data)
       if (msg.type === 'auth-ok') {
         wsReady = true
+        reconnectDelay = 1000
+        updateInputState()
         if (activeTabId) {
           fitAddon.fit()
-          ws.send(JSON.stringify({ type: 'take-tab', tabId: activeTabId, cols: term.cols, rows: term.rows }))
+          sendWs({ type: 'take-tab', tabId: activeTabId, cols: term.cols, rows: term.rows })
           setStatus('Taking tab...')
           startUsagePoll()
         } else {
-          ws.send(JSON.stringify({ type: 'list-tabs' }))
+          sendWs({ type: 'list-tabs' })
         }
         if (tbOpen) {
-          ws.send(JSON.stringify({ type: 'toolbar-list' }))
-          ws.send(JSON.stringify({ type: 'log-subscribe' }))
+          sendWs({ type: 'toolbar-list' })
+          sendWs({ type: 'log-subscribe' })
         }
       } else if (msg.type === 'auth-fail') {
+        shouldReconnect = false
         setStatus('Auth failed — session expired, reload the page')
       } else if (msg.type === 'tabs') {
         var available = msg.tabs.filter(function(t) { return !t.locked })
@@ -1350,7 +1459,7 @@ function makeAggTerminalHtml(port: number): string {
         if (!chosen) { setStatus('No sessions available'); return }
         activeTabId = chosen.tabId
         fitAddon.fit()
-        ws.send(JSON.stringify({ type: 'take-tab', tabId: activeTabId, cols: term.cols, rows: term.rows }))
+        sendWs({ type: 'take-tab', tabId: activeTabId, cols: term.cols, rows: term.rows })
         setStatus('Connected: ' + (chosen.toolName || chosen.tabId))
         startUsagePoll()
       } else if (msg.type === 'output') {
@@ -1383,15 +1492,12 @@ function makeAggTerminalHtml(port: number): string {
       }
     }
 
-    ws.onclose = function() { stopUsagePoll(); setStatus('Disconnected — reload to reconnect') }
-    ws.onerror = function() { stopUsagePoll(); setStatus('Connection error') }
-
     term.onData(function(data) { sk(data) })
 
     function doResize() {
       fitAddon.fit()
-      if (!activeTabId || ws.readyState !== 1) return
-      ws.send(JSON.stringify({ type: 'resize', tabId: activeTabId, cols: term.cols, rows: term.rows }))
+      if (!activeTabId) return
+      sendWs({ type: 'resize', tabId: activeTabId, cols: term.cols, rows: term.rows })
     }
     function applyViewport() {
       var h = window.visualViewport ? window.visualViewport.height : window.innerHeight
@@ -1410,6 +1516,7 @@ function makeAggTerminalHtml(port: number): string {
     document.body.classList.add('size-' + (btnConfig.size || 'medium'))
     renderButtons()
     renderExtraRows()
+    connectWs()
   </script>
 </body>
 </html>`
@@ -1469,7 +1576,21 @@ function makeTerminalHtml(): string {
     var statusUsageEl = document.getElementById('status-usage')
     var ctrlBar = document.getElementById('ctrl-bar')
     var usagePollTimer = null
+    var ws = null
+    var reconnectTimer = null
+    var reconnectDelay = 1000
+    var shouldReconnect = true
     function setStatus(t) { statusMainEl.textContent = t }
+    function isConnected() { return wsReady && ws && ws.readyState === WebSocket.OPEN }
+    function updateInputState() {
+      var inp = document.getElementById('tinput')
+      if (inp) inp.disabled = !isConnected()
+    }
+    function sendWs(data) {
+      if (!isConnected()) return false
+      ws.send(JSON.stringify(data))
+      return true
+    }
     function fetchUsage() {
       if (!activeTabId) return
       fetch('/api/usage?tab=' + encodeURIComponent(activeTabId))
@@ -1536,11 +1657,11 @@ function makeTerminalHtml(): string {
 
     // --- WebSocket ---
     var proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    var ws = new WebSocket(proto + '://' + location.host + '/ws')
+    var wsUrl = proto + '://' + location.host + '/ws'
 
     function sk(data) {
-      if (!activeTabId || !wsReady) return
-      ws.send(JSON.stringify({ type: 'input', tabId: activeTabId, data: data }))
+      if (!activeTabId) return false
+      return sendWs({ type: 'input', tabId: activeTabId, data: data })
     }
 
     // --- Button rows ---
@@ -1598,6 +1719,7 @@ function makeTerminalHtml(): string {
       inp.setAttribute('autocapitalize', 'off')
       inp.setAttribute('spellcheck', 'false')
       inp.placeholder = 'Type command... (Enter = newline, ⌨ = send)'
+      inp.disabled = !isConnected()
       inp.addEventListener('focus', function() {
         setTimeout(function() { container.scrollIntoView(false) }, 350)
       })
@@ -1613,7 +1735,11 @@ function makeTerminalHtml(): string {
       var inp = document.getElementById('tinput')
       var LF = String.fromCharCode(10)
       var CR = String.fromCharCode(13)
-      if (inp && inp.value) sk(inp.value.split(LF).join(CR) + CR)
+      if (inp && inp.value && !sk(inp.value.split(LF).join(CR) + CR)) {
+        setStatus('Disconnected — reconnecting...')
+        updateInputState()
+        return
+      }
       renderButtonRows()
     }
 
@@ -1626,21 +1752,56 @@ function makeTerminalHtml(): string {
     })
 
     // --- WS handlers ---
-    ws.onopen = function() { ws.send(JSON.stringify({ type: 'auth', token: token })) }
+    function connectWs() {
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      wsReady = false
+      updateInputState()
+      setStatus(reconnectDelay === 1000 ? 'Connecting...' : 'Reconnecting...')
+      ws = new WebSocket(wsUrl)
+      ws.onopen = function() {
+        ws.send(JSON.stringify({ type: 'auth', token: token }))
+      }
+      ws.onmessage = handleWsMessage
+      ws.onclose = function() {
+        wsReady = false
+        stopUsagePoll()
+        updateInputState()
+        if (shouldReconnect) scheduleReconnect()
+      }
+      ws.onerror = function() {
+        wsReady = false
+        stopUsagePoll()
+        updateInputState()
+        setStatus('Connection error — reconnecting...')
+      }
+    }
 
-    ws.onmessage = function(e) {
+    function scheduleReconnect() {
+      if (reconnectTimer) return
+      setStatus('Disconnected — reconnecting in ' + Math.round(reconnectDelay / 1000) + 's')
+      reconnectTimer = setTimeout(function() {
+        reconnectTimer = null
+        reconnectDelay = Math.min(reconnectDelay * 2, 10000)
+        connectWs()
+      }, reconnectDelay)
+    }
+
+    function handleWsMessage(e) {
       var msg = JSON.parse(e.data)
       if (msg.type === 'auth-ok') {
         wsReady = true
+        reconnectDelay = 1000
+        updateInputState()
         if (activeTabId) {
           fitAddon.fit()
-          ws.send(JSON.stringify({ type: 'take-tab', tabId: activeTabId, cols: term.cols, rows: term.rows }))
+          sendWs({ type: 'take-tab', tabId: activeTabId, cols: term.cols, rows: term.rows })
           setStatus('Taking tab...')
           startUsagePoll()
         } else {
-          ws.send(JSON.stringify({ type: 'list-tabs' }))
+          sendWs({ type: 'list-tabs' })
         }
       } else if (msg.type === 'auth-fail') {
+        shouldReconnect = false
         setStatus('Auth failed — check the URL and token')
       } else if (msg.type === 'tabs') {
         var available = msg.tabs.filter(function(t) { return !t.locked })
@@ -1648,7 +1809,7 @@ function makeTerminalHtml(): string {
         if (!chosen) { setStatus('No sessions available'); return }
         activeTabId = chosen.tabId
         fitAddon.fit()
-        ws.send(JSON.stringify({ type: 'take-tab', tabId: activeTabId, cols: term.cols, rows: term.rows }))
+        sendWs({ type: 'take-tab', tabId: activeTabId, cols: term.cols, rows: term.rows })
         setStatus('Connected: ' + (chosen.toolName || chosen.tabId))
         startUsagePoll()
       } else if (msg.type === 'output') {
@@ -1660,9 +1821,6 @@ function makeTerminalHtml(): string {
       }
     }
 
-    ws.onclose = function() { stopUsagePoll(); setStatus('Disconnected — reload to reconnect') }
-    ws.onerror = function() { stopUsagePoll(); setStatus('Connection error') }
-
     // Desktop physical keyboard still works via xterm.onData
     term.onData(function(data) { sk(data) })
 
@@ -1670,8 +1828,8 @@ function makeTerminalHtml(): string {
     // visualViewport tracks the real visible area on mobile (accounts for virtual keyboard).
     function doResize() {
       fitAddon.fit()
-      if (!activeTabId || ws.readyState !== 1) return
-      ws.send(JSON.stringify({ type: 'resize', tabId: activeTabId, cols: term.cols, rows: term.rows }))
+      if (!activeTabId) return
+      sendWs({ type: 'resize', tabId: activeTabId, cols: term.cols, rows: term.rows })
     }
     function applyViewport() {
       var h = window.visualViewport ? window.visualViewport.height : window.innerHeight
@@ -1689,6 +1847,7 @@ function makeTerminalHtml(): string {
 
     document.body.classList.add('size-' + (btnConfig.size || 'medium'))
     renderButtonRows()
+    connectWs()
   </script>
 </body>
 </html>`

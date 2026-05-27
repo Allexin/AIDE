@@ -47,12 +47,12 @@ app.whenReady().then(() => {
 
   setupIpcHandlers(openProjects, remoteServer)
   initUpdater()
-  setupMenu(openProjects, (path) => openProjectAndTrack(path, openProjects))
+  setupMenu(openProjects, (path) => openProjectAndTrack(path, openProjects, () => remoteServer.refreshProjects()))
 
   const startupPath = resolveStartupProject()
 
   if (startupPath) {
-    const result = openProjectAndTrack(startupPath, openProjects)
+    const result = openProjectAndTrack(startupPath, openProjects, () => remoteServer.refreshProjects())
     if (!result.success) {
       // Path exists but couldn't be opened (locked, etc.) — fall back to Picker
       createPickerWindow()

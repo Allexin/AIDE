@@ -92,6 +92,12 @@ export class PtyBridge {
     return result
   }
 
+  getTabsForWindow(win: BrowserWindow): Array<{ tabId: string; sessionId: string | null; toolId: string; toolName: string; locked: boolean }> {
+    const mgr = this.ptyRegistry.get(win)
+    if (!mgr) return []
+    return mgr.getTabs().map((tab) => ({ ...tab, locked: this.locks.has(tab.tabId) }))
+  }
+
   private _doRelease(tabId: string): void {
     this.unsubs.get(tabId)?.()
     this.unsubs.delete(tabId)

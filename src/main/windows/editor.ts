@@ -57,7 +57,8 @@ export function createEditorWindow(projectPath: string): BrowserWindow {
 
 export function openProjectAndTrack(
   projectPath: string,
-  openProjects: Map<string, BrowserWindow>
+  openProjects: Map<string, BrowserWindow>,
+  onProjectsChanged?: () => void
 ): { success: boolean; error?: string } {
   if (!existsSync(projectPath)) {
     return { success: false, error: `Path does not exist: ${projectPath}` }
@@ -86,6 +87,7 @@ export function openProjectAndTrack(
 
   const editorWin = createEditorWindow(projectPath)
   openProjects.set(projectPath, editorWin)
+  onProjectsChanged?.()
 
   // Create PTY manager for this window
   const ptyMgr = new PtyManager(editorWin, projectPath)
@@ -169,6 +171,7 @@ export function openProjectAndTrack(
     stopProjectWatcher(projectPath)
     releaseLock(projectPath)
     openProjects.delete(projectPath)
+    onProjectsChanged?.()
     removeEditorWindow(editorWin)
   })
 
