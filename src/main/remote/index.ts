@@ -1322,6 +1322,12 @@ function makeTabPickerHtml(port: number, projectId: string, projectName: string)
       min-width: 0; flex: 1; padding: 7px 8px; color: #d4d4d4; background: #252526;
       border: 1px solid #3d3d3d; border-radius: 4px;
     }
+    .filter-input {
+      width: 100%; padding: 9px 10px; color: #d4d4d4; background: #252526;
+      border: 1px solid #3d3d3d; border-radius: 5px; outline: none;
+      font-size: 14px; margin-bottom: 2px;
+    }
+    .filter-input:focus { border-color: #4fc3f7; }
     .list { display: flex; flex-direction: column; gap: 10px; }
     .section-title { margin: 18px 0 8px; font-size: 12px; color: #858585; text-transform: uppercase; letter-spacing: 0.04em; }
     .item {
@@ -1332,6 +1338,7 @@ function makeTabPickerHtml(port: number, projectId: string, projectName: string)
     .meta { min-width: 0; flex: 1; }
     .name { font-size: 14px; color: #d4d4d4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sub { margin-top: 3px; font-size: 11px; color: #777; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tool-line { margin-top: 3px; font-size: 10px; color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .open, .new-btn {
       padding: 7px 14px; font-size: 13px; color: #1e1e1e; background: #4fc3f7;
       border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; flex-shrink: 0;
@@ -1353,6 +1360,7 @@ function makeTabPickerHtml(port: number, projectId: string, projectName: string)
     <select class="tool-select" id="tool-select" style="display:none"></select>
     <button class="new-btn" id="new-btn">New session</button>
   </div>
+  <input class="filter-input" id="filter-input" type="search" placeholder="Filter tabs and sessions..." autocomplete="off">
   <div class="section-title">Active tabs</div>
   <div class="list" id="tab-list"><div class="empty">Loading...</div></div>
   <div class="section-title">Previous sessions</div>
@@ -1367,6 +1375,7 @@ function makeTabPickerHtml(port: number, projectId: string, projectName: string)
     var defaultToolId = null
     var activeTabs = []
     var sessionEntries = []
+    var filterText = ''
     var sessionOffset = 0
     var sessionTotal = 0
     var pageSize = 30
@@ -1414,13 +1423,21 @@ function makeTabPickerHtml(port: number, projectId: string, projectName: string)
       return null
     }
 
+    function matchesFilter(parts) {
+      if (!filterText) return true
+      return parts.join(' ').toLowerCase().indexOf(filterText) >= 0
+    }
+
     function renderTabs(tabs) {
       var list = document.getElementById('tab-list')
-      if (!tabs.length) {
-        list.innerHTML = '<div class="empty">No tabs yet. Start a new session.</div>'
+      var visible = tabs.filter(function(t) {
+        return matchesFilter([t.toolName, t.toolId, t.tabId, t.sessionId])
+      })
+      if (!visible.length) {
+        list.innerHTML = '<div class="empty">' + (filterText ? 'No matching active tabs.' : 'No tabs yet. Start a new session.') + '</div>'
         return
       }
-      list.innerHTML = tabs.map(function(t) {
+      list.innerHTML = visible.map(function(t) {
         var title = t.toolName || t.toolId || t.tabId
         var sub = t.sessionId ? ('Session: ' + t.sessionId) : 'No session ID yet'
         var action = t.locked
@@ -1439,20 +1456,25 @@ function makeTabPickerHtml(port: number, projectId: string, projectName: string)
     function renderSessions(sessions, append) {
       sessionEntries = append ? sessionEntries.concat(sessions) : sessions
       var list = document.getElementById('session-list')
-      if (!sessionEntries.length) {
-        list.innerHTML = '<div class="empty">No previous sessions found.</div>'
+      var visible = sessionEntries.filter(function(s) {
+        return matchesFilter([s.firstMessage, s.title, s.summary, s.sessionId, s.toolId, toolNameFor(s.toolId)])
+      })
+      if (!visible.length) {
+        list.innerHTML = '<div class="empty">' + (filterText ? 'No matching previous sessions.' : 'No previous sessions found.') + '</div>'
       } else {
-        var html = sessionEntries.map(function(s) {
+        var html = visible.map(function(s) {
           var openTab = openTabForSession(s.sessionId)
-          var title = s.firstMessage || s.title || s.summary || s.sessionId
-          var sub = (s.title && s.title !== s.firstMessage ? s.title + ' · ' : '') + toolNameFor(s.toolId) + ' · ' + formatRelativeTime(s.mtime)
+          var first = s.firstMessage || s.summary || s.title || s.sessionId
+          var last = s.title && s.title !== s.firstMessage ? s.title : ''
+          var toolLine = toolNameFor(s.toolId) + ' · ' + formatRelativeTime(s.mtime)
           var action = openTab
             ? (openTab.locked ? '<span class="open disabled">In use</span>' : '<a class="open" href="' + terminalUrl(openTab.tabId) + '">Open</a>')
             : '<button class="open" data-session="' + esc(s.sessionId) + '" data-tool="' + esc(s.toolId) + '">Resume</button>'
           return '<div class="item">' +
             '<div class="meta">' +
-              '<div class="name">' + esc(title) + '</div>' +
-              '<div class="sub">' + esc(sub) + '</div>' +
+              '<div class="name">' + esc(first) + '</div>' +
+              (last ? '<div class="sub">' + esc(last) + '</div>' : '') +
+              '<div class="tool-line">' + esc(toolLine) + '</div>' +
             '</div>' +
             action +
           '</div>'
@@ -1572,6 +1594,12 @@ function makeTabPickerHtml(port: number, projectId: string, projectName: string)
           document.getElementById('footer').textContent = 'Failed to resume session.'
         })
     }
+
+    document.getElementById('filter-input').addEventListener('input', function(e) {
+      filterText = e.target.value.trim().toLowerCase()
+      renderTabs(activeTabs)
+      renderSessions(sessionEntries, false)
+    })
 
     document.getElementById('new-btn').addEventListener('click', createTab)
     document.getElementById('more-btn').addEventListener('click', function() { loadSessions(true) })
