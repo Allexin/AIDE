@@ -10,7 +10,9 @@ import type { PtyManager } from '../pty/ptyManager'
 import { loadOrGeneratePin, regeneratePin, validatePin } from './auth'
 import { PtyBridge } from './ptyBridge'
 import { getAppConfig, type RemoteButtonRow } from '../config/appConfig'
-import { getToolById } from '../pty/cliTools/registry'
+import { getActivatedTools } from '../config/appState'
+import { readProjectSettings } from '../config/projectConfig'
+import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
 import { readToolbarButtons as readProjectToolbarButtons, type ToolbarButton, isSplitter } from '../config/toolbarConfig'
 import { spawnButtonProcess, killButtonProcess, addProcessObserver, addOutputObserver, getRunningButtonIds } from '../toolbar/processManager'
 import { addLogObserver } from '../pty/cliTools/cliLogger'
@@ -25,6 +27,15 @@ interface RegistryEntry {
   projectPath: string
   pin: string
   lastSeen: number
+}
+
+interface RemoteSessionEntry {
+  sessionId: string
+  summary: string
+  firstMessage: string
+  title: string
+  mtime: number
+  toolId: string
 }
 
 function getLocalIps(): string[] {
@@ -190,6 +201,49 @@ export class RemoteServer {
     if (!projectPath) return null
     const win = this.openProjects.get(projectPath)
     return win && !win.isDestroyed() ? win : null
+  }
+
+  private getProjectTabs(projectPath: string): Array<{ tabId: string; sessionId: string | null; toolId: string; toolName: string; locked: boolean }> {
+    const projectWin = this.findProjectWindow(projectPath)
+    return projectWin ? this.bridge.getTabsForWindow(projectWin) : []
+  }
+
+  private getActivatedToolEntries(projectPath: string): { tools: Array<{ id: string; name: string }>; defaultToolId: string | null } {
+    const activated = getActivatedTools()
+    const tools = getRegisteredTools()
+      .filter((tool) => activated.includes(tool.id))
+      .map((tool) => ({ id: tool.id, name: tool.name }))
+    const projectDefault = readProjectSettings(projectPath).defaultToolId
+    const defaultToolId = projectDefault && activated.includes(projectDefault)
+      ? projectDefault
+      : (tools[0]?.id ?? null)
+    return { tools, defaultToolId }
+  }
+
+  private async getProjectSessions(projectPath: string, offset: number, limit: number): Promise<{ sessions: RemoteSessionEntry[]; total: number }> {
+    const activated = getActivatedTools()
+    const allSessions: RemoteSessionEntry[] = []
+
+    for (const toolId of activated) {
+      const tool = getToolById(toolId)
+      if (!tool) continue
+      try {
+        const toolSessions = await tool.scanSessions(projectPath)
+        for (const s of toolSessions) {
+          allSessions.push({
+            sessionId: s.sessionId,
+            summary: s.summary ?? '',
+            firstMessage: s.firstMessage ?? '',
+            title: s.slug,
+            mtime: s.lastModified.getTime(),
+            toolId: tool.id
+          })
+        }
+      } catch {}
+    }
+
+    allSessions.sort((a, b) => b.mtime - a.mtime)
+    return { sessions: allSessions.slice(offset, offset + limit), total: allSessions.length }
   }
 
   // --- Session management ---
@@ -379,6 +433,29 @@ export class RemoteServer {
     proxyReq.end()
   }
 
+  private proxyJsonToInstance(port: number, path: string, body: object, res: http.ServerResponse): void {
+    const raw = JSON.stringify(body)
+    const proxyReq = http.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        path,
+        method: 'POST',
+        timeout: 10000,
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(raw) }
+      },
+      (proxyRes) => {
+        res.writeHead(proxyRes.statusCode ?? 200, {
+          'Content-Type': proxyRes.headers['content-type'] ?? 'application/json'
+        })
+        proxyRes.pipe(res)
+      }
+    )
+    proxyReq.on('error', () => { if (!res.headersSent) { res.writeHead(502); res.end() } })
+    proxyReq.on('timeout', () => { proxyReq.destroy() })
+    proxyReq.end(raw)
+  }
+
   private handleAggregatorHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
     const urlObj = new URL(req.url ?? '/', 'http://x')
     const path = urlObj.pathname
@@ -485,12 +562,95 @@ export class RemoteServer {
       return
     }
 
-    // Terminal page — proxied through aggregator so only port 3847 is needed externally.
-    if (path === '/terminal') {
+    if (path === '/api/tabs' && req.method === 'GET') {
       const port = Number(urlObj.searchParams.get('port'))
       const projectId = urlObj.searchParams.get('project') ?? ''
       if (!port || !this.registry.has(this.registryKey(port, projectId))) {
         res.writeHead(404); res.end('Project not found'); return
+      }
+      this.proxyToInstance(port, `/api/tabs?project=${encodeURIComponent(projectId)}`, res)
+      return
+    }
+
+    if (path === '/api/tabs/new' && req.method === 'POST') {
+      const port = Number(urlObj.searchParams.get('port'))
+      const projectId = urlObj.searchParams.get('project') ?? ''
+      if (!port || !this.registry.has(this.registryKey(port, projectId))) {
+        res.writeHead(404); res.end('Project not found'); return
+      }
+      let body = ''
+      req.on('data', (chunk: Buffer) => { body += chunk.toString() })
+      req.on('end', () => {
+        let data: { toolId?: string } = {}
+        try { data = JSON.parse(body || '{}') as { toolId?: string } } catch {}
+        this.proxyJsonToInstance(port, `/api/tabs/new?project=${encodeURIComponent(projectId)}`, data, res)
+      })
+      return
+    }
+
+    if (path === '/api/sessions' && req.method === 'GET') {
+      const port = Number(urlObj.searchParams.get('port'))
+      const projectId = urlObj.searchParams.get('project') ?? ''
+      const offset = Math.max(0, Number(urlObj.searchParams.get('offset') ?? 0) || 0)
+      const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get('limit') ?? 30) || 30))
+      if (!port || !this.registry.has(this.registryKey(port, projectId))) {
+        res.writeHead(404); res.end('Project not found'); return
+      }
+      this.proxyToInstance(port, `/api/sessions?project=${encodeURIComponent(projectId)}&offset=${offset}&limit=${limit}`, res)
+      return
+    }
+
+    if (path === '/api/sessions/resume' && req.method === 'POST') {
+      const port = Number(urlObj.searchParams.get('port'))
+      const projectId = urlObj.searchParams.get('project') ?? ''
+      if (!port || !this.registry.has(this.registryKey(port, projectId))) {
+        res.writeHead(404); res.end('Project not found'); return
+      }
+      let body = ''
+      req.on('data', (chunk: Buffer) => { body += chunk.toString() })
+      req.on('end', () => {
+        let data: { sessionId?: string; toolId?: string } = {}
+        try { data = JSON.parse(body || '{}') as { sessionId?: string; toolId?: string } } catch {}
+        this.proxyJsonToInstance(port, `/api/sessions/resume?project=${encodeURIComponent(projectId)}`, data, res)
+      })
+      return
+    }
+
+    if (path === '/api/tools' && req.method === 'GET') {
+      const port = Number(urlObj.searchParams.get('port'))
+      const projectId = urlObj.searchParams.get('project') ?? ''
+      if (!port || !this.registry.has(this.registryKey(port, projectId))) {
+        res.writeHead(404); res.end('Project not found'); return
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(this.getActivatedToolEntries(projectId)))
+      return
+    }
+
+    if (path === '/tabs') {
+      const port = Number(urlObj.searchParams.get('port'))
+      const projectId = urlObj.searchParams.get('project') ?? ''
+      const entry = port ? this.registry.get(this.registryKey(port, projectId)) : undefined
+      if (!entry) {
+        res.writeHead(404); res.end('Project not found'); return
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(makeTabPickerHtml(port, projectId, entry.projectName))
+      return
+    }
+
+    // Terminal page — proxied through aggregator so only port 3847 is needed externally.
+    if (path === '/terminal') {
+      const port = Number(urlObj.searchParams.get('port'))
+      const projectId = urlObj.searchParams.get('project') ?? ''
+      const tabId = urlObj.searchParams.get('tab') ?? ''
+      if (!port || !this.registry.has(this.registryKey(port, projectId))) {
+        res.writeHead(404); res.end('Project not found'); return
+      }
+      if (!tabId) {
+        res.writeHead(302, { Location: `/tabs?port=${port}&project=${encodeURIComponent(projectId)}` })
+        res.end()
+        return
       }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end(makeAggTerminalHtml(port, projectId))
@@ -609,6 +769,8 @@ export class RemoteServer {
 
   private handleTerminalHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
     const url = req.url ?? '/'
+    const urlObj = new URL(url, 'http://x')
+    const path = urlObj.pathname
 
     if (url === '/favicon.ico') { res.writeHead(204); res.end(); return }
 
@@ -648,6 +810,76 @@ export class RemoteServer {
       }).catch(() => {
         res.writeHead(500)
         res.end('QR generation failed')
+      })
+      return
+    }
+
+    if (path === '/api/tabs' && req.method === 'GET') {
+      const projectPath = urlObj.searchParams.get('project') ?? ''
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ tabs: this.getProjectTabs(projectPath) }))
+      return
+    }
+
+    if (path === '/api/tabs/new' && req.method === 'POST') {
+      const projectPath = urlObj.searchParams.get('project') ?? ''
+      const win = this.findProjectWindow(projectPath)
+      if (!win) { res.writeHead(404); res.end('Project not found'); return }
+      let body = ''
+      req.on('data', (chunk: Buffer) => { body += chunk.toString() })
+      req.on('end', () => {
+        let data: { toolId?: string } = {}
+        try { data = JSON.parse(body || '{}') as { toolId?: string } } catch {}
+        const requestedToolId = typeof data.toolId === 'string' && data.toolId ? data.toolId : undefined
+        const effectiveToolId = requestedToolId ?? readProjectSettings(projectPath).defaultToolId
+        this.bridge.createTabForWindow(win, effectiveToolId, getActivatedTools()).then((tabInfo) => {
+          if (!tabInfo) { res.writeHead(404); res.end('Project not found'); return }
+          if (!win.isDestroyed()) win.webContents.send('terminal:new-tab', tabInfo)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ tab: { ...tabInfo, locked: false } }))
+        }).catch(() => {
+          res.writeHead(500)
+          res.end('Failed to create tab')
+        })
+      })
+      return
+    }
+
+    if (path === '/api/sessions' && req.method === 'GET') {
+      const projectPath = urlObj.searchParams.get('project') ?? ''
+      const offset = Math.max(0, Number(urlObj.searchParams.get('offset') ?? 0) || 0)
+      const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get('limit') ?? 30) || 30))
+      this.getProjectSessions(projectPath, offset, limit).then(({ sessions, total }) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ sessions, total }))
+      }).catch(() => {
+        res.writeHead(500)
+        res.end('Failed to load sessions')
+      })
+      return
+    }
+
+    if (path === '/api/sessions/resume' && req.method === 'POST') {
+      const projectPath = urlObj.searchParams.get('project') ?? ''
+      const win = this.findProjectWindow(projectPath)
+      if (!win) { res.writeHead(404); res.end('Project not found'); return }
+      let body = ''
+      req.on('data', (chunk: Buffer) => { body += chunk.toString() })
+      req.on('end', () => {
+        let data: { sessionId?: string; toolId?: string } = {}
+        try { data = JSON.parse(body || '{}') as { sessionId?: string; toolId?: string } } catch {}
+        const sessionId = typeof data.sessionId === 'string' ? data.sessionId : ''
+        const toolId = typeof data.toolId === 'string' && data.toolId ? data.toolId : undefined
+        if (!sessionId) { res.writeHead(400); res.end('Missing sessionId'); return }
+        this.bridge.resumeTabForWindow(win, sessionId, toolId, getActivatedTools()).then((tabInfo) => {
+          if (!tabInfo) { res.writeHead(404); res.end('Project not found'); return }
+          if (!win.isDestroyed()) win.webContents.send('terminal:new-tab', tabInfo)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ tab: { ...tabInfo, locked: false } }))
+        }).catch(() => {
+          res.writeHead(500)
+          res.end('Failed to resume session')
+        })
       })
       return
     }
@@ -718,8 +950,18 @@ export class RemoteServer {
             const tabId = String(msg.tabId ?? '')
             const cols = Number(msg.cols ?? 80)
             const rows = Number(msg.rows ?? 24)
+            if (projectPath && !this.getProjectTabs(projectPath).some((tab) => tab.tabId === tabId)) {
+              send({ type: 'error', message: 'Tab not found in project' })
+              break
+            }
+            const tab = (projectPath ? this.getProjectTabs(projectPath) : this.bridge.getAllTabs()).find((t) => t.tabId === tabId)
             const ok = this.bridge.takeTab(ws, tabId, cols, rows)
-            if (ok) { activeTabId = tabId } else { send({ type: 'error', message: 'Tab unavailable' }) }
+            if (ok) {
+              activeTabId = tabId
+              send({ type: 'tab-taken', tabId, toolName: tab?.toolName ?? '', sessionId: tab?.sessionId ?? null })
+            } else {
+              send({ type: 'error', message: 'Tab unavailable' })
+            }
             break
           }
           case 'input':
@@ -1036,7 +1278,7 @@ const PICKER_HTML = `<!DOCTYPE html>
             list.innerHTML = '<div class="empty">No projects available.</div>'
           } else {
             list.innerHTML = projects.map(function(p) {
-              var url = '/terminal?port=' + p.port + '&project=' + encodeURIComponent(p.projectId)
+              var url = '/tabs?port=' + p.port + '&project=' + encodeURIComponent(p.projectId)
               return '<div class="item">' +
                 '<span class="name">' + p.projectName.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</span>' +
                 '<a class="open" href="' + url + '">Open</a>' +
@@ -1054,6 +1296,293 @@ const PICKER_HTML = `<!DOCTYPE html>
   </script>
 </body>
 </html>`
+
+function makeTabPickerHtml(port: number, projectId: string, projectName: string): string {
+  const projectIdJson = safeJsJson(projectId)
+  const projectNameJson = safeJsJson(projectName)
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIDE Remote Tabs</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1e1e1e; color: #d4d4d4;
+      padding: 24px 20px;
+    }
+    .top { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+    .back { color: #858585; text-decoration: none; font-size: 13px; }
+    .title { flex: 1; min-width: 0; }
+    h2 { font-size: 15px; font-weight: 400; color: #858585; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .new-row { display: flex; gap: 8px; margin-bottom: 14px; }
+    .tool-select {
+      min-width: 0; flex: 1; padding: 7px 8px; color: #d4d4d4; background: #252526;
+      border: 1px solid #3d3d3d; border-radius: 4px;
+    }
+    .list { display: flex; flex-direction: column; gap: 10px; }
+    .section-title { margin: 18px 0 8px; font-size: 12px; color: #858585; text-transform: uppercase; letter-spacing: 0.04em; }
+    .item {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      background: #2d2d2d; border: 1px solid #3d3d3d; border-radius: 6px;
+      padding: 13px 14px;
+    }
+    .meta { min-width: 0; flex: 1; }
+    .name { font-size: 14px; color: #d4d4d4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sub { margin-top: 3px; font-size: 11px; color: #777; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .open, .new-btn {
+      padding: 7px 14px; font-size: 13px; color: #1e1e1e; background: #4fc3f7;
+      border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; flex-shrink: 0;
+      text-decoration: none; display: inline-block;
+    }
+    .open:hover, .new-btn:hover { background: #81d4fa; }
+    .open.disabled, .new-btn:disabled { color: #777; background: #3c3c3c; cursor: default; pointer-events: none; }
+    .empty { color: #555; font-size: 14px; padding: 8px 0; }
+    .load-more { margin-top: 10px; width: 100%; color: #ccc; background: #2d2d2d; border: 1px solid #3d3d3d; border-radius: 4px; padding: 8px; }
+    .footer { color: #444; font-size: 11px; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <a class="back" href="/">&larr; Projects</a>
+    <div class="title"><h2 id="heading"></h2></div>
+  </div>
+  <div class="new-row">
+    <select class="tool-select" id="tool-select" style="display:none"></select>
+    <button class="new-btn" id="new-btn">New session</button>
+  </div>
+  <div class="section-title">Active tabs</div>
+  <div class="list" id="tab-list"><div class="empty">Loading...</div></div>
+  <div class="section-title">Previous sessions</div>
+  <div class="list" id="session-list"><div class="empty">Loading...</div></div>
+  <button class="load-more" id="more-btn" style="display:none">Load more</button>
+  <div class="footer" id="footer"></div>
+  <script>
+    var port = ${port}
+    var projectId = ${projectIdJson}
+    var projectName = ${projectNameJson}
+    var tools = []
+    var defaultToolId = null
+    var activeTabs = []
+    var sessionEntries = []
+    var sessionOffset = 0
+    var sessionTotal = 0
+    var pageSize = 30
+    var busy = false
+    document.getElementById('heading').textContent = 'AIDE Remote — choose a tab: ' + projectName
+
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+    }
+
+    function terminalUrl(tabId) {
+      return '/terminal?port=' + port + '&project=' + encodeURIComponent(projectId) + '&tab=' + encodeURIComponent(tabId)
+    }
+
+    function formatRelativeTime(mtime) {
+      var diff = Date.now() - mtime
+      var min = Math.floor(diff / 60000)
+      var hour = Math.floor(diff / 3600000)
+      var day = Math.floor(diff / 86400000)
+      if (min < 1) return 'Just now'
+      if (min < 60) return min + 'm ago'
+      if (hour < 24) {
+        var d = new Date(mtime)
+        return 'Today ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0')
+      }
+      if (day === 1) return 'Yesterday'
+      if (day < 7) return day + ' days ago'
+      return new Date(mtime).toLocaleDateString()
+    }
+
+    function toolNameFor(toolId) {
+      for (var i = 0; i < tools.length; i++) {
+        if (tools[i].id === toolId) return tools[i].name
+      }
+      return toolId
+    }
+
+    function openTabForSession(sessionId) {
+      if (!sessionId) return null
+      for (var i = 0; i < activeTabs.length; i++) {
+        if (activeTabs[i].sessionId === sessionId) return activeTabs[i]
+      }
+      return null
+    }
+
+    function renderTabs(tabs) {
+      var list = document.getElementById('tab-list')
+      if (!tabs.length) {
+        list.innerHTML = '<div class="empty">No tabs yet. Start a new session.</div>'
+        return
+      }
+      list.innerHTML = tabs.map(function(t) {
+        var title = t.toolName || t.toolId || t.tabId
+        var sub = t.sessionId ? ('Session: ' + t.sessionId) : 'No session ID yet'
+        var action = t.locked
+          ? '<span class="open disabled">In use</span>'
+          : '<a class="open" href="' + terminalUrl(t.tabId) + '">Open</a>'
+        return '<div class="item">' +
+          '<div class="meta">' +
+            '<div class="name">' + esc(title) + '</div>' +
+            '<div class="sub">' + esc(sub) + '</div>' +
+          '</div>' +
+          action +
+        '</div>'
+      }).join('')
+    }
+
+    function renderSessions(sessions, append) {
+      sessionEntries = append ? sessionEntries.concat(sessions) : sessions
+      var list = document.getElementById('session-list')
+      if (!sessionEntries.length) {
+        list.innerHTML = '<div class="empty">No previous sessions found.</div>'
+      } else {
+        var html = sessionEntries.map(function(s) {
+          var openTab = openTabForSession(s.sessionId)
+          var title = s.firstMessage || s.title || s.summary || s.sessionId
+          var sub = (s.title && s.title !== s.firstMessage ? s.title + ' · ' : '') + toolNameFor(s.toolId) + ' · ' + formatRelativeTime(s.mtime)
+          var action = openTab
+            ? (openTab.locked ? '<span class="open disabled">In use</span>' : '<a class="open" href="' + terminalUrl(openTab.tabId) + '">Open</a>')
+            : '<button class="open" data-session="' + esc(s.sessionId) + '" data-tool="' + esc(s.toolId) + '">Resume</button>'
+          return '<div class="item">' +
+            '<div class="meta">' +
+              '<div class="name">' + esc(title) + '</div>' +
+              '<div class="sub">' + esc(sub) + '</div>' +
+            '</div>' +
+            action +
+          '</div>'
+        }).join('')
+        list.innerHTML = html
+      }
+      var buttons = list.querySelectorAll('button[data-session]')
+      for (var i = 0; i < buttons.length; i++) {
+        buttons[i].addEventListener('click', function(e) {
+          resumeSession(e.currentTarget.getAttribute('data-session'), e.currentTarget.getAttribute('data-tool'))
+        })
+      }
+      var more = document.getElementById('more-btn')
+      more.style.display = sessionOffset < sessionTotal ? '' : 'none'
+    }
+
+    function loadTabs() {
+      fetch('/api/tabs?port=' + port + '&project=' + encodeURIComponent(projectId))
+        .then(function(r) { return r.json() })
+        .then(function(d) {
+          activeTabs = d.tabs || []
+          renderTabs(activeTabs)
+          if (sessionOffset > 0) renderSessions(sessionEntries, false)
+          document.getElementById('footer').textContent = 'Updated ' + new Date().toLocaleTimeString()
+        })
+        .catch(function() {
+          document.getElementById('footer').textContent = 'Failed to load tabs — retrying...'
+        })
+    }
+
+    function loadSessions(append) {
+      fetch('/api/sessions?port=' + port + '&project=' + encodeURIComponent(projectId) + '&offset=' + sessionOffset + '&limit=' + pageSize)
+        .then(function(r) { return r.json() })
+        .then(function(d) {
+          sessionTotal = d.total || 0
+          var sessions = d.sessions || []
+          sessionOffset += sessions.length
+          renderSessions(sessions, append)
+        })
+        .catch(function() {
+          document.getElementById('session-list').innerHTML = '<div class="empty">Failed to load previous sessions.</div>'
+        })
+    }
+
+    function renderTools() {
+      var select = document.getElementById('tool-select')
+      if (tools.length <= 1) {
+        select.style.display = 'none'
+        return
+      }
+      select.innerHTML = tools.map(function(t) {
+        return '<option value="' + esc(t.id) + '">' + esc(t.name) + '</option>'
+      }).join('')
+      if (defaultToolId) select.value = defaultToolId
+      select.style.display = ''
+    }
+
+    function loadTools() {
+      fetch('/api/tools?port=' + port + '&project=' + encodeURIComponent(projectId))
+        .then(function(r) { return r.json() })
+        .then(function(d) {
+          tools = d.tools || []
+          defaultToolId = d.defaultToolId || (tools[0] && tools[0].id) || null
+          renderTools()
+        })
+        .catch(function() {})
+    }
+
+    function createTab() {
+      if (busy) return
+      busy = true
+      var btn = document.getElementById('new-btn')
+      var select = document.getElementById('tool-select')
+      var toolId = select.style.display === 'none' ? defaultToolId : select.value
+      btn.disabled = true
+      btn.textContent = 'Starting...'
+      fetch('/api/tabs/new?port=' + port + '&project=' + encodeURIComponent(projectId), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolId: toolId || undefined })
+      })
+        .then(function(r) { return r.json() })
+        .then(function(d) {
+          if (d.tab && d.tab.tabId) {
+            window.location.href = terminalUrl(d.tab.tabId)
+            return
+          }
+          throw new Error('No tab returned')
+        })
+        .catch(function() {
+          busy = false
+          btn.disabled = false
+          btn.textContent = 'New session'
+          document.getElementById('footer').textContent = 'Failed to start a new session.'
+        })
+    }
+
+    function resumeSession(sessionId, toolId) {
+      if (busy) return
+      busy = true
+      document.getElementById('footer').textContent = 'Resuming session...'
+      fetch('/api/sessions/resume?port=' + port + '&project=' + encodeURIComponent(projectId), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: sessionId, toolId: toolId })
+      })
+        .then(function(r) { return r.json() })
+        .then(function(d) {
+          if (d.tab && d.tab.tabId) {
+            window.location.href = terminalUrl(d.tab.tabId)
+            return
+          }
+          throw new Error('No tab returned')
+        })
+        .catch(function() {
+          busy = false
+          document.getElementById('footer').textContent = 'Failed to resume session.'
+        })
+    }
+
+    document.getElementById('new-btn').addEventListener('click', createTab)
+    document.getElementById('more-btn').addEventListener('click', function() { loadSessions(true) })
+    loadTools()
+    loadTabs()
+    loadSessions(false)
+    setInterval(loadTabs, 5000)
+  </script>
+</body>
+</html>`
+}
 
 // Terminal page served by the aggregator. All traffic goes through port 3847 —
 // the client never needs direct access to the instance's random port.
@@ -1444,7 +1973,7 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
           setStatus('Taking tab...')
           startUsagePoll()
         } else {
-          sendWs({ type: 'list-tabs' })
+          setStatus('No tab selected — go back and choose a tab')
         }
         if (tbOpen) {
           sendWs({ type: 'toolbar-list' })
@@ -1454,13 +1983,9 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
         shouldReconnect = false
         setStatus('Auth failed — session expired, reload the page')
       } else if (msg.type === 'tabs') {
-        var available = msg.tabs.filter(function(t) { return !t.locked })
-        var chosen = available[0] || msg.tabs[0]
-        if (!chosen) { setStatus('No sessions available'); return }
-        activeTabId = chosen.tabId
-        fitAddon.fit()
-        sendWs({ type: 'take-tab', tabId: activeTabId, cols: term.cols, rows: term.rows })
-        setStatus('Connected: ' + (chosen.toolName || chosen.tabId))
+        setStatus('No tab selected — go back and choose a tab')
+      } else if (msg.type === 'tab-taken') {
+        setStatus('Connected: ' + (msg.toolName || msg.tabId))
         startUsagePoll()
       } else if (msg.type === 'output') {
         term.write(msg.data)
@@ -1811,6 +2336,9 @@ function makeTerminalHtml(): string {
         fitAddon.fit()
         sendWs({ type: 'take-tab', tabId: activeTabId, cols: term.cols, rows: term.rows })
         setStatus('Connected: ' + (chosen.toolName || chosen.tabId))
+        startUsagePoll()
+      } else if (msg.type === 'tab-taken') {
+        setStatus('Connected: ' + (msg.toolName || msg.tabId))
         startUsagePoll()
       } else if (msg.type === 'output') {
         term.write(msg.data)

@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron'
-import type { PtyManager } from '../pty/ptyManager'
+import type { PtyManager, SessionTabInfo } from '../pty/ptyManager'
 
 interface WsClient {
   readonly readyState: number
@@ -96,6 +96,18 @@ export class PtyBridge {
     const mgr = this.ptyRegistry.get(win)
     if (!mgr) return []
     return mgr.getTabs().map((tab) => ({ ...tab, locked: this.locks.has(tab.tabId) }))
+  }
+
+  async createTabForWindow(win: BrowserWindow, toolId?: string, activatedTools: string[] = []): Promise<SessionTabInfo | null> {
+    const mgr = this.ptyRegistry.get(win)
+    if (!mgr) return null
+    return mgr.createNewSessionTab(toolId, activatedTools)
+  }
+
+  async resumeTabForWindow(win: BrowserWindow, sessionId: string, toolId?: string, activatedTools: string[] = []): Promise<SessionTabInfo | null> {
+    const mgr = this.ptyRegistry.get(win)
+    if (!mgr) return null
+    return mgr.resumeSessionTab(sessionId, toolId, activatedTools)
   }
 
   private _doRelease(tabId: string): void {
