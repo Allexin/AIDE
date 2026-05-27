@@ -44,8 +44,14 @@ interface WatchEntry {
 }
 
 const watchers = new Map<string, WatchEntry>()
+const fsChangeObservers = new Set<(projectPath: string, fullPath: string) => void>()
 
 const DEBOUNCE_MS = 300
+
+export function addFsChangeObserver(observer: (projectPath: string, fullPath: string) => void): () => void {
+  fsChangeObservers.add(observer)
+  return () => fsChangeObservers.delete(observer)
+}
 
 export function startProjectWatcher(projectPath: string, win: BrowserWindow): void {
   if (watchers.has(projectPath)) return
@@ -74,6 +80,7 @@ export function startProjectWatcher(projectPath: string, win: BrowserWindow): vo
 
     const fullPath = path.join(projectPath, filename)
     if (!win.isDestroyed()) win.webContents.send('filetree:fs-changed', { path: fullPath })
+    for (const observer of fsChangeObservers) observer(projectPath, fullPath)
 
     scheduleGitRefresh()
   }

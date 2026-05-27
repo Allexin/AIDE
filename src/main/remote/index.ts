@@ -1,6 +1,7 @@
 import http from 'http'
-import { readFileSync } from 'fs'
-import { join, basename } from 'path'
+import { readdirSync, readFileSync, statSync } from 'fs'
+import { spawn } from 'child_process'
+import { join, basename, resolve, relative } from 'path'
 import { randomUUID } from 'crypto'
 import { WebSocket, WebSocketServer } from 'ws'
 import { networkInterfaces } from 'os'
@@ -16,9 +17,11 @@ import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
 import { readToolbarButtons as readProjectToolbarButtons, type ToolbarButton, isSplitter } from '../config/toolbarConfig'
 import { spawnButtonProcess, killButtonProcess, addProcessObserver, addOutputObserver, getRunningButtonIds } from '../toolbar/processManager'
 import { addLogObserver } from '../pty/cliTools/cliLogger'
+import { addFsChangeObserver } from '../filetree/watcher'
 
 const AGGREGATOR_PORT = 3847
 const SESSION_TTL = 24 * 60 * 60 * 1000  // 24 hours
+const REMOTE_FILE_MAX_BYTES = 5 * 1024 * 1024
 
 
 interface RegistryEntry {
@@ -36,6 +39,14 @@ interface RemoteSessionEntry {
   title: string
   mtime: number
   toolId: string
+}
+
+interface RemoteTreeNode {
+  name: string
+  path: string
+  relativePath: string
+  type: 'file' | 'directory'
+  size?: number
 }
 
 function getLocalIps(): string[] {
@@ -67,6 +78,7 @@ export class RemoteServer {
   private toolbarWatchers = new Set<WebSocket>()
   private logBuf = new Map<string, string[]>()       // channel → last 500 lines
   private logWatchers = new Set<WebSocket>()
+  private fileWatchers = new Map<WebSocket, string>()
   private unsubObservers: Array<() => void> = []
 
   private bridge: PtyBridge
@@ -105,6 +117,9 @@ export class RemoteServer {
       }),
       addLogObserver((channel, message) => {
         this.receiveLogLine(channel, message)
+      }),
+      addFsChangeObserver((projectPath, fullPath) => {
+        this.receiveFileChange(projectPath, fullPath)
       })
     )
 
@@ -186,6 +201,16 @@ export class RemoteServer {
     }
   }
 
+  private receiveFileChange(projectPath: string, fullPath: string): void {
+    const relPath = relative(projectPath, fullPath).replace(/\\/g, '/')
+    if (!relPath || relPath.startsWith('..') || relPath.split('/').some((part) => part.startsWith('.'))) return
+
+    const msg = JSON.stringify({ type: 'file-changed', path: relPath })
+    for (const [ws, watcherProjectPath] of this.fileWatchers) {
+      if (watcherProjectPath === projectPath && ws.readyState === WebSocket.OPEN) ws.send(msg)
+    }
+  }
+
   private getProjectName(projectPath: string): string {
     return basename(projectPath) || 'AIDE'
   }
@@ -244,6 +269,126 @@ export class RemoteServer {
 
     allSessions.sort((a, b) => b.mtime - a.mtime)
     return { sessions: allSessions.slice(offset, offset + limit), total: allSessions.length }
+  }
+
+  private resolveRemoteFilePath(projectPath: string, relPath: string): { fullPath: string; relativePath: string } | null {
+    const cleanRel = relPath.replace(/\\/g, '/').replace(/^\/+/, '')
+    const parts = cleanRel.split('/').filter(Boolean)
+    if (parts.some((part) => part === '..' || part.startsWith('.'))) return null
+
+    const projectRoot = resolve(projectPath)
+    const fullPath = resolve(projectRoot, ...parts)
+    const relFromRoot = relative(projectRoot, fullPath)
+    if (relFromRoot.startsWith('..') || relFromRoot === '' && cleanRel !== '' || resolve(relFromRoot) === relFromRoot) return null
+
+    return {
+      fullPath,
+      relativePath: relFromRoot.replace(/\\/g, '/')
+    }
+  }
+
+  private readRemoteDirectory(projectPath: string, relPath: string): { entries: RemoteTreeNode[] } | { error: string } {
+    const safePath = this.resolveRemoteFilePath(projectPath, relPath)
+    if (!safePath) return { error: 'invalid_path' }
+
+    try {
+      const stat = statSync(safePath.fullPath)
+      if (!stat.isDirectory()) return { error: 'not_directory' }
+
+      const entries = readdirSync(safePath.fullPath, { withFileTypes: true })
+        .filter((entry) => !entry.name.startsWith('.'))
+      const dirs = entries
+        .filter((entry) => entry.isDirectory())
+        .sort((a, b) => a.name.localeCompare(b.name))
+      const files = entries
+        .filter((entry) => !entry.isDirectory())
+        .sort((a, b) => a.name.localeCompare(b.name))
+
+      return {
+        entries: [...dirs, ...files].map((entry) => {
+          const childRel = safePath.relativePath ? `${safePath.relativePath}/${entry.name}` : entry.name
+          const childFullPath = join(safePath.fullPath, entry.name)
+          const child: RemoteTreeNode = {
+            name: entry.name,
+            path: childRel,
+            relativePath: childRel,
+            type: entry.isDirectory() ? 'directory' : 'file'
+          }
+          if (!entry.isDirectory()) {
+            try { child.size = statSync(childFullPath).size } catch {}
+          }
+          return child
+        })
+      }
+    } catch {
+      return { error: 'not_found' }
+    }
+  }
+
+  private readRemoteFile(projectPath: string, relPath: string): { content: string; mtime: number; size: number; isBinary: boolean; relativePath: string } | { error: string; size?: number } {
+    const safePath = this.resolveRemoteFilePath(projectPath, relPath)
+    if (!safePath || !safePath.relativePath) return { error: 'invalid_path' }
+
+    try {
+      const stat = statSync(safePath.fullPath)
+      if (!stat.isFile()) return { error: 'not_file' }
+      if (stat.size > REMOTE_FILE_MAX_BYTES) return { error: 'too_large', size: stat.size }
+
+      const buf = readFileSync(safePath.fullPath)
+      const probe = buf.subarray(0, 512)
+      const isBinary = probe.includes(0)
+      return {
+        content: isBinary ? '' : buf.toString('utf-8'),
+        mtime: stat.mtimeMs,
+        size: stat.size,
+        isBinary,
+        relativePath: safePath.relativePath
+      }
+    } catch {
+      return { error: 'not_found' }
+    }
+  }
+
+  private readRemoteHeadFile(projectPath: string, relPath: string): Promise<{ content: string } | { error: string; size?: number }> {
+    return new Promise((resolveResult) => {
+      const proc = spawn('git', ['show', `HEAD:${relPath}`], { cwd: projectPath })
+      const chunks: Buffer[] = []
+      const errChunks: Buffer[] = []
+      let total = 0
+      let tooLarge = false
+
+      proc.stdout.on('data', (chunk: Buffer) => {
+        total += chunk.length
+        if (total > REMOTE_FILE_MAX_BYTES) {
+          tooLarge = true
+          proc.kill()
+          return
+        }
+        chunks.push(chunk)
+      })
+      proc.stderr.on('data', (chunk: Buffer) => errChunks.push(chunk))
+      proc.on('close', (code) => {
+        if (tooLarge) {
+          resolveResult({ error: 'too_large', size: total })
+          return
+        }
+        if (code !== 0) {
+          const errMsg = Buffer.concat(errChunks).toString()
+          if (
+            errMsg.includes('exists on disk') ||
+            errMsg.includes('did not match any') ||
+            errMsg.includes('does not exist')
+          ) {
+            resolveResult({ error: 'untracked' })
+          } else {
+            resolveResult({ error: 'other' })
+          }
+          return
+        }
+        resolveResult({ content: Buffer.concat(chunks).toString('utf-8') })
+      })
+      proc.on('error', () => resolveResult({ error: 'other' }))
+    })
   }
 
   // --- Session management ---
@@ -627,6 +772,18 @@ export class RemoteServer {
       return
     }
 
+    if (path.startsWith('/api/files/') && req.method === 'GET') {
+      const port = Number(urlObj.searchParams.get('port'))
+      const projectId = urlObj.searchParams.get('project') ?? ''
+      if (!port || !this.registry.has(this.registryKey(port, projectId))) {
+        res.writeHead(404); res.end('Project not found'); return
+      }
+      const relPath = urlObj.searchParams.get('path') ?? ''
+      const proxiedPath = `${path}?project=${encodeURIComponent(projectId)}&path=${encodeURIComponent(relPath)}`
+      this.proxyToInstance(port, proxiedPath, res)
+      return
+    }
+
     if (path === '/tabs') {
       const port = Number(urlObj.searchParams.get('port'))
       const projectId = urlObj.searchParams.get('project') ?? ''
@@ -884,6 +1041,59 @@ export class RemoteServer {
       return
     }
 
+    if (path === '/api/files/tree' && req.method === 'GET') {
+      const projectPath = urlObj.searchParams.get('project') ?? ''
+      if (!this.findProjectWindow(projectPath)) { res.writeHead(404); res.end('Project not found'); return }
+      const relPath = urlObj.searchParams.get('path') ?? ''
+      const result = this.readRemoteDirectory(projectPath, relPath)
+      res.writeHead('error' in result ? 400 : 200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(result))
+      return
+    }
+
+    if (path === '/api/files/raw' && req.method === 'GET') {
+      const projectPath = urlObj.searchParams.get('project') ?? ''
+      if (!this.findProjectWindow(projectPath)) { res.writeHead(404); res.end('Project not found'); return }
+      const relPath = urlObj.searchParams.get('path') ?? ''
+      const result = this.readRemoteFile(projectPath, relPath)
+      res.writeHead('error' in result ? 400 : 200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(result))
+      return
+    }
+
+    if (path === '/api/files/diff' && req.method === 'GET') {
+      const projectPath = urlObj.searchParams.get('project') ?? ''
+      if (!this.findProjectWindow(projectPath)) { res.writeHead(404); res.end('Project not found'); return }
+      const relPath = urlObj.searchParams.get('path') ?? ''
+      const disk = this.readRemoteFile(projectPath, relPath)
+      if ('error' in disk) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(disk))
+        return
+      }
+      this.readRemoteHeadFile(projectPath, disk.relativePath).then((head) => {
+        if ('error' in head && head.error !== 'untracked') {
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify(head))
+          return
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({
+          relativePath: disk.relativePath,
+          size: disk.size,
+          mtime: disk.mtime,
+          isBinary: disk.isBinary,
+          diskContent: disk.content,
+          headContent: 'content' in head ? head.content : null,
+          headError: 'error' in head ? head.error : null
+        }))
+      }).catch(() => {
+        res.writeHead(500)
+        res.end('Failed to read diff')
+      })
+      return
+    }
+
     if (url.startsWith('/api/usage')) {
       const tabId = new URL(url, 'http://x').searchParams.get('tab') ?? ''
       const tabs = this.bridge.getAllTabs()
@@ -932,6 +1142,7 @@ export class RemoteServer {
         if (!authenticated) {
           if (msg.type === 'auth' && validatePin(String(msg.token ?? ''))) {
             authenticated = true
+            if (projectPath) this.fileWatchers.set(ws, projectPath)
             send({ type: 'auth-ok' })
           } else {
             send({ type: 'auth-fail' })
@@ -1023,6 +1234,7 @@ export class RemoteServer {
       this.bridge.releaseAll(ws)
       this.toolbarWatchers.delete(ws)
       this.logWatchers.delete(ws)
+      this.fileWatchers.delete(ws)
     })
   }
 }
@@ -1632,6 +1844,8 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { width: 100%; height: 100%; background: #1e1e1e; overflow: hidden; }
     body { display: flex; flex-direction: column; }
+    #app-shell { flex: 1; min-height: 0; display: flex; position: relative; overflow: hidden; }
+    #terminal-pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
     #status { flex-shrink: 0; padding: 5px 12px; font: 11px/1.4 monospace; color: #858585; background: #2d2d2d; border-bottom: 1px solid #3d3d3d; display: flex; align-items: center; gap: 8px; overflow: hidden; }
     #status-main { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #status-usage { flex-shrink: 0; white-space: nowrap; }
@@ -1665,21 +1879,88 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     body.size-large .cbtn, body.size-large .tb-btn { padding: 7px 14px; font-size: 14px; }
     .tb-extra-row { flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: #252526; border-bottom: 1px solid #3d3d3d; overflow-x: auto; }
     .tb-extra-row::-webkit-scrollbar { display: none; }
+    #files-drawer { position: fixed; inset: 0 auto 0 0; z-index: 30; width: min(88vw, 520px); background: #1e1e1e; border-right: 1px solid #3d3d3d; transform: translateX(-100%); transition: transform 0.2s ease; display: flex; flex-direction: column; box-shadow: 2px 0 18px rgba(0,0,0,0.45); }
+    body.files-open #files-drawer { transform: translateX(0); }
+    #files-backdrop { display: none; position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,0.42); }
+    body.files-open #files-backdrop { display: block; }
+    #files-fab { position: fixed; left: 0; top: 50%; z-index: 25; transform: translateY(-50%); padding: 10px 7px; color: #ffffff; background: rgba(80, 80, 80, 0.55); border: 1px solid rgba(255,255,255,0.18); border-left: 0; border-radius: 0 8px 8px 0; font: 12px/1 monospace; writing-mode: vertical-rl; text-orientation: mixed; cursor: pointer; touch-action: manipulation; -webkit-user-select: none; user-select: none; backdrop-filter: blur(4px); }
+    #files-fab:active { background: rgba(110, 110, 110, 0.75); }
+    body.files-open #files-fab { opacity: 0; pointer-events: none; }
+    #files-head { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: #252526; border-bottom: 1px solid #3d3d3d; }
+    #files-title { flex: 1; min-width: 0; color: #d4d4d4; font: 13px/1.3 monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #files-close { background: none; border: 0; color: #999; font: 18px/1 monospace; cursor: pointer; padding: 2px 6px; }
+    #files-tree { flex-shrink: 0; max-height: 34%; min-height: 120px; overflow: auto; padding: 6px 0; border-bottom: 1px solid #3d3d3d; font: 12px/1.35 monospace; }
+    body.file-preview #files-tree { display: none; }
+    .file-row { display: flex; gap: 5px; align-items: center; min-height: 24px; padding: 3px 10px; color: #cccccc; cursor: pointer; white-space: nowrap; overflow: hidden; touch-action: manipulation; }
+    .file-row:hover, .file-row.selected { background: #2a2d2e; }
+    .file-row.selected { color: #ffffff; }
+    .file-indent { flex-shrink: 0; width: 0; }
+    .file-icon { flex-shrink: 0; color: #858585; }
+    .file-name { overflow: hidden; text-overflow: ellipsis; }
+    .file-empty, .file-error { color: #858585; padding: 10px; font: 12px/1.4 monospace; }
+    .file-error { color: #f48771; }
+    #file-viewer { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    #viewer-head { flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: #252526; border-bottom: 1px solid #3d3d3d; }
+    #files-back { display: none; padding: 4px 8px; color: #cccccc; background: #333; border: 1px solid #555; border-radius: 4px; font: 11px/1 monospace; cursor: pointer; }
+    body.file-preview #files-back { display: block; }
+    #viewer-path { flex: 1; min-width: 0; color: #cccccc; font: 12px/1.3 monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mode-btn { padding: 4px 8px; color: #cccccc; background: #333; border: 1px solid #555; border-radius: 4px; font: 11px/1 monospace; cursor: pointer; }
+    .mode-btn.active { color: #ffffff; border-color: #007acc; background: #094771; }
+    #viewer-body { flex: 1; min-height: 0; overflow: auto; color: #d4d4d4; background: #1e1e1e; }
+    #viewer-body pre { margin: 0; padding: 10px; font: 12px/1.45 Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+    .viewer-placeholder { color: #858585; padding: 14px; font: 12px/1.5 monospace; }
+    #file-toast { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 3; padding: 8px 10px; color: #d4d4d4; background: rgba(45,45,45,0.96); border: 1px solid #555; border-radius: 6px; font: 12px/1.35 monospace; opacity: 0; transform: translateY(8px); pointer-events: none; transition: opacity 0.18s ease, transform 0.18s ease; box-shadow: 0 2px 10px rgba(0,0,0,0.35); }
+    #file-toast.show { opacity: 1; transform: translateY(0); }
+    .diff-row { display: flex; gap: 8px; padding: 0 10px; font: 12px/1.45 Consolas, monospace; white-space: pre-wrap; word-break: break-word; border-left: 3px solid transparent; }
+    .diff-row.add { background: rgba(35, 134, 54, 0.18); border-left-color: #238636; }
+    .diff-row.del { background: rgba(248, 81, 73, 0.18); border-left-color: #f85149; }
+    .diff-mark { width: 14px; flex-shrink: 0; color: #858585; }
+    .diff-text { flex: 1; min-width: 0; }
+    @media (min-width: 900px) {
+      #files-drawer { position: relative; z-index: 1; width: min(42vw, 560px); max-width: 560px; transform: none; box-shadow: none; flex-shrink: 0; }
+      body:not(.files-open) #files-drawer { display: none; }
+      body.files-open #files-backdrop { display: none; }
+      body.files-open #files-fab { opacity: 0.35; pointer-events: auto; }
+      #files-tree { max-height: 40%; }
+    }
   </style>
 </head>
 <body>
-  <div id="status"><span id="status-main">Connecting...</span><span id="status-usage"></span></div>
-  <div id="terminal"></div>
-  <div id="toolbar-shutter">
-    <div id="tb-head">
-      <div id="tb-btn-list" style="display:flex;gap:4px;flex:1;overflow-x:auto;min-width:0;"></div>
-      <button id="tb-close-btn">&#x25BC;</button>
-    </div>
-    <div id="tb-extra-rows"></div>
-    <div id="tb-tabs"></div>
-    <div id="tb-log"></div>
+  <div id="app-shell">
+    <aside id="files-drawer">
+      <div id="files-head">
+        <div id="files-title">Files</div>
+        <button id="files-close" title="Close">×</button>
+      </div>
+      <div id="files-tree"><div class="file-empty">Loading files...</div></div>
+      <section id="file-viewer">
+        <div id="viewer-head">
+          <button id="files-back">Files</button>
+          <div id="viewer-path">No file selected</div>
+          <button id="mode-raw" class="mode-btn">Raw</button>
+          <button id="mode-diff" class="mode-btn">Diff</button>
+        </div>
+        <div id="viewer-body"><div class="viewer-placeholder">Select a file to preview it.</div></div>
+        <div id="file-toast"></div>
+      </section>
+    </aside>
+    <div id="files-backdrop"></div>
+    <button id="files-fab" title="Files">Files</button>
+    <main id="terminal-pane">
+      <div id="status"><span id="status-main">Connecting...</span><span id="status-usage"></span></div>
+      <div id="terminal"></div>
+      <div id="toolbar-shutter">
+        <div id="tb-head">
+          <div id="tb-btn-list" style="display:flex;gap:4px;flex:1;overflow-x:auto;min-width:0;"></div>
+          <button id="tb-close-btn">&#x25BC;</button>
+        </div>
+        <div id="tb-extra-rows"></div>
+        <div id="tb-tabs"></div>
+        <div id="tb-log"></div>
+      </div>
+      <div id="ctrl-bar"></div>
+    </main>
   </div>
-  <div id="ctrl-bar"></div>
   <script src="/static/xterm.js"></script>
   <script src="/static/addon-fit.js"></script>
   <script>
@@ -1697,6 +1978,13 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     var logChannels = []
     var logBuf = {}
     var logActiveChannel = null
+    var filesOpen = window.matchMedia && window.matchMedia('(min-width: 900px)').matches
+    var treeCache = {}
+    var expandedDirs = new Set([''])
+    var selectedFile = null
+    var filePreviewOpen = false
+    var viewerMode = localStorage.getItem('aide.remote.fileViewMode') || 'raw'
+    var toastTimer = null
 
     var statusMainEl = document.getElementById('status-main')
     var statusUsageEl = document.getElementById('status-usage')
@@ -1738,6 +2026,239 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     function stopUsagePoll() {
       if (usagePollTimer) { clearInterval(usagePollTimer); usagePollTimer = null }
       statusUsageEl.textContent = ''
+    }
+
+    // --- Files drawer ---
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      })
+    }
+    function fileApi(kind, path) {
+      return '/api/files/' + kind + '?port=' + port + '&project=' + encodeURIComponent(projectId) + '&path=' + encodeURIComponent(path || '')
+    }
+    function isWideLayout() {
+      return window.matchMedia && window.matchMedia('(min-width: 900px)').matches
+    }
+    function applyFilesOpen() {
+      document.body.classList.toggle('files-open', filesOpen)
+      document.body.classList.toggle('file-preview', filePreviewOpen)
+      setTimeout(doResize, 20)
+    }
+    function showFileTree() {
+      filePreviewOpen = false
+      applyFilesOpen()
+    }
+    function openFiles() {
+      filesOpen = true
+      applyFilesOpen()
+      if (!treeCache['']) loadTree('')
+      if (!inputMode) renderButtons()
+    }
+    function closeFiles() {
+      filesOpen = false
+      applyFilesOpen()
+      if (!inputMode) renderButtons()
+    }
+    function setViewerMode(mode) {
+      viewerMode = mode === 'diff' ? 'diff' : 'raw'
+      localStorage.setItem('aide.remote.fileViewMode', viewerMode)
+      renderModeButtons()
+      if (selectedFile) loadSelectedFile()
+    }
+    function renderModeButtons() {
+      document.getElementById('mode-raw').classList.toggle('active', viewerMode === 'raw')
+      document.getElementById('mode-diff').classList.toggle('active', viewerMode === 'diff')
+    }
+    function renderViewerMessage(text, isError) {
+      document.getElementById('viewer-body').innerHTML = '<div class="' + (isError ? 'file-error' : 'viewer-placeholder') + '">' + esc(text) + '</div>'
+    }
+    function showFileToast(text) {
+      var toast = document.getElementById('file-toast')
+      toast.textContent = text
+      toast.classList.add('show')
+      if (toastTimer) clearTimeout(toastTimer)
+      toastTimer = setTimeout(function() { toast.classList.remove('show') }, 2200)
+    }
+    function formatFileError(data) {
+      if (!data || !data.error) return 'Failed to load file.'
+      if (data.error === 'too_large') return 'File is larger than 5 MB and cannot be previewed.'
+      if (data.error === 'untracked') return 'No HEAD version exists for this file.'
+      if (data.error === 'not_file') return 'Selected path is not a file.'
+      if (data.error === 'invalid_path') return 'This path cannot be opened remotely.'
+      return 'Failed to load file: ' + data.error
+    }
+    function renderRaw(data) {
+      if (data.isBinary) {
+        renderViewerMessage('Binary file cannot be previewed.', true)
+        return
+      }
+      document.getElementById('viewer-body').innerHTML = '<pre>' + esc(data.content || '') + '</pre>'
+    }
+    function splitLines(text) {
+      return String(text || '').split(/\\r?\\n/)
+    }
+    function appendDiffRow(container, type, mark, text) {
+      var row = document.createElement('div')
+      row.className = 'diff-row ' + type
+      var m = document.createElement('div')
+      m.className = 'diff-mark'
+      m.textContent = mark
+      var t = document.createElement('div')
+      t.className = 'diff-text'
+      t.textContent = text
+      row.appendChild(m)
+      row.appendChild(t)
+      container.appendChild(row)
+    }
+    function renderDiff(data) {
+      if (data.isBinary) {
+        renderViewerMessage('Binary file cannot be diffed.', true)
+        return
+      }
+      if (data.headError === 'untracked' || data.headContent === null) {
+        document.getElementById('viewer-body').innerHTML =
+          '<div class="viewer-placeholder">Untracked file. Showing raw content.</div><pre>' + esc(data.diskContent || '') + '</pre>'
+        return
+      }
+      var oldLines = splitLines(data.headContent)
+      var newLines = splitLines(data.diskContent)
+      var body = document.getElementById('viewer-body')
+      body.innerHTML = ''
+      var max = Math.max(oldLines.length, newLines.length)
+      for (var i = 0; i < max; i++) {
+        var oldLine = oldLines[i]
+        var newLine = newLines[i]
+        if (oldLine === newLine) {
+          appendDiffRow(body, '', ' ', newLine == null ? '' : newLine)
+        } else {
+          if (oldLine != null) appendDiffRow(body, 'del', '-', oldLine)
+          if (newLine != null) appendDiffRow(body, 'add', '+', newLine)
+        }
+      }
+      if (max === 0) renderViewerMessage('No diff content.', false)
+    }
+    function loadSelectedFile(keepContent) {
+      if (!selectedFile) return
+      var bodyEl = document.getElementById('viewer-body')
+      var previousScrollTop = bodyEl.scrollTop
+      var previousScrollLeft = bodyEl.scrollLeft
+      document.getElementById('viewer-path').textContent = selectedFile
+      if (!keepContent) renderViewerMessage('Loading ' + selectedFile + '...', false)
+      fetch(fileApi(viewerMode === 'diff' ? 'diff' : 'raw', selectedFile))
+        .then(function(r) { return r.json().then(function(d) { d.ok = r.ok; return d }) })
+        .then(function(data) {
+          if (!data.ok || data.error) {
+            renderViewerMessage(formatFileError(data), true)
+            return
+          }
+          if (viewerMode === 'diff') renderDiff(data)
+          else renderRaw(data)
+          bodyEl.scrollTop = previousScrollTop
+          bodyEl.scrollLeft = previousScrollLeft
+        })
+        .catch(function() { renderViewerMessage('Failed to load file.', true) })
+    }
+    function parentDir(path) {
+      var idx = String(path || '').lastIndexOf('/')
+      return idx > 0 ? path.slice(0, idx) : ''
+    }
+    function handleRemoteFileChanged(path) {
+      delete treeCache[parentDir(path)]
+      if (expandedDirs.has(parentDir(path))) loadTree(parentDir(path))
+      if (selectedFile === path) {
+        showFileToast('File changed. Preview refreshed.')
+        loadSelectedFile(true)
+      }
+    }
+    function selectFile(path) {
+      selectedFile = path
+      filePreviewOpen = true
+      loadSelectedFile()
+      renderTree()
+      if (!isWideLayout()) {
+        // Keep the drawer open on phones so the preview remains visible.
+        filesOpen = true
+        applyFilesOpen()
+      }
+    }
+    function toggleDir(path) {
+      if (expandedDirs.has(path)) expandedDirs.delete(path)
+      else {
+        expandedDirs.add(path)
+        if (!treeCache[path]) loadTree(path)
+      }
+      renderTree()
+    }
+    function loadTree(path) {
+      var key = path || ''
+      treeCache[key] = treeCache[key] || { loading: true, entries: [] }
+      renderTree()
+      fetch(fileApi('tree', key))
+        .then(function(r) { return r.json().then(function(d) { d.ok = r.ok; return d }) })
+        .then(function(data) {
+          if (!data.ok || data.error) treeCache[key] = { error: data.error || 'load_failed', entries: [] }
+          else treeCache[key] = { entries: data.entries || [] }
+          renderTree()
+        })
+        .catch(function() {
+          treeCache[key] = { error: 'load_failed', entries: [] }
+          renderTree()
+        })
+    }
+    function renderTreeLevel(container, path, depth) {
+      var state = treeCache[path || '']
+      if (!state) return
+      if (state.loading) {
+        var loading = document.createElement('div')
+        loading.className = 'file-empty'
+        loading.textContent = 'Loading...'
+        container.appendChild(loading)
+        return
+      }
+      if (state.error) {
+        var err = document.createElement('div')
+        err.className = 'file-error'
+        err.textContent = 'Failed to load: ' + state.error
+        container.appendChild(err)
+        return
+      }
+      if (depth === 0 && state.entries.length === 0) {
+        var empty = document.createElement('div')
+        empty.className = 'file-empty'
+        empty.textContent = 'No files.'
+        container.appendChild(empty)
+      }
+      state.entries.forEach(function(entry) {
+        var row = document.createElement('div')
+        row.className = 'file-row' + (selectedFile === entry.relativePath ? ' selected' : '')
+        row.title = entry.relativePath
+        var indent = document.createElement('span')
+        indent.className = 'file-indent'
+        indent.style.width = (depth * 14) + 'px'
+        var icon = document.createElement('span')
+        icon.className = 'file-icon'
+        icon.textContent = entry.type === 'directory' ? (expandedDirs.has(entry.relativePath) ? '▾' : '▸') : '·'
+        var name = document.createElement('span')
+        name.className = 'file-name'
+        name.textContent = entry.name
+        row.appendChild(indent)
+        row.appendChild(icon)
+        row.appendChild(name)
+        row.addEventListener('click', function() {
+          if (entry.type === 'directory') toggleDir(entry.relativePath)
+          else selectFile(entry.relativePath)
+        })
+        container.appendChild(row)
+        if (entry.type === 'directory' && expandedDirs.has(entry.relativePath)) {
+          renderTreeLevel(container, entry.relativePath, depth + 1)
+        }
+      })
+    }
+    function renderTree() {
+      var root = document.getElementById('files-tree')
+      root.innerHTML = ''
+      renderTreeLevel(root, '', 0)
     }
 
     // --- Terminal ---
@@ -2042,6 +2563,8 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
           if (logActiveChannel === null) switchLogChannel(msg.channel)
         }
         appendLogLine(msg.channel, msg.line)
+      } else if (msg.type === 'file-changed') {
+        handleRemoteFileChanged(msg.path || '')
       }
     }
 
@@ -2067,6 +2590,23 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     applyViewport()
 
     document.body.classList.add('size-' + (btnConfig.size || 'medium'))
+    document.getElementById('files-fab').addEventListener('click', function() { filesOpen ? closeFiles() : openFiles() })
+    document.getElementById('files-back').addEventListener('click', showFileTree)
+    document.getElementById('files-close').addEventListener('click', closeFiles)
+    document.getElementById('files-backdrop').addEventListener('click', closeFiles)
+    document.getElementById('mode-raw').addEventListener('click', function() { setViewerMode('raw') })
+    document.getElementById('mode-diff').addEventListener('click', function() { setViewerMode('diff') })
+    window.addEventListener('resize', function() {
+      if (isWideLayout() && !filesOpen) {
+        filesOpen = true
+        if (!treeCache['']) loadTree('')
+      }
+      applyFilesOpen()
+      if (!inputMode) renderButtons()
+    })
+    renderModeButtons()
+    applyFilesOpen()
+    if (filesOpen) loadTree('')
     renderButtons()
     renderExtraRows()
     connectWs()
