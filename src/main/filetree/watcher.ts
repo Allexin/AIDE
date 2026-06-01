@@ -45,12 +45,18 @@ interface WatchEntry {
 
 const watchers = new Map<string, WatchEntry>()
 const fsChangeObservers = new Set<(projectPath: string, fullPath: string) => void>()
+const gitStatusObservers = new Set<(projectPath: string, status: GitStatusResult) => void>()
 
 const DEBOUNCE_MS = 300
 
 export function addFsChangeObserver(observer: (projectPath: string, fullPath: string) => void): () => void {
   fsChangeObservers.add(observer)
   return () => fsChangeObservers.delete(observer)
+}
+
+export function addGitStatusObserver(observer: (projectPath: string, status: GitStatusResult) => void): () => void {
+  gitStatusObservers.add(observer)
+  return () => gitStatusObservers.delete(observer)
 }
 
 export function startProjectWatcher(projectPath: string, win: BrowserWindow): void {
@@ -61,6 +67,7 @@ export function startProjectWatcher(projectPath: string, win: BrowserWindow): vo
 
   const sendGit = (status: GitStatusResult): void => {
     if (!win.isDestroyed()) win.webContents.send('filetree:git-status-updated', status)
+    for (const observer of gitStatusObservers) observer(projectPath, status)
   }
 
   const scheduleGitRefresh = (): void => {

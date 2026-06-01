@@ -1,7 +1,7 @@
 import http from 'http'
-import { readdirSync, readFileSync, statSync } from 'fs'
+import { copyFileSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'fs'
 import { spawn } from 'child_process'
-import { join, basename, resolve, relative } from 'path'
+import { join, basename, dirname, resolve, relative } from 'path'
 import { randomUUID } from 'crypto'
 import { WebSocket, WebSocketServer } from 'ws'
 import { networkInterfaces } from 'os'
@@ -17,7 +17,8 @@ import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
 import { readToolbarButtons as readProjectToolbarButtons, type ToolbarButton, isSplitter } from '../config/toolbarConfig'
 import { spawnButtonProcess, killButtonProcess, addProcessObserver, addOutputObserver, getRunningButtonIds } from '../toolbar/processManager'
 import { addLogObserver } from '../pty/cliTools/cliLogger'
-import { addFsChangeObserver } from '../filetree/watcher'
+import { addFsChangeObserver, addGitStatusObserver } from '../filetree/watcher'
+import { runGitStatus } from '../filetree/gitStatus'
 
 const AGGREGATOR_PORT = 3847
 const SESSION_TTL = 24 * 60 * 60 * 1000  // 24 hours
@@ -120,6 +121,9 @@ export class RemoteServer {
       }),
       addFsChangeObserver((projectPath, fullPath) => {
         this.receiveFileChange(projectPath, fullPath)
+      }),
+      addGitStatusObserver((projectPath, status) => {
+        this.receiveGitStatus(projectPath, status)
       })
     )
 
@@ -206,6 +210,13 @@ export class RemoteServer {
     if (!relPath || relPath.startsWith('..') || relPath.split('/').some((part) => part.startsWith('.'))) return
 
     const msg = JSON.stringify({ type: 'file-changed', path: relPath })
+    for (const [ws, watcherProjectPath] of this.fileWatchers) {
+      if (watcherProjectPath === projectPath && ws.readyState === WebSocket.OPEN) ws.send(msg)
+    }
+  }
+
+  private receiveGitStatus(projectPath: string, status: Awaited<ReturnType<typeof runGitStatus>>): void {
+    const msg = JSON.stringify({ type: 'git-status-updated', status })
     for (const [ws, watcherProjectPath] of this.fileWatchers) {
       if (watcherProjectPath === projectPath && ws.readyState === WebSocket.OPEN) ws.send(msg)
     }
@@ -389,6 +400,88 @@ export class RemoteServer {
       })
       proc.on('error', () => resolveResult({ error: 'other' }))
     })
+  }
+
+  private validateRemoteName(name: string): boolean {
+    return Boolean(name) && !name.includes('/') && !name.includes('\\') && name !== '.' && name !== '..' && !name.startsWith('.')
+  }
+
+  private mutateRemoteFile(projectPath: string, action: string, relPath: string, name?: string): { ok: true; path?: string } | { error: string } {
+    try {
+      if (action === 'new') {
+        const parentPath = this.resolveRemoteFilePath(projectPath, relPath)
+        if (!parentPath) return { error: 'invalid_path' }
+        const parentStat = statSync(parentPath.fullPath)
+        if (!parentStat.isDirectory()) return { error: 'not_directory' }
+        if (!this.validateRemoteName(name ?? '')) return { error: 'invalid_name' }
+        const target = join(parentPath.fullPath, name!)
+        statSync(target)
+        return { error: 'already_exists' }
+      }
+      const safePath = this.resolveRemoteFilePath(projectPath, relPath)
+      if (!safePath || !safePath.relativePath) return { error: 'invalid_path' }
+      const stat = statSync(safePath.fullPath)
+
+      if (action === 'delete') {
+        rmSync(safePath.fullPath, { recursive: stat.isDirectory(), force: false })
+        return { ok: true }
+      }
+
+      if (action === 'rename') {
+        if (!this.validateRemoteName(name ?? '')) return { error: 'invalid_name' }
+        const target = join(dirname(safePath.fullPath), name!)
+        statSync(target)
+        return { error: 'already_exists' }
+      }
+
+      if (action === 'duplicate') {
+        if (!stat.isFile()) return { error: 'not_file' }
+        if (!this.validateRemoteName(name ?? '')) return { error: 'invalid_name' }
+        const target = join(dirname(safePath.fullPath), name!)
+        statSync(target)
+        return { error: 'already_exists' }
+      }
+
+      return { error: 'unknown_action' }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT') return { error: 'fs_error' }
+    }
+
+    try {
+      if (action === 'new') {
+        const parentPath = this.resolveRemoteFilePath(projectPath, relPath)
+        if (!parentPath || !this.validateRemoteName(name ?? '')) return { error: 'invalid_path' }
+        const target = join(parentPath.fullPath, name!)
+        writeFileSync(target, '', 'utf-8')
+        return { ok: true, path: parentPath.relativePath ? `${parentPath.relativePath}/${name}` : name }
+      }
+
+      const safePath = this.resolveRemoteFilePath(projectPath, relPath)
+      if (!safePath || !safePath.relativePath) return { error: 'invalid_path' }
+
+      if (action === 'rename') {
+        if (!this.validateRemoteName(name ?? '')) return { error: 'invalid_name' }
+        const target = join(dirname(safePath.fullPath), name!)
+        renameSync(safePath.fullPath, target)
+        const parentRel = dirname(safePath.relativePath).replace(/\\/g, '/')
+        const newRel = parentRel === '.' ? name! : `${parentRel}/${name}`
+        return { ok: true, path: newRel }
+      }
+
+      if (action === 'duplicate') {
+        if (!this.validateRemoteName(name ?? '')) return { error: 'invalid_name' }
+        const target = join(dirname(safePath.fullPath), name!)
+        copyFileSync(safePath.fullPath, target)
+        const parentRel = dirname(safePath.relativePath).replace(/\\/g, '/')
+        const newRel = parentRel === '.' ? name! : `${parentRel}/${name}`
+        return { ok: true, path: newRel }
+      }
+
+      return { error: 'unknown_action' }
+    } catch {
+      return { error: 'fs_error' }
+    }
   }
 
   // --- Session management ---
@@ -784,6 +877,32 @@ export class RemoteServer {
       return
     }
 
+    if (path === '/api/files/action' && req.method === 'POST') {
+      const port = Number(urlObj.searchParams.get('port'))
+      const projectId = urlObj.searchParams.get('project') ?? ''
+      if (!port || !this.registry.has(this.registryKey(port, projectId))) {
+        res.writeHead(404); res.end('Project not found'); return
+      }
+      let body = ''
+      req.on('data', (chunk: Buffer) => { body += chunk.toString() })
+      req.on('end', () => {
+        let data: { action?: string; path?: string; name?: string } = {}
+        try { data = JSON.parse(body || '{}') as { action?: string; path?: string; name?: string } } catch {}
+        this.proxyJsonToInstance(port, `/api/files/action?project=${encodeURIComponent(projectId)}`, data, res)
+      })
+      return
+    }
+
+    if (path === '/api/git-status' && req.method === 'GET') {
+      const port = Number(urlObj.searchParams.get('port'))
+      const projectId = urlObj.searchParams.get('project') ?? ''
+      if (!port || !this.registry.has(this.registryKey(port, projectId))) {
+        res.writeHead(404); res.end('Project not found'); return
+      }
+      this.proxyToInstance(port, `/api/git-status?project=${encodeURIComponent(projectId)}`, res)
+      return
+    }
+
     if (path === '/tabs') {
       const port = Number(urlObj.searchParams.get('port'))
       const projectId = urlObj.searchParams.get('project') ?? ''
@@ -1094,6 +1213,34 @@ export class RemoteServer {
       return
     }
 
+    if (path === '/api/files/action' && req.method === 'POST') {
+      const projectPath = urlObj.searchParams.get('project') ?? ''
+      if (!this.findProjectWindow(projectPath)) { res.writeHead(404); res.end('Project not found'); return }
+      let body = ''
+      req.on('data', (chunk: Buffer) => { body += chunk.toString() })
+      req.on('end', () => {
+        let data: { action?: string; path?: string; name?: string } = {}
+        try { data = JSON.parse(body || '{}') as { action?: string; path?: string; name?: string } } catch {}
+        const result = this.mutateRemoteFile(projectPath, String(data.action ?? ''), String(data.path ?? ''), data.name)
+        res.writeHead('error' in result ? 400 : 200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(result))
+      })
+      return
+    }
+
+    if (path === '/api/git-status' && req.method === 'GET') {
+      const projectPath = urlObj.searchParams.get('project') ?? ''
+      if (!this.findProjectWindow(projectPath)) { res.writeHead(404); res.end('Project not found'); return }
+      runGitStatus(projectPath).then((status) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(status))
+      }).catch(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ available: false, changed: [], deleted: [], untracked: [], branch: null }))
+      })
+      return
+    }
+
     if (url.startsWith('/api/usage')) {
       const tabId = new URL(url, 'http://x').searchParams.get('tab') ?? ''
       const tabs = this.bridge.getAllTabs()
@@ -1185,6 +1332,19 @@ export class RemoteServer {
             this.bridge.releaseTab(ws, String(msg.tabId ?? ''))
             if (activeTabId === msg.tabId) activeTabId = null
             break
+          case 'file-context-insert': {
+            const relPath = String(msg.path ?? '')
+            const tabId = String(msg.tabId ?? activeTabId ?? '')
+            const tab = (projectPath ? this.getProjectTabs(projectPath) : this.bridge.getAllTabs()).find((t) => t.tabId === tabId)
+            const text = tab ? getToolById(tab.toolId)?.contextInsert?.(relPath) : null
+            if (text && tabId) {
+              this.bridge.writeToTab(ws, tabId, text + ' ')
+              send({ type: 'file-context-inserted', path: relPath })
+            } else {
+              send({ type: 'error', message: 'Cannot add file to context' })
+            }
+            break
+          }
           case 'toolbar-list': {
             const buttons = this.getProjectButtons(projectPath)
             const win = this.findProjectWindow(projectPath) ?? [...this.openProjects.values()][0]
@@ -1896,9 +2056,15 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     .file-row.selected { color: #ffffff; }
     .file-indent { flex-shrink: 0; width: 0; }
     .file-icon { flex-shrink: 0; color: #858585; }
+    .file-icon.changed { color: #73c991; }
     .file-name { overflow: hidden; text-overflow: ellipsis; }
     .file-empty, .file-error { color: #858585; padding: 10px; font: 12px/1.4 monospace; }
     .file-error { color: #f48771; }
+    #file-context-menu { display: none; position: fixed; z-index: 60; min-width: 180px; padding: 4px 0; background: #252526; border: 1px solid #454545; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,0.45); }
+    #file-context-menu.open { display: block; }
+    .ctx-item { display: block; width: 100%; padding: 7px 14px; color: #cccccc; background: transparent; border: 0; text-align: left; font: 12px/1.2 monospace; cursor: pointer; }
+    .ctx-item:hover { background: #094771; color: #ffffff; }
+    .ctx-sep { height: 1px; margin: 4px 0; background: #3d3d3d; }
     #file-viewer { flex: 1; min-height: 0; display: flex; flex-direction: column; }
     #viewer-head { flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: #252526; border-bottom: 1px solid #3d3d3d; }
     #files-back { display: none; padding: 4px 8px; color: #cccccc; background: #333; border: 1px solid #555; border-radius: 4px; font: 11px/1 monospace; cursor: pointer; }
@@ -1945,6 +2111,7 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
       </section>
     </aside>
     <div id="files-backdrop"></div>
+    <div id="file-context-menu"></div>
     <button id="files-fab" title="Files">Files</button>
     <main id="terminal-pane">
       <div id="status"><span id="status-main">Connecting...</span><span id="status-usage"></span></div>
@@ -1983,8 +2150,11 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     var expandedDirs = new Set([''])
     var selectedFile = null
     var filePreviewOpen = false
+    var gitStatus = null
     var viewerMode = localStorage.getItem('aide.remote.fileViewMode') || 'raw'
     var toastTimer = null
+    var contextEntry = null
+    var longPressTimer = null
 
     var statusMainEl = document.getElementById('status-main')
     var statusUsageEl = document.getElementById('status-usage')
@@ -2037,6 +2207,12 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     function fileApi(kind, path) {
       return '/api/files/' + kind + '?port=' + port + '&project=' + encodeURIComponent(projectId) + '&path=' + encodeURIComponent(path || '')
     }
+    function gitStatusApi() {
+      return '/api/git-status?port=' + port + '&project=' + encodeURIComponent(projectId)
+    }
+    function fileActionApi() {
+      return '/api/files/action?port=' + port + '&project=' + encodeURIComponent(projectId)
+    }
     function isWideLayout() {
       return window.matchMedia && window.matchMedia('(min-width: 900px)').matches
     }
@@ -2048,6 +2224,211 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     function showFileTree() {
       filePreviewOpen = false
       applyFilesOpen()
+    }
+    function loadGitStatus() {
+      fetch(gitStatusApi())
+        .then(function(r) { return r.json() })
+        .then(function(status) {
+          gitStatus = status
+          renderTree()
+        })
+        .catch(function() {})
+    }
+    function isEntryChanged(entry) {
+      if (!gitStatus || !gitStatus.available) return false
+      var allChanged = (gitStatus.changed || []).concat(gitStatus.untracked || [])
+      if (entry.type === 'directory') {
+        return allChanged.some(function(p) { return p.indexOf(entry.relativePath + '/') === 0 })
+      }
+      return allChanged.indexOf(entry.relativePath) >= 0 ||
+        (gitStatus.untracked || []).some(function(p) { return p.slice(-1) === '/' && entry.relativePath.indexOf(p) === 0 })
+    }
+    function closeFileContextMenu() {
+      contextEntry = null
+      document.getElementById('file-context-menu').classList.remove('open')
+    }
+    function copyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() {
+          showFileToast('Path copied.')
+        }).catch(function() {
+          fallbackCopyText(text)
+        })
+      } else {
+        fallbackCopyText(text)
+      }
+    }
+    function fallbackCopyText(text) {
+      var ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.left = '-9999px'
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      try {
+        document.execCommand('copy')
+        showFileToast('Path copied.')
+      } catch (err) {
+        showFileToast('Could not copy path.')
+      }
+      document.body.removeChild(ta)
+    }
+    function addSelectedFileToContext(path) {
+      if (!activeTabId) {
+        showFileToast('No terminal tab selected.')
+        return
+      }
+      if (!sendWs({ type: 'file-context-insert', tabId: activeTabId, path: path })) {
+        showFileToast('Terminal is not connected.')
+      }
+    }
+    function defaultCopyName(filename) {
+      var idx = filename.lastIndexOf('.')
+      if (idx > 0) return filename.slice(0, idx) + '_Copy' + filename.slice(idx)
+      return filename + '_Copy'
+    }
+    function runFileAction(action, path, name) {
+      return fetch(fileActionApi(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: action, path: path, name: name })
+      })
+        .then(function(r) { return r.json().then(function(d) { d.ok = r.ok; return d }) })
+        .then(function(data) {
+          if (!data.ok || data.error) throw new Error(data.error || 'fs_error')
+          return data
+        })
+    }
+    function refreshAfterFileAction(path, newPath) {
+      var oldParent = parentDir(path)
+      var newParent = parentDir(newPath || path)
+      delete treeCache[oldParent]
+      delete treeCache[newParent]
+      if (expandedDirs.has(oldParent) || oldParent === '') loadTree(oldParent)
+      if (newParent !== oldParent && (expandedDirs.has(newParent) || newParent === '')) loadTree(newParent)
+      loadGitStatus()
+    }
+    function formatFileActionError(err) {
+      var message = err && err.message ? err.message : 'fs_error'
+      if (message === 'already_exists') return 'A file with this name already exists.'
+      if (message === 'invalid_name') return 'Invalid name.'
+      if (message === 'invalid_path') return 'This path cannot be changed remotely.'
+      return 'File operation failed.'
+    }
+    function createRemoteFile(parentPath) {
+      var name = window.prompt('New file name')
+      if (!name) return
+      runFileAction('new', parentPath, name)
+        .then(function(data) {
+          showFileToast('File created.')
+          refreshAfterFileAction(parentPath, data.path)
+          if (data.path) selectFile(data.path)
+        })
+        .catch(function(err) { showFileToast(formatFileActionError(err)) })
+    }
+    function renameRemoteEntry(entry) {
+      var name = window.prompt('Rename', entry.name)
+      if (!name || name === entry.name) return
+      runFileAction('rename', entry.relativePath, name)
+        .then(function(data) {
+          showFileToast('Renamed.')
+          if (selectedFile === entry.relativePath) {
+            selectedFile = data.path || null
+            if (selectedFile) loadSelectedFile()
+          }
+          refreshAfterFileAction(entry.relativePath, data.path)
+        })
+        .catch(function(err) { showFileToast(formatFileActionError(err)) })
+    }
+    function duplicateRemoteFile(entry) {
+      var name = window.prompt('Duplicate as', defaultCopyName(entry.name))
+      if (!name) return
+      runFileAction('duplicate', entry.relativePath, name)
+        .then(function(data) {
+          showFileToast('Duplicated.')
+          refreshAfterFileAction(entry.relativePath, data.path)
+        })
+        .catch(function(err) { showFileToast(formatFileActionError(err)) })
+    }
+    function deleteRemoteEntry(entry) {
+      if (!window.confirm('Delete ' + entry.relativePath + '?')) return
+      runFileAction('delete', entry.relativePath)
+        .then(function() {
+          showFileToast('Deleted.')
+          if (selectedFile === entry.relativePath || (entry.type === 'directory' && selectedFile && selectedFile.indexOf(entry.relativePath + '/') === 0)) {
+            selectedFile = null
+            filePreviewOpen = false
+            document.getElementById('viewer-path').textContent = 'No file selected'
+            renderViewerMessage('Select a file to preview it.', false)
+          }
+          expandedDirs.delete(entry.relativePath)
+          refreshAfterFileAction(entry.relativePath)
+          applyFilesOpen()
+        })
+        .catch(function(err) { showFileToast(formatFileActionError(err)) })
+    }
+    function openFileContextMenu(x, y, entry) {
+      contextEntry = entry
+      var menu = document.getElementById('file-context-menu')
+      var isDir = entry.type === 'directory'
+      var isRoot = isDir && entry.relativePath === ''
+      // Keep this list in sync when adding file context menu actions: every action
+      // needs both a menu item here and handling in runFileContextAction().
+      var html = ''
+      if (!isRoot) html += '<button class="ctx-item" data-action="open">' + (isDir ? (expandedDirs.has(entry.relativePath) ? 'Collapse' : 'Expand') : 'Open') + '</button>'
+      if (!isDir) {
+        html += '<button class="ctx-item" data-action="context">Add to context</button>'
+        html += '<div class="ctx-sep"></div>'
+        html += '<button class="ctx-item" data-action="raw">View Raw</button>'
+        html += '<button class="ctx-item" data-action="diff">View Diff</button>'
+        html += '<button class="ctx-item" data-action="duplicate">Duplicate</button>'
+      }
+      if (isDir) html += '<button class="ctx-item" data-action="new">New File</button>'
+      if (!isRoot) {
+        html += '<button class="ctx-item" data-action="rename">Rename</button>'
+        html += '<button class="ctx-item" data-action="delete">Delete</button>'
+        html += '<div class="ctx-sep"></div>'
+        html += '<button class="ctx-item" data-action="copy">Copy Relative Path</button>'
+      }
+      menu.innerHTML = html
+      menu.classList.add('open')
+      var rect = menu.getBoundingClientRect()
+      var left = Math.min(Math.max(4, x), window.innerWidth - rect.width - 4)
+      var top = Math.min(Math.max(4, y), window.innerHeight - rect.height - 4)
+      menu.style.left = left + 'px'
+      menu.style.top = top + 'px'
+    }
+    function runFileContextAction(action) {
+      if (!contextEntry) return
+      var entry = contextEntry
+      closeFileContextMenu()
+      if (action === 'open') {
+        if (entry.type === 'directory') toggleDir(entry.relativePath)
+        else selectFile(entry.relativePath)
+      } else if (action === 'context') {
+        addSelectedFileToContext(entry.relativePath)
+      } else if (action === 'raw') {
+        viewerMode = 'raw'
+        localStorage.setItem('aide.remote.fileViewMode', viewerMode)
+        renderModeButtons()
+        selectFile(entry.relativePath)
+      } else if (action === 'diff') {
+        viewerMode = 'diff'
+        localStorage.setItem('aide.remote.fileViewMode', viewerMode)
+        renderModeButtons()
+        selectFile(entry.relativePath)
+      } else if (action === 'copy') {
+        copyText(entry.relativePath)
+      } else if (action === 'new') {
+        createRemoteFile(entry.relativePath)
+      } else if (action === 'rename') {
+        renameRemoteEntry(entry)
+      } else if (action === 'duplicate') {
+        duplicateRemoteFile(entry)
+      } else if (action === 'delete') {
+        deleteRemoteEntry(entry)
+      }
     }
     function openFiles() {
       filesOpen = true
@@ -2230,6 +2611,7 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
         container.appendChild(empty)
       }
       state.entries.forEach(function(entry) {
+        var changed = isEntryChanged(entry)
         var row = document.createElement('div')
         row.className = 'file-row' + (selectedFile === entry.relativePath ? ' selected' : '')
         row.title = entry.relativePath
@@ -2237,8 +2619,10 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
         indent.className = 'file-indent'
         indent.style.width = (depth * 14) + 'px'
         var icon = document.createElement('span')
-        icon.className = 'file-icon'
-        icon.textContent = entry.type === 'directory' ? (expandedDirs.has(entry.relativePath) ? '▾' : '▸') : '·'
+        icon.className = 'file-icon' + (changed ? ' changed' : '')
+        icon.textContent = entry.type === 'directory'
+          ? (expandedDirs.has(entry.relativePath) ? '▾' : '▸')
+          : (changed ? '●' : '·')
         var name = document.createElement('span')
         name.className = 'file-name'
         name.textContent = entry.name
@@ -2249,6 +2633,23 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
           if (entry.type === 'directory') toggleDir(entry.relativePath)
           else selectFile(entry.relativePath)
         })
+        row.addEventListener('contextmenu', function(e) {
+          e.preventDefault()
+          openFileContextMenu(e.clientX, e.clientY, entry)
+        })
+        row.addEventListener('touchstart', function(e) {
+          if (longPressTimer) clearTimeout(longPressTimer)
+          var touch = e.touches[0]
+          longPressTimer = setTimeout(function() {
+            openFileContextMenu(touch.clientX, touch.clientY, entry)
+          }, 550)
+        }, { passive: true })
+        row.addEventListener('touchmove', function() {
+          if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
+        }, { passive: true })
+        row.addEventListener('touchend', function() {
+          if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
+        }, { passive: true })
         container.appendChild(row)
         if (entry.type === 'directory' && expandedDirs.has(entry.relativePath)) {
           renderTreeLevel(container, entry.relativePath, depth + 1)
@@ -2565,6 +2966,11 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
         appendLogLine(msg.channel, msg.line)
       } else if (msg.type === 'file-changed') {
         handleRemoteFileChanged(msg.path || '')
+      } else if (msg.type === 'file-context-inserted') {
+        showFileToast('Added to context.')
+      } else if (msg.type === 'git-status-updated') {
+        gitStatus = msg.status || null
+        renderTree()
       }
     }
 
@@ -2590,6 +2996,24 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     applyViewport()
 
     document.body.classList.add('size-' + (btnConfig.size || 'medium'))
+    document.addEventListener('click', function(e) {
+      if (!document.getElementById('file-context-menu').contains(e.target)) closeFileContextMenu()
+    })
+    document.getElementById('file-context-menu').addEventListener('click', function(e) {
+      var target = e.target
+      var action = target && target.getAttribute ? target.getAttribute('data-action') : null
+      if (action) runFileContextAction(action)
+    })
+    document.getElementById('viewer-path').addEventListener('contextmenu', function(e) {
+      if (!selectedFile) return
+      e.preventDefault()
+      openFileContextMenu(e.clientX, e.clientY, { name: selectedFile.split('/').pop(), relativePath: selectedFile, type: 'file' })
+    })
+    document.getElementById('files-tree').addEventListener('contextmenu', function(e) {
+      if (e.target !== e.currentTarget) return
+      e.preventDefault()
+      openFileContextMenu(e.clientX, e.clientY, { name: 'Project', relativePath: '', type: 'directory' })
+    })
     document.getElementById('files-fab').addEventListener('click', function() { filesOpen ? closeFiles() : openFiles() })
     document.getElementById('files-back').addEventListener('click', showFileTree)
     document.getElementById('files-close').addEventListener('click', closeFiles)
@@ -2607,6 +3031,7 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     renderModeButtons()
     applyFilesOpen()
     if (filesOpen) loadTree('')
+    loadGitStatus()
     renderButtons()
     renderExtraRows()
     connectWs()
