@@ -3,10 +3,11 @@ import { claudeCodeTool } from './claudeCode'
 import { qwenCodeTool } from './qwenCode'
 import { openCodeTool } from './openCode'
 import { cursorAgentTool } from './cursorAgent'
+import { codexTool } from './codex'
 import { plainShellTool } from './plainShell'
 
 /** AI CLI tools that users can activate (shown in settings, require install). */
-const cliToolRegistry: CliTool[] = [claudeCodeTool, qwenCodeTool, openCodeTool, cursorAgentTool]
+const cliToolRegistry: CliTool[] = [claudeCodeTool, qwenCodeTool, openCodeTool, cursorAgentTool, codexTool]
 
 /** Always-available built-in tools (not user-activatable, used as fallback). */
 const builtinTools: CliTool[] = [plainShellTool]

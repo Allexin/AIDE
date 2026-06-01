@@ -5,7 +5,7 @@ import { is } from '@electron-toolkit/utils'
 export function openCliToolsWindow(parentWin: BrowserWindow): BrowserWindow {
   const win = new BrowserWindow({
     width: 480,
-    height: 400,
+    height: 560,
     resizable: false,
     title: 'CLI Tools',
     icon: join(__dirname, '../../app_icon.ico'),

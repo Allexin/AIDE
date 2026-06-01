@@ -53,7 +53,8 @@ export default function CliToolsApp(): React.ReactElement {
         fontFamily: 'Segoe UI, sans-serif',
         fontSize: 13,
         background: '#1e1e1e',
-        minHeight: '100vh',
+        height: '100vh',
+        overflowY: 'auto',
         boxSizing: 'border-box'
       }}
       onClick={() => setOpenDropdown(null)}
