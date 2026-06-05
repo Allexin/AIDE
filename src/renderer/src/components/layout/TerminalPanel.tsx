@@ -67,6 +67,36 @@ function stripMouseModeControlSequences(data: string): string {
   })
 }
 
+// Tracks whether the foreground app (e.g. Claude Code) enabled mouse tracking and
+// which encoding it requested. We strip these modes from xterm's view to keep text
+// selection working, but we still need to know they're active so the mouse wheel can
+// be forwarded to the app as scroll reports instead of being turned into arrow keys.
+interface MouseTrackingState {
+  enabled: boolean
+  sgr: boolean
+}
+
+function updateMouseTrackingFromData(data: string, state: MouseTrackingState): void {
+  const re = /\x1b\[\?([0-9;]+)([hl])/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(data)) !== null) {
+    const on = m[2] === 'h'
+    for (const mode of m[1].split(';').map((s) => s.trim())) {
+      if (mode === '1000' || mode === '1002' || mode === '1003') state.enabled = on
+      else if (mode === '1006') state.sgr = on
+    }
+  }
+}
+
+function buildWheelReport(state: MouseTrackingState, up: boolean, col: number, row: number): string {
+  const btn = up ? 64 : 65
+  if (state.sgr) {
+    return `\x1b[<${btn};${col};${row}M`
+  }
+  // X10 encoding fallback (button + coordinates offset by 32)
+  return `\x1b[M${String.fromCharCode(32 + btn)}${String.fromCharCode(32 + col)}${String.fromCharCode(32 + row)}`
+}
+
 // ── TerminalTab: one xterm.js instance per session tab ───────────────────────
 
 interface TerminalTabProps {
@@ -83,6 +113,9 @@ function TerminalTab({ tabId, isActive, isLocked, onMount, onUnmount, onAttentio
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const isLockedRef = useRef(isLocked)
+  // Tracks the foreground app's mouse-tracking state so the wheel can be forwarded
+  // as scroll reports (e.g. to Claude Code) instead of xterm's arrow-key emulation.
+  const mouseTrackingRef = useRef<MouseTrackingState>({ enabled: false, sgr: false })
   // Ref so OSC handler can read current isActive without stale closure
   const isActiveRef = useRef(isActive)
   const onAttentionRef = useRef(onAttention)
@@ -114,6 +147,42 @@ function TerminalTab({ tabId, isActive, isLocked, onMount, onUnmount, onAttentio
 
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
+
+    // Mouse wheel handling. When the foreground app (e.g. Claude Code) has mouse
+    // tracking on, it lives on the alternate screen buffer where xterm has no
+    // scrollback and would otherwise translate the wheel into cursor up/down keys
+    // (which Claude Code reads as input-history navigation). Instead we forward the
+    // wheel to the app as scroll reports so it scrolls its own transcript. When the
+    // app has no mouse tracking (e.g. PowerShell), we let xterm scroll its scrollback.
+    terminal.attachCustomWheelEventHandler((e) => {
+      const state = mouseTrackingRef.current
+      if (!state.enabled) return true // default: scroll xterm's own viewport
+      if (isLockedRef.current) return false
+      if (e.deltaY === 0) return false
+
+      const rect = container.getBoundingClientRect()
+      const cols = terminal.cols
+      const rows = terminal.rows
+      let col = 1
+      let row = 1
+      if (rect.width > 0 && rect.height > 0) {
+        col = Math.min(cols, Math.max(1, Math.round(((e.clientX - rect.left) / rect.width) * cols)))
+        row = Math.min(rows, Math.max(1, Math.round(((e.clientY - rect.top) / rect.height) * rows)))
+      }
+
+      // Approximate a line count from the wheel delta (pixels → ~3 lines per notch).
+      let lines: number
+      if (e.deltaMode === 1) lines = Math.abs(e.deltaY) // already in lines
+      else if (e.deltaMode === 2) lines = Math.abs(e.deltaY) * rows // pages
+      else lines = Math.abs(e.deltaY) / 33 // pixels
+      lines = Math.min(15, Math.max(1, Math.round(lines)))
+
+      const up = e.deltaY < 0
+      let seq = ''
+      for (let i = 0; i < lines; i++) seq += buildWheelReport(state, up, col, row)
+      window.editorApi.terminalWrite(tabId, seq)
+      return false
+    })
 
     // D1: flash tab when Claude Code signals it's waiting (OSC 9)
     const oscDisposable = terminal.parser.registerOscHandler(9, (_data) => {
@@ -147,6 +216,9 @@ function TerminalTab({ tabId, isActive, isLocked, onMount, onUnmount, onAttentio
     // Subscribe to PTY data for this tab
     const removeData = window.editorApi.onTerminalData((receivedTabId, data) => {
       if (receivedTabId === tabId) {
+        // Track mouse-mode toggles before stripping them from xterm's view, so the
+        // wheel handler knows whether to forward scroll reports to the app.
+        updateMouseTrackingFromData(data, mouseTrackingRef.current)
         terminal.write(stripMouseModeControlSequences(data))
       }
     })
