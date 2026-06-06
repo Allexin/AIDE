@@ -171,7 +171,7 @@ export class PtyManager {
 
     this.waitForReady(tabInfo.tabId).then((result) => {
       if (result === 'ok' && this.tabs.has(tabInfo.tabId)) {
-        this.write(tabInfo.tabId, prompt.replace(/\n+/g, ' ').trim() + '\r')
+        void this.submitInteractiveInput(tabInfo.tabId, prompt.replace(/\n+/g, ' ').trim(), 'paste')
       }
     })
 
@@ -191,6 +191,24 @@ export class PtyManager {
     try {
       this.tabs.get(tabId)?.pty.write(data)
     } catch {}
+  }
+
+  /** Type and submit text to the active CLI using its terminal keyboard protocol. */
+  async submitInteractiveInput(tabId: string, text: string, mode: 'type' | 'paste' = 'type'): Promise<void> {
+    const tab = this.tabs.get(tabId)
+    if (!tab) throw new Error('Terminal tab not found')
+    if (mode === 'paste') {
+      const pasted = `\x1b[200~${text}\x1b[201~`
+      tab.pty.write(pasted)
+    } else {
+      for (const char of Array.from(text)) {
+        tab.pty.write(char)
+        await new Promise((resolve) => setTimeout(resolve, 35))
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const submit = tab.tool.interactiveSubmitSequence?.() ?? '\r'
+    tab.pty.write(submit)
   }
 
   resize(tabId: string, cols: number, rows: number): void {
@@ -215,6 +233,42 @@ export class PtyManager {
     } catch {}
     this.tabs.delete(tabId)
     this.onTabClosed?.(tabId)
+  }
+
+  /** Exit the interactive CLI while preserving the PowerShell PTY and renderer tab. */
+  async suspendCli(tabId: string): Promise<void> {
+    const tab = this.tabs.get(tabId)
+    if (!tab) throw new Error('Terminal tab not found')
+    const command = tab.tool.exitCommand?.()
+    if (!command || !tab.tool.resolveOwnerPid) {
+      throw new Error(`${tab.tool.name} cannot be suspended for Smart Compact`)
+    }
+
+    await this.submitInteractiveInput(tabId, command, 'type')
+    const deadline = Date.now() + 15_000
+    let consecutiveMissing = 0
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      const owner = await tab.tool.resolveOwnerPid([tab.pty.pid])
+      if (owner === null) {
+        consecutiveMissing++
+        if (consecutiveMissing >= 2) return
+      } else {
+        consecutiveMissing = 0
+      }
+    }
+    throw new Error(`${tab.tool.name} did not exit within 15 seconds`)
+  }
+
+  /** Resume a session in the existing PowerShell PTY and renderer tab. */
+  resumeCli(tabId: string, sessionId: string): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab) throw new Error('Terminal tab not found')
+    const command = tab.tool.resumeCommand(sessionId)
+    if (!command) throw new Error(`${tab.tool.name} cannot resume this session`)
+    this.startHealthCheck(tabId)
+    tab.pty.write(`${command}\r`)
+    this.onSessionAssigned?.(tabId, sessionId, tab.tool)
   }
 
   async resetAllTabs(): Promise<void> {

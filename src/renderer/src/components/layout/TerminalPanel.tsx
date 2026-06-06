@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -297,6 +298,25 @@ interface TerminalPanelProps {
   style?: React.CSSProperties
 }
 
+type CompactDialogState =
+  | null
+  | { phase: 'input'; tabId: string; task: string; error?: string }
+  | { phase: 'analyzing'; tabId: string; stdout: string; stderr: string }
+  | {
+      phase: 'review'
+      tabId: string
+      target: SmartCompactTarget
+      analysisId: string
+      candidates: SmartCompactCandidate[]
+      selected: Set<string>
+      stdout: string
+      stderr: string
+      conflict?: string
+      applying?: boolean
+    }
+  | { phase: 'restarting'; tabId: string }
+  | { phase: 'error'; message: string }
+
 export default function TerminalPanel({ style }: TerminalPanelProps): React.ReactElement {
   const { terminalCollapsed, collapsedWidthPx, toggleTerminalCollapse, focusTerminal, focusedPanel } =
     usePanelStore()
@@ -307,6 +327,107 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   const projectPath = useFileTreeStore((s) => s.projectPath)
 
   const [deadSessionDialog, setDeadSessionDialog] = useState(false)
+  const [compactSupported, setCompactSupported] = useState(false)
+  const [compactDialog, setCompactDialog] = useState<CompactDialogState>(null)
+
+  useEffect(() => {
+    return window.editorApi.onSmartCompactOutput((tabId, stream, chunk) => {
+      setCompactDialog((state) => {
+        if (!state || state.phase !== 'analyzing' || state.tabId !== tabId) return state
+        return stream === 'stdout'
+          ? { ...state, stdout: state.stdout + chunk }
+          : { ...state, stderr: state.stderr + chunk }
+      })
+    })
+  }, [])
+
+  const activeTab = tabs.find((tab) => tab.tabId === activeTabId)
+
+  useEffect(() => {
+    let current = true
+    if (!activeTab?.sessionId) {
+      setCompactSupported(false)
+      return () => { current = false }
+    }
+    window.editorApi.smartCompactSupported(activeTab.toolId).then((supported) => {
+      if (current) setCompactSupported(supported)
+    }).catch(() => {
+      if (current) setCompactSupported(false)
+    })
+    return () => { current = false }
+  }, [activeTab?.sessionId, activeTab?.toolId])
+
+  const resumeCompactTarget = useCallback(async (
+    tabId: string,
+    target: SmartCompactTarget,
+    analysisId?: string
+  ) => {
+    setCompactDialog({ phase: 'restarting', tabId })
+    await window.editorApi.smartCompactResume(target, analysisId)
+  }, [])
+
+  const analyzeCompact = useCallback(async () => {
+    if (!compactDialog || compactDialog.phase !== 'input') return
+    const task = compactDialog.task.trim()
+    if (!task) return
+    const tabId = compactDialog.tabId
+    setCompactDialog({ phase: 'analyzing', tabId, stdout: '', stderr: '' })
+    try {
+      const result = await window.editorApi.smartCompactAnalyze(tabId, task)
+      if (!result.ok || !result.target || !result.analysisId || !result.candidates) {
+        setCompactDialog({ phase: 'error', message: result.error ?? 'Smart Compact analysis failed' })
+        return
+      }
+      setCompactDialog({
+        phase: 'review',
+        tabId,
+        target: result.target,
+        analysisId: result.analysisId,
+        candidates: result.candidates,
+        selected: new Set(result.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.id)),
+        stdout: result.stdout ?? '',
+        stderr: result.stderr ?? ''
+      })
+    } catch (error) {
+      setCompactDialog({ phase: 'error', message: error instanceof Error ? error.message : String(error) })
+    }
+  }, [compactDialog])
+
+  const applyCompact = useCallback(async (force: boolean) => {
+    if (!compactDialog || compactDialog.phase !== 'review' || compactDialog.applying) return
+    const review = compactDialog
+    setCompactDialog({ ...review, applying: true })
+    try {
+      const result = await window.editorApi.smartCompactApply(
+        review.target,
+        review.analysisId,
+        [...review.selected],
+        force
+      )
+      if (result.status === 'conflict') {
+        setCompactDialog({ ...review, conflict: result.message, applying: false })
+        return
+      }
+      await resumeCompactTarget(review.tabId, review.target)
+      setCompactDialog(result.warning ? { phase: 'error', message: `Smart Compact applied with warning: ${result.warning}` } : null)
+    } catch (error) {
+      try {
+        await resumeCompactTarget(review.tabId, review.target, review.analysisId)
+      } catch { /* retain the original apply error */ }
+      setCompactDialog({ phase: 'error', message: error instanceof Error ? error.message : String(error) })
+    }
+  }, [compactDialog, resumeCompactTarget])
+
+  const cancelCompactReview = useCallback(async () => {
+    if (!compactDialog || compactDialog.phase !== 'review') return
+    const review = compactDialog
+    try {
+      await resumeCompactTarget(review.tabId, review.target, review.analysisId)
+      setCompactDialog(null)
+    } catch (error) {
+      setCompactDialog({ phase: 'error', message: error instanceof Error ? error.message : String(error) })
+    }
+  }, [compactDialog, resumeCompactTarget])
 
   // Tool name for the collapsed label — derived reactively from the active tab
   const currentToolName = useSessionStore(
@@ -562,7 +683,6 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 
         {/* [ history ] open history viewer for current tab */}
         {(() => {
-          const activeTab = tabs.find((t) => t.tabId === activeTabId)
           if (!activeTab?.sessionId) return null
           return (
             <button
@@ -581,6 +701,19 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
             </button>
           )
         })()}
+
+        {compactSupported && activeTab?.sessionId && (
+          <button
+            title="Smart Compact"
+            style={{ ...headerBtnStyle, fontSize: 10, fontWeight: 600 }}
+            onClick={(e) => {
+              e.stopPropagation()
+              setCompactDialog({ phase: 'input', tabId: activeTab.tabId, task: '' })
+            }}
+          >
+            SC
+          </button>
+        )}
 
         {/* [ + ] open session picker */}
         <button
@@ -704,8 +837,164 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
           </div>
         </div>
       )}
+
+      {compactDialog && (
+        <SmartCompactDialog
+          state={compactDialog}
+          onTaskChange={(task) => {
+            if (compactDialog.phase === 'input') setCompactDialog({ ...compactDialog, task })
+          }}
+          onAnalyze={analyzeCompact}
+          onCancelInput={() => setCompactDialog(null)}
+          onToggle={(id) => {
+            if (compactDialog.phase !== 'review') return
+            const selected = new Set(compactDialog.selected)
+            if (selected.has(id)) selected.delete(id); else selected.add(id)
+            setCompactDialog({ ...compactDialog, selected, conflict: undefined })
+          }}
+          onApply={() => applyCompact(false)}
+          onForce={() => applyCompact(true)}
+          onCancelReview={cancelCompactReview}
+          onCloseError={() => setCompactDialog(null)}
+        />
+      )}
     </div>
   )
+}
+
+interface SmartCompactDialogProps {
+  state: Exclude<CompactDialogState, null>
+  onTaskChange: (task: string) => void
+  onAnalyze: () => void
+  onCancelInput: () => void
+  onToggle: (id: string) => void
+  onApply: () => void
+  onForce: () => void
+  onCancelReview: () => void
+  onCloseError: () => void
+}
+
+function SmartCompactDialog(props: SmartCompactDialogProps): React.ReactElement {
+  const { state } = props
+  const busy = state.phase === 'analyzing' || state.phase === 'restarting'
+  return createPortal(
+    <div style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ width: 680, maxHeight: '80vh', overflow: 'auto', background: '#252526', border: '1px solid #555', borderRadius: 6, padding: 18, color: '#d4d4d4' }}>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 14 }}>Smart Compact</div>
+        {state.phase === 'input' && (
+          <>
+            <div style={{ fontSize: 12, marginBottom: 8 }}>Describe which completed or irrelevant work should be removed from the session.</div>
+            <textarea
+              autoFocus
+              value={state.task}
+              onChange={(e) => props.onTaskChange(e.target.value)}
+              rows={6}
+              style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', background: '#1e1e1e', color: '#d4d4d4', border: '1px solid #555', borderRadius: 4, padding: 10, fontFamily: 'inherit' }}
+            />
+            <DialogButtons>
+              <button style={dialogButtonStyle} onClick={props.onCancelInput}>Cancel</button>
+              <button style={primaryDialogButtonStyle} disabled={!state.task.trim()} onClick={props.onAnalyze}>Analyze</button>
+            </DialogButtons>
+          </>
+        )}
+        {state.phase === 'analyzing' && (
+          <>
+            <div style={{ fontSize: 13, marginBottom: 10 }}>Analyzing session snapshot...</div>
+            <OutputView title="stdout" content={state.stdout} emptyText="Waiting for CLI output..." />
+            {state.stderr && <OutputView title="stderr" content={state.stderr} />}
+          </>
+        )}
+        {state.phase === 'restarting' && <div style={{ fontSize: 13 }}>Restarting session...</div>}
+        {state.phase === 'review' && (
+          <>
+            {state.conflict && (
+              <div style={{ background: '#4a2f00', border: '1px solid #b7791f', padding: 10, borderRadius: 4, marginBottom: 12, fontSize: 12 }}>
+                {state.conflict} Force apply will match the selected snapshot records by exact content and preserve new records.
+              </div>
+            )}
+            {state.candidates.length === 0 ? (
+              <div style={{ fontSize: 13 }}>The analyzer found no records that can be safely removed.</div>
+            ) : state.candidates.map((candidate) => (
+              <label key={candidate.id} style={{ display: 'block', border: '1px solid #444', borderRadius: 4, padding: 10, marginBottom: 8, cursor: 'pointer' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  <input type="checkbox" checked={state.selected.has(candidate.id)} disabled={state.applying} onChange={() => props.onToggle(candidate.id)} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: '#fff', marginBottom: 6 }}>{candidate.reason}</div>
+                    {candidate.messages.map((message, index) => (
+                      <div key={index} style={{ fontSize: 11, color: '#aaa', whiteSpace: 'pre-wrap', marginTop: 4 }}>
+                        <span style={{ color: '#6cb6ff' }}>{message.role}: </span>{message.preview}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </label>
+            ))}
+            <details style={{ marginTop: 12 }}>
+              <summary style={{ cursor: 'pointer', fontSize: 12, color: '#9cdcfe' }}>Analyzer stdout</summary>
+              <div style={{ marginTop: 8 }}>
+                <OutputView content={state.stdout} emptyText="The analyzer produced no stdout." />
+              </div>
+            </details>
+            {state.stderr && (
+              <details style={{ marginTop: 8 }}>
+                <summary style={{ cursor: 'pointer', fontSize: 12, color: '#f48771' }}>Analyzer stderr</summary>
+                <div style={{ marginTop: 8 }}><OutputView content={state.stderr} /></div>
+              </details>
+            )}
+            <DialogButtons>
+              <button style={dialogButtonStyle} disabled={state.applying} onClick={props.onCancelReview}>Cancel</button>
+              {state.conflict ? (
+                <button style={{ ...primaryDialogButtonStyle, background: '#b45309' }} disabled={state.applying} onClick={props.onForce}>Force Apply</button>
+              ) : (
+                <button style={primaryDialogButtonStyle} disabled={state.applying} onClick={props.onApply}>Approve</button>
+              )}
+            </DialogButtons>
+          </>
+        )}
+        {state.phase === 'error' && (
+          <>
+            <div style={{ fontSize: 13, color: '#f48771', whiteSpace: 'pre-wrap' }}>{state.message}</div>
+            <DialogButtons><button style={dialogButtonStyle} onClick={props.onCloseError}>Close</button></DialogButtons>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function OutputView({ title, content, emptyText }: { title?: string; content: string; emptyText?: string }): React.ReactElement {
+  return (
+    <div>
+      {title && <div style={{ fontSize: 11, color: '#858585', marginBottom: 4 }}>{title}</div>}
+      <pre style={{
+        margin: 0,
+        maxHeight: 280,
+        overflow: 'auto',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        background: '#111',
+        border: '1px solid #3d3d3d',
+        borderRadius: 4,
+        padding: 10,
+        color: content ? '#d4d4d4' : '#666',
+        fontSize: 11,
+        fontFamily: 'Cascadia Code, Consolas, monospace'
+      }}>{content || emptyText || ''}</pre>
+    </div>
+  )
+}
+
+function DialogButtons({ children }: { children: React.ReactNode }): React.ReactElement {
+  return <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>{children}</div>
+}
+
+const dialogButtonStyle: React.CSSProperties = {
+  background: '#3d3d3d', color: '#d4d4d4', border: 'none', borderRadius: 4, padding: '6px 14px', cursor: 'pointer'
+}
+
+const primaryDialogButtonStyle: React.CSSProperties = {
+  ...dialogButtonStyle, background: '#0e639c', color: '#fff'
 }
 
 // ── TabButton ─────────────────────────────────────────────────────────────────

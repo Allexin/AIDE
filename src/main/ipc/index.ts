@@ -308,6 +308,88 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     return tabInfo
   })
 
+  ipcMain.handle('smart-compact:supported', (_event, toolId: string) => {
+    return !!getToolById(toolId)?.smartCompact
+  })
+
+  ipcMain.handle('smart-compact:analyze', async (event, tabId: string, task: string) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) return { ok: false, error: 'Editor window not found' }
+    const ptyMgr = ptyRegistry.get(senderWin)
+    if (!ptyMgr) return { ok: false, error: 'Terminal manager not found' }
+    const tab = ptyMgr.getTabs().find((item) => item.tabId === tabId)
+    if (!tab?.sessionId) return { ok: false, error: 'Session is not ready' }
+    const tool = getToolById(tab.toolId)
+    if (!tool?.smartCompact) return { ok: false, error: 'Smart Compact is not supported for this CLI' }
+    let projectPath = ''
+    for (const [path, win] of openProjects) {
+      if (win === senderWin) { projectPath = path; break }
+    }
+    const target = {
+      tabId,
+      sessionId: tab.sessionId,
+      toolId: tab.toolId,
+      toolName: tab.toolName,
+      title: tab.toolName
+    }
+    let suspended = false
+    try {
+      await ptyMgr.suspendCli(tabId)
+      suspended = true
+      const analysis = await tool.smartCompact.analyzeSession({
+        projectPath,
+        sessionId: tab.sessionId,
+        task,
+        onOutput: (stream, chunk) => {
+          if (!senderWin.isDestroyed()) {
+            senderWin.webContents.send('smart-compact:output', { tabId, stream, chunk })
+          }
+        }
+      })
+      return { ok: true, target, ...analysis }
+    } catch (error) {
+      if (suspended) ptyMgr.resumeCli(tabId, tab.sessionId)
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('smart-compact:apply', async (
+    event,
+    target: { tabId: string; sessionId: string; toolId: string; toolName: string; title: string },
+    analysisId: string,
+    candidateIds: string[],
+    force: boolean
+  ) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) throw new Error('Editor window not found')
+    let projectPath = ''
+    for (const [path, win] of openProjects) {
+      if (win === senderWin) { projectPath = path; break }
+    }
+    const capability = getToolById(target.toolId)?.smartCompact
+    if (!capability) throw new Error('Smart Compact is no longer supported for this CLI')
+    return capability.applyDeletions({
+      projectPath,
+      sessionId: target.sessionId,
+      analysisId,
+      candidateIds,
+      force
+    })
+  })
+
+  ipcMain.handle('smart-compact:resume', async (
+    event,
+    target: { tabId: string; sessionId: string; toolId: string; toolName: string; title: string },
+    analysisId?: string
+  ) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWin) throw new Error('Editor window not found')
+    const ptyMgr = ptyRegistry.get(senderWin)
+    if (!ptyMgr) throw new Error('Terminal manager not found')
+    if (analysisId) getToolById(target.toolId)?.smartCompact?.discardAnalysis(analysisId)
+    ptyMgr.resumeCli(target.tabId, target.sessionId)
+  })
+
   // ── CLI tools: list registered tools ──────────────────────────────────────────
   ipcMain.handle('cli-tools:list', () => getRegisteredTools().map((t) => ({ id: t.id, name: t.name })))
 

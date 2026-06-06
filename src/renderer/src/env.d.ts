@@ -60,6 +60,21 @@ interface InitialTabsResult {
   activeSessionId: string | null
 }
 
+interface SmartCompactCandidate {
+  id: string
+  reason: string
+  selected: boolean
+  messages: Array<{ role: string; preview: string }>
+}
+
+interface SmartCompactTarget {
+  tabId: string
+  sessionId: string
+  toolId: string
+  toolName: string
+  title: string
+}
+
 interface EditorConfig {
   maxFileSizeMb: number
   fontFamily: string
@@ -145,6 +160,29 @@ interface EditorAPI {
   terminalCloseTab: (tabId: string) => void
   terminalOpenSessionPicker: () => void
   terminalOpenHistory: (sessionId: string, toolId: string, sessionTitle: string) => void
+  smartCompactSupported: (toolId: string) => Promise<boolean>
+  smartCompactAnalyze: (tabId: string, task: string) => Promise<{
+    ok: boolean
+    error?: string
+    target?: SmartCompactTarget
+    analysisId?: string
+    candidates?: SmartCompactCandidate[]
+    stdout?: string
+    stderr?: string
+  }>
+  smartCompactApply: (
+    target: SmartCompactTarget,
+    analysisId: string,
+    candidateIds: string[],
+    force: boolean
+  ) => Promise<
+    | { status: 'applied'; removed: number; warning?: string }
+    | { status: 'conflict'; message: string }
+  >
+  smartCompactResume: (target: SmartCompactTarget, analysisId?: string) => Promise<void>
+  onSmartCompactOutput: (
+    cb: (tabId: string, stream: 'stdout' | 'stderr', chunk: string) => void
+  ) => () => void
   onTerminalData: (cb: (tabId: string, data: string) => void) => () => void
   onTerminalTabTitle: (cb: (tabId: string, title: string) => void) => () => void
   onTerminalTabSessionId: (cb: (tabId: string, sessionId: string) => void) => () => void
