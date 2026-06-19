@@ -21,7 +21,14 @@ const toolbarBtnStyle: React.CSSProperties = {
 }
 
 function FileTreeToolbar(): React.ReactElement {
-  const { modifiedOnly, toggleModifiedOnly, refresh, gitStatus } = useFileTreeStore()
+  const {
+    modifiedOnly,
+    toggleModifiedOnly,
+    refresh,
+    gitStatus,
+    filterQuery,
+    setFilterQuery
+  } = useFileTreeStore()
   const [commitOpen, setCommitOpen] = useState(false)
 
   const handleCommitClick = (): void => {
@@ -41,34 +48,75 @@ function FileTreeToolbar(): React.ReactElement {
     <>
       <div
         style={{
-          height: 28,
           flexShrink: 0,
           display: 'flex',
-          alignItems: 'center',
-          paddingLeft: 6,
-          paddingRight: 6,
-          gap: 2,
+          flexDirection: 'column',
+          padding: '3px 6px 5px',
+          gap: 4,
           borderBottom: '1px solid #3d3d3d'
         }}
       >
-        {/* Modified only toggle — active state shown in blue */}
-        <button
-          title={modifiedOnly ? 'Show all files' : 'Show modified files only'}
-          onClick={toggleModifiedOnly}
-          style={{ ...toolbarBtnStyle, color: modifiedOnly ? '#007acc' : '#cccccc' }}
-        >
-          ▣
-        </button>
+        <div style={{ height: 22, display: 'flex', alignItems: 'center', gap: 2 }}>
+          {/* Modified only toggle — active state shown in blue */}
+          <button
+            title={modifiedOnly ? 'Show all files' : 'Show modified files only'}
+            onClick={toggleModifiedOnly}
+            style={{ ...toolbarBtnStyle, color: modifiedOnly ? '#007acc' : '#cccccc' }}
+          >
+            ▣
+          </button>
 
-        {/* Refresh */}
-        <button title="Refresh" onClick={() => refresh()} style={toolbarBtnStyle}>
-          ↺
-        </button>
+          {/* Refresh */}
+          <button title="Refresh" onClick={() => refresh()} style={toolbarBtnStyle}>
+            ↺
+          </button>
 
-        {/* Commit */}
-        <button title="Commit" onClick={handleCommitClick} style={toolbarBtnStyle}>
-          ◎
-        </button>
+          {/* Commit */}
+          <button title="Commit" onClick={handleCommitClick} style={toolbarBtnStyle}>
+            ◎
+          </button>
+        </div>
+
+        <div style={{ position: 'relative' }}>
+          <input
+            value={filterQuery}
+            onChange={(e) => setFilterQuery(e.target.value)}
+            placeholder="Filter files (2+ chars)"
+            aria-label="Filter files"
+            spellCheck={false}
+            style={{
+              width: '100%',
+              height: 22,
+              boxSizing: 'border-box',
+              padding: filterQuery ? '1px 24px 1px 6px' : '1px 6px',
+              background: '#3c3c3c',
+              border: '1px solid #555',
+              borderRadius: 3,
+              outline: 'none',
+              color: '#cccccc',
+              fontSize: 12
+            }}
+          />
+          {filterQuery && (
+            <button
+              title="Clear filter"
+              aria-label="Clear filter"
+              onClick={() => setFilterQuery('')}
+              style={{
+                ...toolbarBtnStyle,
+                position: 'absolute',
+                right: 2,
+                top: 2,
+                width: 18,
+                height: 18,
+                padding: 0,
+                color: '#999'
+              }}
+            >
+              ×
+            </button>
+          )}
+        </div>
       </div>
 
       {commitOpen && <CommitDialog onClose={() => setCommitOpen(false)} />}

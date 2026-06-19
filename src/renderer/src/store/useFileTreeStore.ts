@@ -9,6 +9,8 @@ interface FileTreeState {
   expandedDirs: Set<string>
   gitStatus: GitStatusResult | null
   modifiedOnly: boolean
+  filterQuery: string
+  fileIndexRevision: number
   contextMenu: { x: number; y: number; filePath: string; relativePath: string; isDir: boolean } | null
   loading: boolean
   newFileDraft: { parentPath: string; name: string } | null
@@ -18,6 +20,7 @@ interface FileTreeState {
   collapseDir: (dirPath: string) => void
   selectFile: (node: TreeNode) => void
   toggleModifiedOnly: () => void
+  setFilterQuery: (query: string) => void
   refresh: () => Promise<void>
   updateGitStatus: (status: GitStatusResult) => void
   handleFsChange: (event: { path: string }) => Promise<void>
@@ -31,6 +34,8 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
   expandedDirs: new Set(),
   gitStatus: null,
   modifiedOnly: false,
+  filterQuery: '',
+  fileIndexRevision: 0,
   contextMenu: null,
   loading: false,
   newFileDraft: null,
@@ -53,6 +58,9 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
     // No cleanup needed — the window is replaced when project changes.
     window.editorApi.onGitStatusUpdated((status) => get().updateGitStatus(status))
     window.editorApi.onFsChanged((event) => get().handleFsChange(event))
+    window.editorApi.onFileIndexUpdated(() =>
+      set((state) => ({ fileIndexRevision: state.fileIndexRevision + 1 }))
+    )
   },
 
   expandDir: async (dirPath: string) => {
@@ -80,6 +88,7 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
   },
 
   toggleModifiedOnly: () => set((s) => ({ modifiedOnly: !s.modifiedOnly })),
+  setFilterQuery: (filterQuery) => set({ filterQuery }),
 
   refresh: async () => {
     const { projectPath, expandedDirs, dirContents } = get()

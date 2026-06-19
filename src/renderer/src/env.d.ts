@@ -141,7 +141,9 @@ interface EditorAPI {
 
   // File tree
   readDir: (dirPath: string) => Promise<TreeNode[]>
+  searchFiles: (query: string) => Promise<{ ready: boolean; files: TreeNode[] }>
   getGitStatus: () => Promise<GitStatusResult>
+  onFileIndexUpdated: (cb: () => void) => () => void
   onGitStatusUpdated: (cb: (status: GitStatusResult) => void) => () => void
   onFsChanged: (cb: (event: { path: string }) => void) => () => void
 

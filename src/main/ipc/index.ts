@@ -18,6 +18,7 @@ import {
 } from '../config/toolbarConfig'
 import { openProjectAndTrack } from '../windows/editor'
 import { runGitStatus } from '../filetree/gitStatus'
+import { searchProjectFileIndex } from '../filetree/fileIndex'
 import { ptyRegistry, pickerEditorMap } from '../pty/registry'
 import { getRegisteredTools, getToolById, getDefaultTool } from '../pty/cliTools/registry'
 import {
@@ -202,6 +203,17 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     } catch {
       return []
     }
+  })
+
+  // ── File tree: search the in-memory background index ────────────────────────
+  ipcMain.handle('filetree:search-files', (event, query: string) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    for (const [p, win] of openProjects) {
+      if (win === senderWin) {
+        return searchProjectFileIndex(p, query)
+      }
+    }
+    return { ready: false, files: [] }
   })
 
   // ── File tree: git status for the current window's project ──────────────────

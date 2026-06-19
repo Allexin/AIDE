@@ -8,6 +8,7 @@ import { ensureDefaultToolbar, deployToolbarDocs } from '../config/toolbarConfig
 import { addRecentProject, saveOpenSessions } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { startProjectWatcher, stopProjectWatcher } from '../filetree/watcher'
+import { startProjectFileIndex, stopProjectFileIndex } from '../filetree/fileIndex'
 import { PtyManager } from '../pty/ptyManager'
 import { ptyRegistry } from '../pty/registry'
 import { ThinkingWatcher } from '../thinking/thinkingWatcher'
@@ -114,6 +115,7 @@ export function openProjectAndTrack(
   // Start filesystem watcher after the window is ready to receive IPC events
   editorWin.webContents.once('did-finish-load', () => {
     startProjectWatcher(projectPath, editorWin)
+    startProjectFileIndex(projectPath, editorWin)
   })
 
   // Watch toolbar config files for hot reload
@@ -178,6 +180,7 @@ export function openProjectAndTrack(
     thinkingWatcher.disposeAll()
     thinkingRegistry.delete(editorWin)
     stopProjectWatcher(projectPath)
+    stopProjectFileIndex(projectPath)
     releaseLock(projectPath)
     openProjects.delete(projectPath)
     onProjectsChanged?.()

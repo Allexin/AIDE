@@ -108,7 +108,9 @@ export interface EditorAPI {
 
   // File tree
   readDir: (dirPath: string) => Promise<TreeNode[]>
+  searchFiles: (query: string) => Promise<{ ready: boolean; files: TreeNode[] }>
   getGitStatus: () => Promise<GitStatusResult>
+  onFileIndexUpdated: (cb: () => void) => () => void
   onGitStatusUpdated: (cb: (status: GitStatusResult) => void) => () => void
   onFsChanged: (cb: (event: { path: string }) => void) => () => void
 
@@ -272,6 +274,7 @@ const editorApi: EditorAPI = {
   getConfig: () => ipcRenderer.invoke('config:get'),
 
   readDir: (dirPath: string) => ipcRenderer.invoke('filetree:read-dir', dirPath),
+  searchFiles: (query: string) => ipcRenderer.invoke('filetree:search-files', query),
   getGitStatus: () => ipcRenderer.invoke('filetree:git-status'),
 
   readFile: (filePath) => ipcRenderer.sendSync('editor:read-file-sync', filePath),
@@ -288,6 +291,12 @@ const editorApi: EditorAPI = {
     const handler = (_: unknown, event: { path: string }): void => cb(event)
     ipcRenderer.on('filetree:fs-changed', handler)
     return () => ipcRenderer.removeListener('filetree:fs-changed', handler)
+  },
+
+  onFileIndexUpdated: (cb: () => void) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('filetree:index-updated', handler)
+    return () => ipcRenderer.removeListener('filetree:index-updated', handler)
   },
 
   // Terminal

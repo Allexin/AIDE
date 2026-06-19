@@ -787,12 +787,56 @@ type DialogState =
 
 export default function FileTree(): React.ReactElement {
   const {
-    projectPath, dirContents, gitStatus, modifiedOnly, contextMenu, loading,
+    projectPath, dirContents, gitStatus, modifiedOnly, filterQuery, fileIndexRevision,
+    contextMenu, loading,
     setContextMenu, newFileDraft, setNewFileDraft, expandDir
   } = useFileTreeStore()
   const [dialogState, setDialogState] = useState<DialogState>(null)
   const [emptySpaceMenu, setEmptySpaceMenu] = useState<{ x: number; y: number } | null>(null)
+  const [filterResults, setFilterResults] = useState<TreeNode[]>([])
+  const [filterLoading, setFilterLoading] = useState(false)
+  const [fileIndexReady, setFileIndexReady] = useState(false)
   const closeDialog = (): void => setDialogState(null)
+  const normalizedFilter = filterQuery.trim()
+  const filterActive = normalizedFilter.length >= 2
+
+  useEffect(() => {
+    if (!filterActive || modifiedOnly) {
+      setFilterResults([])
+      setFilterLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setFilterLoading(!fileIndexReady)
+    const timer = window.setTimeout(() => {
+      window.editorApi
+        .searchFiles(normalizedFilter)
+        .then((result) => {
+          if (cancelled) return
+          setFilterResults(result.files)
+          setFilterLoading(!result.ready)
+          if (result.ready) setFileIndexReady(true)
+        })
+        .catch(() => {
+          if (cancelled) return
+          setFilterResults([])
+          setFilterLoading(false)
+        })
+    }, 150)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [
+    fileIndexReady,
+    filterActive,
+    modifiedOnly,
+    normalizedFilter,
+    projectPath,
+    fileIndexRevision
+  ])
 
   const handleDeletePermanent = async (): Promise<void> => {
     if (!dialogState || dialogState.type !== 'delete') return
@@ -895,7 +939,39 @@ export default function FileTree(): React.ReactElement {
 
   let treeContent: React.ReactNode
 
-  if (modifiedOnly) {
+  if (filterActive && !modifiedOnly) {
+    if (filterLoading) {
+      treeContent = (
+        <div style={centerStyle}>
+          <span style={msgStyle}>Building file list…</span>
+        </div>
+      )
+    } else if (filterResults.length === 0) {
+      treeContent = (
+        <div style={centerStyle}>
+          <span style={msgStyle}>No matching files</span>
+        </div>
+      )
+    } else {
+      const virtualTree = buildModifiedTree(
+        filterResults.map((node) => node.relativePath),
+        projectPath
+      )
+      treeContent = (
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {virtualTree.map((vnode) => (
+            <NodeItem
+              key={vnode.path}
+              node={vnode}
+              depth={0}
+              preloadedChildren={vnode.children ?? []}
+              isModifiedOnly={true}
+            />
+          ))}
+        </div>
+      )
+    }
+  } else if (modifiedOnly) {
     if (!gitStatus) {
       treeContent = (
         <div style={centerStyle}>
@@ -915,20 +991,34 @@ export default function FileTree(): React.ReactElement {
         </div>
       )
     } else {
-      const virtualTree = buildModifiedTree([...gitStatus.changed, ...gitStatus.untracked], projectPath)
-      treeContent = (
-        <div style={{ overflowY: 'auto', flex: 1 }}>
-          {virtualTree.map((vnode) => (
-            <NodeItem
-              key={vnode.path}
-              node={vnode}
-              depth={0}
-              preloadedChildren={vnode.children ?? []}
-              isModifiedOnly={true}
-            />
-          ))}
-        </div>
-      )
+      const changedPaths = [...gitStatus.changed, ...gitStatus.untracked]
+      const filteredPaths = filterActive
+        ? changedPaths.filter((path) =>
+            getBasename(path).toLocaleLowerCase().includes(normalizedFilter.toLocaleLowerCase())
+          )
+        : changedPaths
+      if (filteredPaths.length === 0) {
+        treeContent = (
+          <div style={centerStyle}>
+            <span style={msgStyle}>No matching files</span>
+          </div>
+        )
+      } else {
+        const virtualTree = buildModifiedTree(filteredPaths, projectPath)
+        treeContent = (
+          <div style={{ overflowY: 'auto', flex: 1 }}>
+            {virtualTree.map((vnode) => (
+              <NodeItem
+                key={vnode.path}
+                node={vnode}
+                depth={0}
+                preloadedChildren={vnode.children ?? []}
+                isModifiedOnly={true}
+              />
+            ))}
+          </div>
+        )
+      }
     }
   } else {
     const rootNodes = (dirContents.get(projectPath) as AnyNode[]) ?? []
