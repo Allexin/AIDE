@@ -8,7 +8,7 @@ export interface RecentProject {
 }
 
 export interface SavedSessionEntry {
-  sessionId: string
+  sessionId: string | null
   title: string
   toolId: string
 }

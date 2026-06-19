@@ -156,9 +156,11 @@ export function openProjectAndTrack(
   editorWin.on('closed', () => {
     // Save active sessions before disposing (must be before disposeAll clears tabs)
     const sessions = ptyMgr.getActiveSessions()
-    const toSave = sessions
-      .filter((s) => s.sessionId)
-      .map((s) => ({ sessionId: s.sessionId!, title: s.title, toolId: s.toolId }))
+    const toSave = sessions.map((s) => ({
+      sessionId: s.sessionId,
+      title: s.title,
+      toolId: s.toolId
+    }))
 
     // DEBUG: log what we're saving
     const dbg = join(projectPath, '.aide', 'session-debug.log')

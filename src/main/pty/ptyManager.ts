@@ -123,15 +123,17 @@ export class PtyManager {
 
       for (const entry of saved) {
         const tool = getToolById(entry.toolId) ?? getDefaultTool(activatedTools)
-        const info = this.spawnResumeTab(entry.sessionId, true, tool)
-        this.debugLog(`  spawned ${info.tabId} for session ${entry.sessionId}`)
+        const info = entry.sessionId
+          ? this.spawnResumeTab(entry.sessionId, true, tool)
+          : this.spawnNewSessionTab(tool)
+        this.debugLog(`  spawned ${info.tabId} for ${entry.sessionId ? `session ${entry.sessionId}` : `new ${tool.id} tab`}`)
         tabInfos.push({ ...info, title: entry.title })
         restoreTabIds.push(info.tabId)
       }
 
       this.handleRestoreDeadSessions(restoreTabIds, activatedTools)
 
-      return { tabs: tabInfos, activeSessionId: activeSessionId ?? saved[0].sessionId }
+      return { tabs: tabInfos, activeSessionId: activeSessionId ?? saved[0].sessionId ?? null }
     }
 
     const defaultTool = selectedTool

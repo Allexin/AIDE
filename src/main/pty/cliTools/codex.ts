@@ -19,6 +19,7 @@ import {
   parseCodexHistoryLine,
   readCodexSessionHistory,
   readCodexSessionPreview,
+  scanCodexSessionIdsSync,
   scanCodexSessions,
   watchCodexSessionFile,
   watchCodexSessions
@@ -341,10 +342,10 @@ and must not be selected.`,
   },
 
   watchForNewSessions(projectPath: string, onNew: (session: CliSession) => void): () => void {
-    const knownIds = new Set<string>()
-    void scanCodexSessions(projectPath).then((sessions) => {
-      sessions.forEach((session) => knownIds.add(session.sessionId))
-    })
+    // Establish the baseline synchronously before Codex is started. Otherwise a
+    // newly-created rollout can be absorbed by the asynchronous baseline scan
+    // and never reported to PtyManager.
+    const knownIds = scanCodexSessionIdsSync(projectPath)
 
     return watchCodexSessions(projectPath, knownIds, (session) => {
       onNew({

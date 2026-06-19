@@ -2,7 +2,7 @@ import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { existsSync, readdirSync, readFileSync, writeFileSync, statSync, promises as fsAsync } from 'fs'
 import { join } from 'path'
 import { spawn } from 'child_process'
-import { removeRecentProject, getAppState, loadOpenSessions, clearOpenSessions, getActivatedTools, setActivatedTools } from '../config/appState'
+import { removeRecentProject, getAppState, loadOpenSessions, getActivatedTools, setActivatedTools } from '../config/appState'
 import { getAppConfig, updateAppConfig } from '../config/appConfig'
 import type { ReasoningConfig, UpdatesConfig } from '../config/appConfig'
 import { getUpdateStatus, skipVersion, dismissNotification, RELEASES_URL } from '../updater/updater'
@@ -257,10 +257,6 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
       saved.tabs = saved.tabs.map((t) => ({ ...t, toolId: t.toolId ?? 'claude-code' }))
     }
     const result = await ptyMgr.createInitialTabs(saved?.tabs ?? undefined, saved?.activeSessionId ?? null, getActivatedTools(), startupOptions)
-
-    if (projectPath && useGlobalProjectState && saved) {
-      clearOpenSessions(projectPath)
-    }
 
     return result
   })

@@ -181,6 +181,29 @@ export async function scanCodexSessions(projectPath: string): Promise<CodexDiskS
     .sort((a, b) => b.mtime - a.mtime)
 }
 
+export function scanCodexSessionIdsSync(projectPath: string): Set<string> {
+  const ids = new Set<string>()
+  for (const filePath of collectJsonlFiles(getCodexSessionsRoot())) {
+    let fd: number
+    try {
+      fd = openSync(filePath, 'r')
+    } catch {
+      continue
+    }
+    try {
+      const size = Math.min(fstatSync(fd).size, 65536)
+      const buf = Buffer.alloc(size)
+      readSync(fd, buf, 0, size, 0)
+      const lines = buf.toString('utf-8').split('\n').filter((line) => line.trim())
+      const meta = parseSessionMetadata(lines, filePath)
+      if (meta && isSameProject(projectPath, meta.cwd)) ids.add(meta.sessionId)
+    } finally {
+      closeSync(fd)
+    }
+  }
+  return ids
+}
+
 export async function findCodexSessionFile(projectPath: string, sessionId: string): Promise<string | null> {
   const sessions = await scanCodexSessions(projectPath)
   return sessions.find((session) => session.sessionId === sessionId)?.filePath ?? null

@@ -79,6 +79,7 @@ export default function StatusBar(): React.ReactElement {
   const [accountLabel, setAccountLabel] = useState<string | null>(null)
   const [accountSaved, setAccountSaved] = useState(true)
   const activeToolIdRef = useRef<string | null>(null)
+  const requestGeneration = useRef(0)
 
   // ── Usage limits sensor (left, next to account) ────────────────────────────
   const [usageInfo, setUsageInfo] = useState<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number; hasLimit?: boolean } | null>(null)
@@ -92,6 +93,7 @@ export default function StatusBar(): React.ReactElement {
   })
 
   const fetchAccountAndUsage = useCallback((toolId: string | null) => {
+    const generation = ++requestGeneration.current
     activeToolIdRef.current = toolId
     if (!toolId) {
       // No integration — clear display
@@ -103,6 +105,7 @@ export default function StatusBar(): React.ReactElement {
 
     // Fetch account info
     window.editorApi.getAccountCurrentInfo(toolId).then((info) => {
+      if (generation !== requestGeneration.current || activeToolIdRef.current !== toolId) return
       if (info) {
         setAccountLabel(info.label)
         setAccountSaved(info.saved)
@@ -114,21 +117,10 @@ export default function StatusBar(): React.ReactElement {
     // Fetch usage
     lastUsageFetch.current = Date.now()
     window.editorApi.getUsageInfo(toolId).then((info) => {
+      if (generation !== requestGeneration.current || activeToolIdRef.current !== toolId) return
       setUsageInfo(info)
     })
   }, [])
-
-  // Load default tool ID on mount
-  useEffect(() => {
-    window.editorApi.getDefaultToolId().then(async (id) => {
-      if (!id) {
-        const activated = await window.editorApi.getActivatedTools()
-        id = activated[0] ?? null
-      }
-      // Don't set activeToolIdRef here — it will be set reactively from the store
-      fetchAccountAndUsage(id)
-    })
-  }, [fetchAccountAndUsage])
 
   // React to active tab changes — update account/usage when tab switches
   useEffect(() => {
@@ -176,9 +168,11 @@ export default function StatusBar(): React.ReactElement {
       clearInterval(timerId)
       const ms = document.hasFocus() ? 300_000 : 1_200_000
       timerId = setInterval(() => {
-        if (activeToolIdRef.current) {
+        const toolId = activeToolIdRef.current
+        if (toolId) {
           lastUsageFetch.current = Date.now()
-          window.editorApi.getUsageInfo(activeToolIdRef.current).then((info) => {
+          window.editorApi.getUsageInfo(toolId).then((info) => {
+            if (activeToolIdRef.current !== toolId) return
             setUsageInfo(info)
           })
         }
@@ -188,9 +182,11 @@ export default function StatusBar(): React.ReactElement {
     startInterval()
 
     const onFocus = (): void => {
-      if (Date.now() - lastUsageFetch.current > 300_000 && activeToolIdRef.current) {
+      const toolId = activeToolIdRef.current
+      if (Date.now() - lastUsageFetch.current > 300_000 && toolId) {
         lastUsageFetch.current = Date.now()
-        window.editorApi.getUsageInfo(activeToolIdRef.current).then((info) => {
+        window.editorApi.getUsageInfo(toolId).then((info) => {
+          if (activeToolIdRef.current !== toolId) return
           setUsageInfo(info)
         })
       }
