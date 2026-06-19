@@ -17,6 +17,11 @@ export interface SessionTabInfo {
   toolName: string
 }
 
+export interface StartupTerminalOptions {
+  noRestore?: boolean
+  toolId?: string
+}
+
 interface PtyTab extends SessionTabInfo {
   pty: nodePty.IPty
   tool: CliTool
@@ -39,6 +44,8 @@ export class PtyManager {
   private tabs = new Map<string, PtyTab>()
   private readonly win: BrowserWindow
   private readonly projectPath: string
+  private startupOptions: StartupTerminalOptions
+  private readonly globalProjectStateEnabled: boolean
   private activatedTools: string[] = []
 
   private titleBufs = new Map<string, string>()
@@ -53,9 +60,26 @@ export class PtyManager {
   onTabClosed?: (tabId: string) => void
   rawLogEnabled = false
 
-  constructor(win: BrowserWindow, projectPath: string) {
+  constructor(
+    win: BrowserWindow,
+    projectPath: string,
+    startupOptions: StartupTerminalOptions = {},
+    globalProjectStateEnabled = true
+  ) {
     this.win = win
     this.projectPath = projectPath
+    this.startupOptions = startupOptions
+    this.globalProjectStateEnabled = globalProjectStateEnabled
+  }
+
+  consumeStartupOptions(): StartupTerminalOptions {
+    const options = this.startupOptions
+    this.startupOptions = {}
+    return options
+  }
+
+  isGlobalProjectStateEnabled(): boolean {
+    return this.globalProjectStateEnabled
   }
 
   private debugLog(msg: string): void {
@@ -68,9 +92,17 @@ export class PtyManager {
   async createInitialTabs(
     saved?: SavedSessionEntry[],
     activeSessionId?: string | null,
-    activatedTools: string[] = []
+    activatedTools: string[] = [],
+    options: StartupTerminalOptions = {}
   ): Promise<{ tabs: SessionTabInfo[]; activeSessionId: string | null }> {
     this.activatedTools = activatedTools
+    const selectedTool = this.resolveInitialTool(options.toolId, activatedTools)
+    if (options.noRestore) {
+      await selectedTool.prepareProject?.(this.projectPath)
+      const info = this.spawnNewSessionTab(selectedTool)
+      return { tabs: [info], activeSessionId: null }
+    }
+
     if (saved && saved.length > 0) {
       this.debugLog(`=== RESTORE: ${saved.length} saved sessions ===`)
       for (const s of saved) this.debugLog(`  saved: ${s.sessionId} "${s.title}" tool=${s.toolId}`)
@@ -102,7 +134,7 @@ export class PtyManager {
       return { tabs: tabInfos, activeSessionId: activeSessionId ?? saved[0].sessionId }
     }
 
-    const defaultTool = getDefaultTool(activatedTools)
+    const defaultTool = selectedTool
     await defaultTool.prepareProject?.(this.projectPath)
 
     const sessions = await defaultTool.scanSessions(this.projectPath)
@@ -112,6 +144,15 @@ export class PtyManager {
     }
     const info = this.spawnNewSessionTab(defaultTool)
     return { tabs: [info], activeSessionId: null }
+  }
+
+  private resolveInitialTool(toolId: string | undefined, activatedTools: string[]): CliTool {
+    if (toolId) {
+      const tool = getToolById(toolId)
+      if (tool) return tool
+      cliLog('startup', `Unknown CLI tool id "${toolId}". Falling back to the default CLI.`)
+    }
+    return getDefaultTool(activatedTools)
   }
 
   private handleRestoreDeadSessions(tabIds: string[], activatedTools: string[]): void {

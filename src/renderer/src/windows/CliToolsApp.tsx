@@ -14,6 +14,7 @@ export default function CliToolsApp(): React.ReactElement {
   const [rowStates, setRowStates] = useState<Record<string, RowState>>({})
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
+  const [copiedToolId, setCopiedToolId] = useState<string | null>(null)
 
   useEffect(() => {
     window.cliToolsApi.getAll().then(setTools)
@@ -38,6 +39,14 @@ export default function CliToolsApp(): React.ReactElement {
     setOpenDropdown(null)
     await window.cliToolsApi.deactivate(toolId)
     setTools((prev) => prev.map((t) => (t.id === toolId ? { ...t, activated: false } : t)))
+  }
+
+  const handleCopyToolId = (toolId: string): void => {
+    window.cliToolsApi.copyToolId(toolId)
+    setCopiedToolId(toolId)
+    window.setTimeout(() => {
+      setCopiedToolId((current) => (current === toolId ? null : current))
+    }, 1200)
   }
 
   const handleClose = (): void => {
@@ -85,6 +94,25 @@ export default function CliToolsApp(): React.ReactElement {
             >
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, color: '#e0e0e0', marginBottom: 2 }}>{tool.name}</div>
+                <button
+                  type="button"
+                  title="Copy toolId"
+                  onClick={(e) => { e.stopPropagation(); handleCopyToolId(tool.id) }}
+                  style={{
+                    display: 'block',
+                    padding: 0,
+                    margin: '0 0 4px',
+                    background: 'none',
+                    border: 'none',
+                    color: copiedToolId === tool.id ? '#89d185' : '#858585',
+                    fontSize: 11,
+                    fontFamily: 'Consolas, monospace',
+                    cursor: 'pointer',
+                    textAlign: 'left'
+                  }}
+                >
+                  toolId: {tool.id}{copiedToolId === tool.id ? ' copied' : ''}
+                </button>
                 {tool.installUrl && (
                   <a
                     href={tool.installUrl}

@@ -850,6 +850,9 @@ export default function EditorPanel({ style }: EditorPanelProps): React.ReactEle
         <button
           title="Close file"
           style={{ ...headerBtnStyle, fontSize: 15, border: 'none' }}
+          onMouseDown={(e) => {
+            e.stopPropagation()
+          }}
           onClick={(e) => {
             e.stopPropagation()
             handleClose()

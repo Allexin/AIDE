@@ -226,8 +226,10 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
       if (win === senderWin) { projectPath = p; break }
     }
 
+    const startupOptions = ptyMgr.consumeStartupOptions()
+    const useGlobalProjectState = ptyMgr.isGlobalProjectStateEnabled()
     const activatedTools = getActivatedTools()
-    if (activatedTools.length === 0) {
+    if (activatedTools.length === 0 && !startupOptions.toolId) {
       const { openCliToolsWindow } = await import('../windows/cliTools')
       const cliWin = openCliToolsWindow(senderWin)
       await new Promise<void>((resolve) => {
@@ -238,13 +240,13 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
       })
     }
 
-    const saved = projectPath ? loadOpenSessions(projectPath) : null
+    const saved = projectPath && useGlobalProjectState && !startupOptions.noRestore ? loadOpenSessions(projectPath) : null
     if (saved) {
       saved.tabs = saved.tabs.map((t) => ({ ...t, toolId: t.toolId ?? 'claude-code' }))
     }
-    const result = await ptyMgr.createInitialTabs(saved?.tabs ?? undefined, saved?.activeSessionId ?? null, getActivatedTools())
+    const result = await ptyMgr.createInitialTabs(saved?.tabs ?? undefined, saved?.activeSessionId ?? null, getActivatedTools(), startupOptions)
 
-    if (projectPath && saved) {
+    if (projectPath && useGlobalProjectState && saved) {
       clearOpenSessions(projectPath)
     }
 

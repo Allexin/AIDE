@@ -419,6 +419,7 @@ interface CliToolsAPI {
   getAll: () => Promise<CliToolEntry[]>
   activate: (toolId: string) => Promise<{ ok: boolean; error?: string }>
   deactivate: (toolId: string) => Promise<void>
+  copyToolId: (toolId: string) => void
   close: () => void
 }
 

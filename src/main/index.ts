@@ -1,6 +1,4 @@
 import { app, BrowserWindow } from 'electron'
-import { join } from 'path'
-import { existsSync } from 'fs'
 import { initAppConfig } from './config/appConfig'
 import { initAppState } from './config/appState'
 import { initAccountStorage } from './config/accountStorage'
@@ -12,31 +10,22 @@ import { setupIpcHandlers } from './ipc'
 import { setupMenu, isSwitchingProject, setRemoteServer } from './menu'
 import { RemoteServer } from './remote'
 import { ptyRegistry } from './pty/registry'
+import { getCommandLineArgumentsHelp, hasCommandLineHelpArg, resolveStartupArgs } from './startupArgs'
 
 // Map of projectPath → editor BrowserWindow
 const openProjects = new Map<string, BrowserWindow>()
 
-function resolveStartupProject(): string | null {
-  // Skip argv[0] (electron binary) and argv[1] (app path).
-  // Ignore entries starting with '--' (electron/vite flags).
-  // The first remaining entry is the user-supplied project path.
-  const userArgs = process.argv.slice(2).filter(a => !a.startsWith('--'))
-  const cliArg = userArgs[0]
-
-  if (cliArg) {
-    const resolved = join(process.cwd(), cliArg) // resolves relative paths including '.'
-    const candidate = existsSync(resolved) ? resolved : cliArg // try absolute if resolve fails
-    if (existsSync(candidate)) return candidate
-  }
-
-  // Priority 2: cwd has .aide/ — recognized as a previously-opened AIDE project
-  const aideDirInCwd = join(process.cwd(), '.aide')
-  if (existsSync(aideDirInCwd)) return process.cwd()
-
-  return null
+function getUserArgs(): string[] {
+  // Packaged apps receive user args after the executable; dev/defaultApp
+  // launches also include the app path as argv[1].
+  return process.argv.slice(app.isPackaged ? 1 : 2)
 }
 
-app.whenReady().then(() => {
+const userArgs = getUserArgs()
+if (hasCommandLineHelpArg(userArgs)) {
+  process.stdout.write(`${getCommandLineArgumentsHelp()}\n`)
+  process.exit(0)
+} else app.whenReady().then(() => {
   initAppConfig()
   initAppState()
   initAccountStorage()
@@ -49,10 +38,13 @@ app.whenReady().then(() => {
   initUpdater()
   setupMenu(openProjects, (path) => openProjectAndTrack(path, openProjects, () => remoteServer.refreshProjects()))
 
-  const startupPath = resolveStartupProject()
+  const startupArgs = resolveStartupArgs(userArgs, process.cwd())
 
-  if (startupPath) {
-    const result = openProjectAndTrack(startupPath, openProjects, () => remoteServer.refreshProjects())
+  if (startupArgs.projectPath) {
+    const result = openProjectAndTrack(startupArgs.projectPath, openProjects, () => remoteServer.refreshProjects(), {
+      terminal: startupArgs.terminal,
+      noGlobalState: startupArgs.noGlobalState
+    })
     if (!result.success) {
       // Path exists but couldn't be opened (locked, etc.) — fall back to Picker
       createPickerWindow()

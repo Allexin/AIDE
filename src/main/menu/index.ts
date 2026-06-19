@@ -14,6 +14,7 @@ import { registerCommand } from './commandRegistry'
 import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
 import { listAccounts, updateAccount as updateStoredAccount, getActiveAccount, setActiveAccount } from '../config/accountStorage'
 import { restartToolSessions } from '../pty/registry'
+import { getCommandLineArgumentsHelp } from '../startupArgs'
 
 // Injected by setupMenu — avoids circular dep with windows/editor.ts
 type OpenProjectFn = (path: string) => { success: boolean; error?: string }
@@ -236,6 +237,22 @@ function broadcastAccountsChanged(): void {
   }
 }
 
+function showCommandLineArgumentsHelp(): void {
+  const parent = BrowserWindow.getFocusedWindow() ?? getEditorWindow() ?? undefined
+  const options: Electron.MessageBoxOptions = {
+    type: 'info',
+    title: 'Command Line Arguments',
+    message: 'Command Line Arguments',
+    detail: getCommandLineArgumentsHelp(),
+    buttons: ['OK']
+  }
+  if (parent) {
+    dialog.showMessageBox(parent, options)
+  } else {
+    dialog.showMessageBox(options)
+  }
+}
+
 // ── Full rebuild — call only when menu content changes (Open Recent list) ──────
 
 export function rebuildMenu(): void {
@@ -377,6 +394,15 @@ export function rebuildMenu(): void {
             const parent = getEditorWindow() ?? undefined
             createSettingsWindow(parent)
           }
+        }
+      ]
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'Command Line Arguments',
+          click: (): void => { showCommandLineArgumentsHelp() }
         }
       ]
     }

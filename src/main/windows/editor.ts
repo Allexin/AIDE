@@ -15,6 +15,12 @@ import { thinkingRegistry } from '../thinking/thinkingRegistry'
 import { getRunningCount, killAllProcesses, detachAllProcesses, disposeProcessManager } from '../toolbar/processManager'
 import { startToolbarWatcher } from '../toolbar/toolbarWatcher'
 import { rebuildMenu, removeEditorWindow } from '../menu'
+import type { StartupTerminalOptions } from '../pty/ptyManager'
+
+export interface OpenProjectOptions {
+  terminal?: StartupTerminalOptions
+  noGlobalState?: boolean
+}
 
 export function createEditorWindow(projectPath: string): BrowserWindow {
   const folderName = basename(projectPath)
@@ -58,7 +64,8 @@ export function createEditorWindow(projectPath: string): BrowserWindow {
 export function openProjectAndTrack(
   projectPath: string,
   openProjects: Map<string, BrowserWindow>,
-  onProjectsChanged?: () => void
+  onProjectsChanged?: () => void,
+  options: OpenProjectOptions = {}
 ): { success: boolean; error?: string } {
   if (!existsSync(projectPath)) {
     return { success: false, error: `Path does not exist: ${projectPath}` }
@@ -81,16 +88,18 @@ export function openProjectAndTrack(
     }
   }
 
-  addRecentProject(projectPath, getAppConfig().sessions.maxRecentProjects)
-  // Rebuild menu so Open Recent submenu reflects the newly added project
-  rebuildMenu()
+  if (!options.noGlobalState) {
+    addRecentProject(projectPath, getAppConfig().sessions.maxRecentProjects)
+    // Rebuild menu so Open Recent submenu reflects the newly added project
+    rebuildMenu()
+  }
 
   const editorWin = createEditorWindow(projectPath)
   openProjects.set(projectPath, editorWin)
   onProjectsChanged?.()
 
   // Create PTY manager for this window
-  const ptyMgr = new PtyManager(editorWin, projectPath)
+  const ptyMgr = new PtyManager(editorWin, projectPath, options.terminal ?? {}, !options.noGlobalState)
   ptyRegistry.set(editorWin, ptyMgr)
 
   // Create thinking watcher and wire it to PTY manager session lifecycle
@@ -155,7 +164,7 @@ export function openProjectAndTrack(
       appendFileSync(dbg, `\n=== SAVE ${new Date().toISOString()} ===\nall tabs: ${JSON.stringify(sessions, null, 2)}\ntoSave: ${JSON.stringify(toSave, null, 2)}\n`)
     } catch {}
 
-    if (toSave.length > 0) {
+    if (!options.noGlobalState && toSave.length > 0) {
       saveOpenSessions(projectPath, {
         tabs: toSave,
         activeSessionId: toSave[0]?.sessionId ?? null
