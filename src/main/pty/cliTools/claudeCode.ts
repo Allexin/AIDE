@@ -213,7 +213,9 @@ type is not user/assistant are session metadata and must never be selected.`,
       HTTP_PROXY: addr,
       http_proxy: addr,
       HTTPS_PROXY: addr,
-      https_proxy: addr
+      https_proxy: addr,
+      NO_PROXY: 'localhost,127.0.0.1,::1',
+      no_proxy: 'localhost,127.0.0.1,::1'
     }
   },
 

@@ -497,7 +497,11 @@ and must not be selected.`,
       HTTP_PROXY: proxy,
       HTTPS_PROXY: proxy,
       http_proxy: proxy,
-      https_proxy: proxy
+      https_proxy: proxy,
+      // reqwest's system proxy resolution routes loopback traffic through the
+      // proxy unless NO_PROXY explicitly excludes it, breaking local MCP servers.
+      NO_PROXY: 'localhost,127.0.0.1,::1',
+      no_proxy: 'localhost,127.0.0.1,::1'
     }
   },
 

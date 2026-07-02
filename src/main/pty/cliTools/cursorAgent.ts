@@ -676,7 +676,9 @@ export const cursorAgentTool: CliTool = {
       HTTP_PROXY: addr,
       HTTPS_PROXY: addr,
       http_proxy: addr,
-      https_proxy: addr
+      https_proxy: addr,
+      NO_PROXY: 'localhost,127.0.0.1,::1',
+      no_proxy: 'localhost,127.0.0.1,::1'
     }
   },
 
