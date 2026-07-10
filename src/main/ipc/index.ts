@@ -4,7 +4,7 @@ import { join } from 'path'
 import { spawn } from 'child_process'
 import { removeRecentProject, getAppState, loadOpenSessions, getActivatedTools, setActivatedTools } from '../config/appState'
 import { getAppConfig, updateAppConfig } from '../config/appConfig'
-import type { ReasoningConfig, UpdatesConfig } from '../config/appConfig'
+import type { ReasoningConfig, SessionsConfig, UpdatesConfig } from '../config/appConfig'
 import { getUpdateStatus, skipVersion, dismissNotification, RELEASES_URL } from '../updater/updater'
 import { readProjectSettings, writeProjectSettings } from '../config/projectConfig'
 import {
@@ -256,7 +256,13 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     if (saved) {
       saved.tabs = saved.tabs.map((t) => ({ ...t, toolId: t.toolId ?? 'claude-code' }))
     }
-    const result = await ptyMgr.createInitialTabs(saved?.tabs ?? undefined, saved?.activeSessionId ?? null, getActivatedTools(), startupOptions)
+    const result = await ptyMgr.createInitialTabs(
+      saved?.tabs ?? undefined,
+      saved?.activeSessionId ?? null,
+      getActivatedTools(),
+      startupOptions,
+      getAppConfig().sessions.maxRestoredSessions
+    )
 
     return result
   })
@@ -1147,6 +1153,13 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
 
   ipcMain.handle('settings:save-reasoning', (_event, reasoning: ReasoningConfig) => {
     updateAppConfig({ reasoning })
+  })
+
+  // ── Settings: get/save sessions config ───────────────────────────────────────
+  ipcMain.handle('settings:get-sessions', () => getAppConfig().sessions)
+
+  ipcMain.handle('settings:save-sessions', (_event, sessions: SessionsConfig) => {
+    updateAppConfig({ sessions })
   })
 
   ipcMain.on('settings:resize', (event, height: number) => {

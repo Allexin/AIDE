@@ -93,7 +93,8 @@ export class PtyManager {
     saved?: SavedSessionEntry[],
     activeSessionId?: string | null,
     activatedTools: string[] = [],
-    options: StartupTerminalOptions = {}
+    options: StartupTerminalOptions = {},
+    maxRestore = 5
   ): Promise<{ tabs: SessionTabInfo[]; activeSessionId: string | null }> {
     this.activatedTools = activatedTools
     const selectedTool = this.resolveInitialTool(options.toolId, activatedTools)
@@ -104,36 +105,56 @@ export class PtyManager {
     }
 
     if (saved && saved.length > 0) {
-      this.debugLog(`=== RESTORE: ${saved.length} saved sessions ===`)
+      // Only tabs that actually own a session are restorable; a tab without a
+      // session (never assigned one) is dropped rather than reopened as blank.
+      const restorable = saved.filter((s) => !!s.sessionId)
+      // Restore the N most recent restorable tabs (the tail of the list), plus
+      // the active tab if it fell outside that window. maxRestore <= 0 means
+      // "restore none" → fall through to a default session.
+      const keep = new Set(
+        (maxRestore > 0 ? restorable.slice(-maxRestore) : []).map((e) => e.sessionId)
+      )
+      if (maxRestore > 0 && activeSessionId) keep.add(activeSessionId)
+      // Filter the full restorable list so surviving tabs keep their original order.
+      const limited = restorable.filter((e) => keep.has(e.sessionId))
+
+      this.debugLog(`=== RESTORE: ${saved.length} saved, ${restorable.length} with a session, restoring ${limited.length} (max ${maxRestore}) ===`)
       for (const s of saved) this.debugLog(`  saved: ${s.sessionId} "${s.title}" tool=${s.toolId}`)
       this.debugLog(`  activeSessionId: ${activeSessionId}`)
 
-      const tabInfos: SessionTabInfo[] = []
-      const restoreTabIds: string[] = []
+      if (limited.length > 0) {
+        const tabInfos: SessionTabInfo[] = []
+        const restoreTabIds: string[] = []
 
-      // Collect unique tools that need prepareProject
-      const toolsPrepared = new Set<string>()
-      for (const entry of saved) {
-        const tool = getToolById(entry.toolId) ?? getDefaultTool(activatedTools)
-        if (!toolsPrepared.has(tool.id)) {
-          toolsPrepared.add(tool.id)
-          await tool.prepareProject?.(this.projectPath)
+        // Collect unique tools that need prepareProject
+        const toolsPrepared = new Set<string>()
+        for (const entry of limited) {
+          const tool = getToolById(entry.toolId) ?? getDefaultTool(activatedTools)
+          if (!toolsPrepared.has(tool.id)) {
+            toolsPrepared.add(tool.id)
+            await tool.prepareProject?.(this.projectPath)
+          }
         }
+
+        for (const entry of limited) {
+          const tool = getToolById(entry.toolId) ?? getDefaultTool(activatedTools)
+          const info = this.spawnResumeTab(entry.sessionId!, true, tool)
+          this.debugLog(`  spawned ${info.tabId} for session ${entry.sessionId}`)
+          tabInfos.push({ ...info, title: entry.title })
+          restoreTabIds.push(info.tabId)
+        }
+
+        this.handleRestoreDeadSessions(restoreTabIds, activatedTools)
+
+        // Keep the saved active session only if it survived the trim; otherwise
+        // fall back to the first restored tab.
+        const restoredIds = new Set(limited.map((e) => e.sessionId))
+        const resolvedActive =
+          activeSessionId && restoredIds.has(activeSessionId) ? activeSessionId : limited[0].sessionId
+        return { tabs: tabInfos, activeSessionId: resolvedActive }
       }
 
-      for (const entry of saved) {
-        const tool = getToolById(entry.toolId) ?? getDefaultTool(activatedTools)
-        const info = entry.sessionId
-          ? this.spawnResumeTab(entry.sessionId, true, tool)
-          : this.spawnNewSessionTab(tool)
-        this.debugLog(`  spawned ${info.tabId} for ${entry.sessionId ? `session ${entry.sessionId}` : `new ${tool.id} tab`}`)
-        tabInfos.push({ ...info, title: entry.title })
-        restoreTabIds.push(info.tabId)
-      }
-
-      this.handleRestoreDeadSessions(restoreTabIds, activatedTools)
-
-      return { tabs: tabInfos, activeSessionId: activeSessionId ?? saved[0].sessionId ?? null }
+      // Nothing restorable → fall through to the default session startup below.
     }
 
     const defaultTool = selectedTool

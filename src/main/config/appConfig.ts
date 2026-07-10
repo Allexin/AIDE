@@ -20,6 +20,7 @@ export interface UiConfig {
 export interface SessionsConfig {
   maxSessionsInPicker: number
   maxRecentProjects: number
+  maxRestoredSessions: number
 }
 
 export interface GitConfig {
@@ -94,7 +95,8 @@ const DEFAULTS: AppConfig = {
   },
   sessions: {
     maxSessionsInPicker: 20,
-    maxRecentProjects: 20
+    maxRecentProjects: 20,
+    maxRestoredSessions: 5
   },
   git: {
     addBatchSize: 10

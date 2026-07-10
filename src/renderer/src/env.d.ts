@@ -384,6 +384,12 @@ interface RemoteConnectAPI {
   openSettings: () => void
 }
 
+interface SessionsConfig {
+  maxSessionsInPicker: number
+  maxRecentProjects: number
+  maxRestoredSessions: number
+}
+
 interface SettingsAPI {
   getReasoningConfig: () => Promise<{ showPanel: boolean }>
   saveReasoningConfig: (config: { showPanel: boolean }) => Promise<void>
@@ -394,6 +400,8 @@ interface SettingsAPI {
   resizeWindow: (height: number) => void
   getUpdatesConfig: () => Promise<{ notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly' }>
   saveUpdatesConfig: (config: { notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly' }) => Promise<void>
+  getSessionsConfig: () => Promise<SessionsConfig>
+  saveSessionsConfig: (config: SessionsConfig) => Promise<void>
   getRemoteConfig: () => Promise<RemoteConfig>
   saveRemoteConfig: (config: RemoteConfig) => Promise<void>
   getActivatedTools: () => Promise<{ id: string; name: string }[]>

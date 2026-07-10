@@ -24,6 +24,12 @@ export interface UpdatesConfig {
   notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly'
 }
 
+export interface SessionsConfig {
+  maxSessionsInPicker: number
+  maxRecentProjects: number
+  maxRestoredSessions: number
+}
+
 export interface RemoteCustomButton {
   label: string
   send: string
@@ -50,6 +56,8 @@ export interface SettingsAPI {
   resizeWindow: (height: number) => void
   getUpdatesConfig: () => Promise<UpdatesConfig>
   saveUpdatesConfig: (config: UpdatesConfig) => Promise<void>
+  getSessionsConfig: () => Promise<SessionsConfig>
+  saveSessionsConfig: (config: SessionsConfig) => Promise<void>
   getRemoteConfig: () => Promise<RemoteConfig>
   saveRemoteConfig: (config: RemoteConfig) => Promise<void>
   getActivatedTools: () => Promise<{ id: string; name: string }[]>
@@ -66,6 +74,8 @@ const settingsApi: SettingsAPI = {
   resizeWindow: (height) => ipcRenderer.send('settings:resize', height),
   getUpdatesConfig: () => ipcRenderer.invoke('settings:get-updates'),
   saveUpdatesConfig: (config) => ipcRenderer.invoke('settings:save-updates', config),
+  getSessionsConfig: () => ipcRenderer.invoke('settings:get-sessions'),
+  saveSessionsConfig: (config) => ipcRenderer.invoke('settings:save-sessions', config),
   getRemoteConfig: () => ipcRenderer.invoke('settings:get-remote'),
   saveRemoteConfig: (config) => ipcRenderer.invoke('settings:save-remote', config),
   getActivatedTools: () => ipcRenderer.invoke('settings:get-activated-tools'),
