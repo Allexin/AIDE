@@ -10,6 +10,7 @@ import { setupIpcHandlers } from './ipc'
 import { setupMenu, isSwitchingProject, setRemoteServer } from './menu'
 import { RemoteServer } from './remote'
 import { ptyRegistry } from './pty/registry'
+import { startHookServer } from './hooks/hookServer'
 import { getCommandLineArgumentsHelp, hasCommandLineHelpArg, resolveStartupArgs } from './startupArgs'
 
 // Map of projectPath → editor BrowserWindow
@@ -25,10 +26,17 @@ const userArgs = getUserArgs()
 if (hasCommandLineHelpArg(userArgs)) {
   process.stdout.write(`${getCommandLineArgumentsHelp()}\n`)
   process.exit(0)
-} else app.whenReady().then(() => {
+} else app.whenReady().then(async () => {
   initAppConfig()
   initAppState()
   initAccountStorage()
+
+  // Start the hook server before any tab spawns so port/token are available when
+  // a Claude Code session launches (deterministic tab -> transcript binding).
+  await startHookServer().catch(() => {
+    // If it fails to bind, tabs launch without hooks and fall back to file-watch
+    // session assignment; nothing else breaks.
+  })
 
   const remoteServer = new RemoteServer(ptyRegistry, openProjects)
   remoteServer.start()

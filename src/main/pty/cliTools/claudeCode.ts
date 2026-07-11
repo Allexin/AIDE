@@ -4,7 +4,8 @@ import { execFile } from 'child_process'
 import { homedir } from 'os'
 import { join } from 'path'
 import { session } from 'electron'
-import type { CliTool, CliSession, SettingsField, UsageInfo, HistoryEntry } from './types'
+import type { CliTool, CliSession, SettingsField, UsageInfo, HistoryEntry, HookLaunchContext } from './types'
+import { writeTabHookSettings, cleanupTabHookSettings } from './claudeHooks'
 import { scanSessions as scanDiskSessions, watchSessionsDir, getSessionsDir, readSessionPreview, readSessionHistory, parseHistoryLine } from './claudeCodeScanner'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
@@ -216,6 +217,19 @@ type is not user/assistant are session metadata and must never be selected.`,
       https_proxy: addr,
       NO_PROXY: 'localhost,127.0.0.1,::1',
       no_proxy: 'localhost,127.0.0.1,::1'
+    }
+  },
+
+  hookLaunchArgs(ctx: HookLaunchContext): string {
+    // Write a per-tab settings file wiring SessionStart/Stop hooks back to AIDE's
+    // hook server (deterministic tab -> transcript_path binding). Merges with the
+    // user's project .claude/settings.json rather than replacing it.
+    try {
+      const path = writeTabHookSettings(ctx.tabId, ctx.hookPort, ctx.hookToken)
+      return ` --settings "${path}"`
+    } catch (err) {
+      cliLog(LOG_CH, `Failed to write hook settings for ${ctx.tabId}: ${String(err)}`)
+      return ''
     }
   },
 
@@ -599,6 +613,7 @@ type is not user/assistant are session metadata and must never be selected.`,
   /** Remove the signal callback for a closed tab. */
   deregisterTab(tabId: string): void {
     signalByTab.delete(tabId)
+    cleanupTabHookSettings(tabId)
   },
 
   getSessionPreview(projectPath: string, sessionId: string): Promise<Array<{ role: 'user' | 'assistant'; text: string }>> {

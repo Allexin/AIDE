@@ -9,6 +9,13 @@ export interface CliSession {
   lastModified: Date
 }
 
+/** Context passed to CliTool.hookLaunchArgs at spawn time. */
+export interface HookLaunchContext {
+  tabId: string
+  hookPort: number
+  hookToken: string
+}
+
 export interface CliTool {
   readonly id: string
   readonly name: string
@@ -35,6 +42,13 @@ export interface CliTool {
    *  Called synchronously at spawn time; reads from in-memory config only.
    */
   getEnvOverrides?(): Record<string, string>
+
+  /** Return extra CLI args (leading space included) that wire this launch to
+   *  AIDE's hook server for deterministic session binding, writing any per-tab
+   *  state (e.g. a settings file) as a side effect. Returns '' when hooks are
+   *  unavailable. Tools that don't use hooks omit this method.
+   */
+  hookLaunchArgs?(ctx: HookLaunchContext): string
 
   /** Find existing sessions for a project on disk, sorted newest first. */
   scanSessions(projectPath: string): Promise<CliSession[]>

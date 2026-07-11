@@ -106,8 +106,10 @@ export function openProjectAndTrack(
   // Create thinking watcher and wire it to PTY manager session lifecycle
   const thinkingWatcher = new ThinkingWatcher(editorWin)
   thinkingRegistry.set(editorWin, thinkingWatcher)
-  ptyMgr.onSessionAssigned = (tabId, sessionId, tool) => {
-    const filePath = tool.getSessionFilePath?.(projectPath, sessionId) ?? null
+  ptyMgr.onSessionAssigned = (tabId, sessionId, tool, transcriptPath) => {
+    // Prefer the authoritative transcript_path from a Claude Code hook; fall back
+    // to reconstructing it from the sessionId for tools/paths without hooks.
+    const filePath = transcriptPath ?? tool.getSessionFilePath?.(projectPath, sessionId) ?? null
     thinkingWatcher.startWatching(tabId, sessionId, projectPath, filePath, tool)
   }
   ptyMgr.onTabClosed = (tabId) => thinkingWatcher.stopWatching(tabId)

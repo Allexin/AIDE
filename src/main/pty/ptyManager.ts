@@ -5,6 +5,8 @@ import { appendFileSync } from 'fs'
 import type { CliTool } from './cliTools/types'
 import { getToolById, getDefaultTool } from './cliTools/registry'
 import { cliLog } from './cliTools/cliLogger'
+import { getHookServer } from '../hooks/hookServer'
+import type { HookBinding } from '../hooks/hookServer'
 import type { SavedSessionEntry } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 
@@ -55,8 +57,15 @@ export class PtyManager {
   private titleCache = new Map<string, string>()
   private prevTitleCache = new Map<string, string>()
   private outputListeners = new Map<string, Set<(data: string) => void>>()
+  /** Last transcript_path a hook bound for a tab — used to rebind only on change. */
+  private hookBoundPath = new Map<string, string>()
 
-  onSessionAssigned?: (tabId: string, sessionId: string, tool: CliTool) => void
+  onSessionAssigned?: (
+    tabId: string,
+    sessionId: string,
+    tool: CliTool,
+    transcriptPath?: string | null
+  ) => void
   onTabClosed?: (tabId: string) => void
   rawLogEnabled = false
 
@@ -287,6 +296,7 @@ export class PtyManager {
     const tab = this.tabs.get(tabId)
     if (!tab) return
     tab.tool.deregisterTab?.(tabId)
+    this.unwireHooks(tabId)
     this.titleBufs.delete(tabId)
     this.titleCache.delete(tabId)
     this.prevTitleCache.delete(tabId)
@@ -331,7 +341,7 @@ export class PtyManager {
     const command = tab.tool.resumeCommand(sessionId)
     if (!command) throw new Error(`${tab.tool.name} cannot resume this session`)
     this.startHealthCheck(tabId)
-    tab.pty.write(`${command}\r`)
+    tab.pty.write(`${command}${this.wireHooks(tabId, tab.tool)}\r`)
     this.onSessionAssigned?.(tabId, sessionId, tab.tool)
   }
 
@@ -384,6 +394,7 @@ export class PtyManager {
     this.toolWatchers.clear()
     for (const tab of this.tabs.values()) {
       tab.tool.deregisterTab?.(tab.tabId)
+      this.unwireHooks(tab.tabId)
       this.titleBufs.delete(tab.tabId)
       this.prevTitleCache.delete(tab.tabId)
       this.healthChecks.delete(tab.tabId)
@@ -434,21 +445,44 @@ export class PtyManager {
       return
     }
 
-    if (tool.resolveOwnerPid) {
-      const candidatePids = tabsArr.map((t) => t.pty.pid)
-      const ownerPid = await tool.resolveOwnerPid(candidatePids)
-      if (ownerPid !== null) {
-        const tab = tabsArr.find((t) => t.pty.pid === ownerPid)
-        if (tab) {
-          this.debugLog(`assignNewSession: ${sessionId} → ${tab.tabId} (pid ${ownerPid})`)
-          tab.sessionId = sessionId
-          this.send('terminal:tab-session-id', { tabId: tab.tabId, sessionId })
-          this.onSessionAssigned?.(tab.tabId, sessionId, tab.tool)
-        }
-      } else {
-        this.debugLog(`assignNewSession: ${sessionId} — no owner found among our PIDs, ignoring (external CLI process?)`)
-      }
+    // Ambiguous case (0 or >1 waiting tabs): deterministic binding is handled by
+    // Claude Code hooks (handleHookBinding), which carry the authoritative
+    // tabId + transcript_path. We no longer walk the process tree here — that
+    // heuristic mis-assigned under concurrency and was Windows-only.
+    this.debugLog(`assignNewSession: ${sessionId} — deferring to hook binding (${waitingTabs.length} waiting tabs)`)
+  }
+
+  /** Authoritative binding from a Claude Code hook. Rebinds only when the
+   *  session or transcript actually changes (so a same-session Stop is a no-op). */
+  private handleHookBinding(b: HookBinding): void {
+    const tab = this.tabs.get(b.tabId)
+    if (!tab || !b.sessionId) return
+
+    const prevPath = this.hookBoundPath.get(b.tabId)
+    const changed = tab.sessionId !== b.sessionId || prevPath !== (b.transcriptPath ?? undefined)
+    if (!changed) return
+
+    if (tab.sessionId !== b.sessionId) {
+      tab.sessionId = b.sessionId
+      this.send('terminal:tab-session-id', { tabId: b.tabId, sessionId: b.sessionId })
     }
+    if (b.transcriptPath) this.hookBoundPath.set(b.tabId, b.transcriptPath)
+    this.debugLog(`hook bind: ${b.event} ${b.tabId} → ${b.sessionId} @ ${b.transcriptPath ?? '?'}`)
+    this.onSessionAssigned?.(b.tabId, b.sessionId, tab.tool, b.transcriptPath)
+  }
+
+  /** Register a tab with the hook server and return the tool's launch args
+   *  (e.g. ` --settings "<file>"`) that wire its hooks back to us. */
+  private wireHooks(tabId: string, tool: CliTool): string {
+    const hs = getHookServer()
+    if (!hs || hs.getPort() === 0 || !tool.hookLaunchArgs) return ''
+    hs.register(tabId, (b) => this.handleHookBinding(b))
+    return tool.hookLaunchArgs({ tabId, hookPort: hs.getPort(), hookToken: hs.getToken() })
+  }
+
+  private unwireHooks(tabId: string): void {
+    getHookServer()?.unregister(tabId)
+    this.hookBoundPath.delete(tabId)
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
@@ -464,7 +498,7 @@ export class PtyManager {
     setTimeout(() => {
       if (!this.tabs.has(tabId)) return
       const cmd = tool.newSessionCommand()
-      if (cmd) pty.write(`${cmd}\r`)
+      if (cmd) pty.write(`${cmd}${this.wireHooks(tabId, tool)}\r`)
     }, 500)
 
     this.startHealthCheck(tabId)
@@ -484,7 +518,7 @@ export class PtyManager {
     setTimeout(() => {
       if (!this.tabs.has(tabId)) return
       const cmd = tool.resumeCommand(sessionId)
-      if (cmd) pty.write(`${cmd}\r`)
+      if (cmd) pty.write(`${cmd}${this.wireHooks(tabId, tool)}\r`)
     }, 500)
 
     this.startHealthCheck(tabId, silent)
