@@ -16,6 +16,24 @@ compiled against Electron's ABI. You need a working C/C++ toolchain and Python:
 sudo apt install build-essential python3 git
 ```
 
+### Linux Mint
+Mint is Ubuntu-based, so the Debian/Ubuntu steps apply — with two version
+caveats:
+
+- **Mint 21.x** (based on Ubuntu 22.04): use the package names exactly as in the
+  Debian/Ubuntu blocks below.
+- **Mint 22.x** (based on Ubuntu 24.04): several runtime libraries were renamed
+  with a `t64` suffix in the 64-bit `time_t` transition. Use the `t64` names:
+  ```bash
+  sudo apt install build-essential python3 git
+  sudo apt install libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libgtk-3-0t64 \
+       libgbm1 libasound2t64 libx11-xcb1
+  ```
+- **LMDE** (Debian-based Mint): follow the plain Debian/Ubuntu names.
+
+If you are unsure which name a package has, `apt install` will suggest the
+correct one when it can't find the requested package.
+
 ### Fedora
 ```bash
 sudo dnf install @development-tools python3 git
@@ -24,9 +42,13 @@ sudo dnf install @development-tools python3 git
 Electron itself pulls in a few shared libraries at runtime (X11, nss, etc.).
 On a minimal/server install add:
 ```bash
-# Debian/Ubuntu
+# Debian / Ubuntu / Mint 21 / LMDE
 sudo apt install libnss3 libatk1.0-0 libatk-bridge2.0-0 libgtk-3-0 \
      libgbm1 libasound2 libx11-xcb1
+
+# Mint 22 / Ubuntu 24.04 (t64 package names)
+sudo apt install libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libgtk-3-0t64 \
+     libgbm1 libasound2t64 libx11-xcb1
 ```
 
 A login shell is required for the integrated terminal. AIDE spawns
@@ -56,6 +78,22 @@ Artifacts land in `release/` as `AIDE-<version>-x64.AppImage` and
 `AIDE-<version>-x64.deb` (see `electron-builder.yml` → `linux`). The native
 modules are unpacked from the asar (`asarUnpack`) so their `.node` binaries load
 at runtime.
+
+### Running the AppImage on Mint / Ubuntu 24.04
+
+AppImages need FUSE 2, which Mint 22 and Ubuntu 24.04 no longer install by
+default (you'll see `dlopen(): error loading libfuse.so.2`). Either install it:
+```bash
+sudo apt install libfuse2t64   # Mint 22 / Ubuntu 24.04
+sudo apt install libfuse2      # Mint 21 / Ubuntu 22.04
+```
+or run without FUSE by self-extracting:
+```bash
+chmod +x AIDE-<version>-x64.AppImage
+./AIDE-<version>-x64.AppImage --appimage-extract-and-run
+```
+The `.deb` (`sudo apt install ./AIDE-<version>-x64.deb`) has no FUSE
+dependency and is the simpler route on Mint.
 
 **Icon:** packaging uses `app_icon.png`. electron-builder expects at least a
 512×512 source for crisp Linux desktop icons; the current icon is 388×388 and
