@@ -12,11 +12,12 @@ import {
   readLocalToolbarConfig,
   writeLocalToolbarConfig,
   detectProjectType,
-  PRESET_GROUPS,
+  getAvailablePresetGroups,
   type ToolbarButton,
   type ToolbarItem
 } from '../config/toolbarConfig'
 import { openProjectAndTrack } from '../windows/editor'
+import { osDisplayName } from '../platform'
 import { runGitStatus } from '../filetree/gitStatus'
 import { searchProjectFileIndex } from '../filetree/fileIndex'
 import { ptyRegistry, pickerEditorMap } from '../pty/registry'
@@ -729,7 +730,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   })
 
   // ── Toolbar: get all preset groups ───────────────────────────────────────────
-  ipcMain.handle('toolbar:get-presets', () => PRESET_GROUPS)
+  ipcMain.handle('toolbar:get-presets', () => getAvailablePresetGroups())
 
   // ── Toolbar: save local buttons (replaces .aide/toolbar.json buttons array) ──
   ipcMain.handle('toolbar:save-buttons', (event, buttons: ToolbarItem[]) => {
@@ -1214,7 +1215,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const entry = [...ptyRegistry.entries()].find(([win]) => !win.isDestroyed())
     if (!entry) return
     const [win, ptyMgr] = entry
-    const prompt = `I need help setting up secure internet access to AIDE (a desktop app I use). AIDE has a remote access feature that works on the local network automatically on port 3847 — I need it accessible from outside my home network. I am an end user and do not have access to AIDE source code. Here are the options I know of: (1) Cloudflare Tunnel — run "cloudflared tunnel --url localhost:3847", gives a public HTTPS URL, no VPS needed, but may be blocked by some ISPs/firewalls; (2) Tailscale — mesh VPN, install on PC and phone, gives a private IP, no public URL, requires app on every device; (3) SSH Reverse Tunnel through your own VPS — ssh -N -R forwards port 3847, set up nginx + HTTPS on VPS, works through most firewalls, requires a Linux VPS; (4) NAT Port Forwarding — open port 3847 on your home router and forward it to your PC, simplest if you have router access, requires knowing your home IP; (5) Static IP — if your ISP provides a static public IP, combine with port forwarding for a permanent address; (6) Dynamic DNS (DDNS) — if your home IP changes, use a DDNS service (e.g. DuckDNS, No-IP) to get a stable hostname that always points to your current IP, combine with port forwarding. Please clearly explain all these options covering ease of setup, security, reliability, cost, and requirements — then ask me which one fits my situation. Once I choose, give me step-by-step setup instructions for Windows 11. After setup I will paste the external address into AIDE Settings → Remote Access → Remote host field.`
+    const prompt = `I need help setting up secure internet access to AIDE (a desktop app I use). AIDE has a remote access feature that works on the local network automatically on port 3847 — I need it accessible from outside my home network. I am an end user and do not have access to AIDE source code. Here are the options I know of: (1) Cloudflare Tunnel — run "cloudflared tunnel --url localhost:3847", gives a public HTTPS URL, no VPS needed, but may be blocked by some ISPs/firewalls; (2) Tailscale — mesh VPN, install on PC and phone, gives a private IP, no public URL, requires app on every device; (3) SSH Reverse Tunnel through your own VPS — ssh -N -R forwards port 3847, set up nginx + HTTPS on VPS, works through most firewalls, requires a Linux VPS; (4) NAT Port Forwarding — open port 3847 on your home router and forward it to your PC, simplest if you have router access, requires knowing your home IP; (5) Static IP — if your ISP provides a static public IP, combine with port forwarding for a permanent address; (6) Dynamic DNS (DDNS) — if your home IP changes, use a DDNS service (e.g. DuckDNS, No-IP) to get a stable hostname that always points to your current IP, combine with port forwarding. Please clearly explain all these options covering ease of setup, security, reliability, cost, and requirements — then ask me which one fits my situation. Once I choose, give me step-by-step setup instructions for ${osDisplayName()}. After setup I will paste the external address into AIDE Settings → Remote Access → Remote host field.`
 
     const tabInfo = await ptyMgr.createNewSessionWithPrompt(prompt, toolId, getActivatedTools())
     if (tabInfo) {

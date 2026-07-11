@@ -1,6 +1,6 @@
 # Linux Migration Plan
 
-Status: **Stages 1–2 implemented** (from-source launch + tool parity + Linux build config). Stage 3 pending. On-Linux smoke test and artifact test still owed (no Linux box in the implementing session).
+Status: **Stages 1–3 implemented** (from-source launch + tool parity + Linux build config + polish). On-Linux smoke test and artifact test still owed (no Linux box in the implementing session).
 Target: run AIDE on Linux (x64) in addition to Windows. macOS is out of scope for now, though the same platform-abstraction layer keeps the door open.
 
 AIDE is Electron + React + TypeScript. Electron, React, Monaco, xterm.js, and Zustand are all cross-platform, so the renderer needs almost no work. Every real blocker lives in the **main process**, where the app shells out to `powershell.exe`, queries WMI (`Get-CimInstance Win32_Process`), and reads Windows-specific paths. The strategy is to funnel all of that through a small **platform abstraction layer** so the rest of the code stays platform-agnostic.
@@ -156,34 +156,32 @@ Audit per-tool home directories — most already use `homedir()` and XDG-friendl
 
 ---
 
-## Stage 3 — Final polish
+## Stage 3 — Final polish ✅ implemented
 
 Goal: remove the remaining Windows-isms and make Linux a first-class, maintainable target.
 
-### 3.1 Default toolbar
+### 3.1 Default toolbar ✅
 - **File:** `src/main/config/toolbarConfig.ts`
-- Windows-only commands: `explorer.exe .` (50, 68), `cmd /c … start` (160, 202), Unreal build/clean via `cmd`/PowerShell (148, 171).
-- **Change:** branch defaults by platform — on Linux use `xdg-open .`, `xdg-open <file>`, etc. Keep Unreal/Unity entries Windows-only (see 3.3). These are config defaults, not core logic, so they don't block launch — just degrade UX if left as-is.
+- **Done:** added `openFolderCommand()` — `explorer.exe .` (Windows) / `open .` (macOS) / `xdg-open .` (Linux) — used by both the default toolbar and the `general` preset (the two former `explorer.exe .` entries; tooltip now "Open project in file manager"). Unreal/Unity presets are kept Windows-only: `detectProjectType` skips `.uproject`/Unity detection off Windows, and a new `getAvailablePresetGroups()` filters the `unreal`/`unity` groups out of `toolbar:get-presets` on non-Windows. The `cmd /c … start` VS/Unity commands live only inside those now-hidden groups, so no separate branch was needed.
 
-### 3.2 Updater
+### 3.2 Updater ✅
 - **File:** `src/main/updater/updater.ts`
-- Currently only *checks* GitVerse releases and (elsewhere) opens the releases page — it does not auto-install an `.exe`, so it won't crash on Linux. But it advertises Windows artifacts.
-- **Change:** surface the Linux artifact (AppImage/deb) in release parsing, or gate auto-update UI to Windows and let Linux users update via their package manager.
-- Minor: the hardcoded help prompt at `src/main/ipc/index.ts:1217` says "step-by-step setup instructions for Windows 11" — make the OS dynamic.
+- **Outcome:** no code change needed. The updater is notify-only — it parses the releases page for newer version strings and (elsewhere) opens that page; it constructs no artifact URL and auto-installs nothing, so it is already OS-agnostic. The releases page hosts both the Windows `.7z` and the Linux AppImage/deb.
+- **Done:** the hardcoded help prompt at `src/main/ipc/index.ts:1217` now uses `osDisplayName()` (new platform helper) instead of the literal "Windows 11".
 
-### 3.3 Unreal / Unity integrations
-- **File:** `src/main/unreal/engineFinder.ts` — reads the **Windows registry** (`UnrealVersionSelector.exe`). Guard the whole module behind `isWindows`; on Linux return "not found" gracefully so the UI hides/soft-fails these features.
+### 3.3 Unreal / Unity integrations ✅
+- **File:** `src/main/unreal/engineFinder.ts` — both `findUnrealEngineDir` and `findUnrealVersionSelector` now early-return `null` when `!isWindows`, so the registry `reg query` never runs off Windows and callers soft-fail.
 
-### 3.4 Packaging & CI
-- Add `BUILDING-linux.md` (system deps: `build-essential`, `python3`, `libx11`, etc.).
-- CI: matrix build (windows-latest + ubuntu-latest); run `typecheck` + `pack` per OS.
-- App icon set for Linux; desktop entry / MIME association for AppImage if desired.
+### 3.4 Packaging & CI ✅ (with a deviation)
+- **Done:** `BUILDING-linux.md` expanded with a Packaging section (`npm run pack:linux` → AppImage + deb in `release/`) and a Platform-behavior notes section; the stale "Stage 1/2 limitations" were replaced.
+- **Deviation — no GitHub Actions matrix:** the repo is hosted on **gitverse.ru**, not GitHub, so a `.github/workflows` file would never run. Instead the cross-platform validation steps (`npm ci` → `rebuild` → `typecheck` → `build` → `pack`/`pack:linux`) are documented in `BUILDING-linux.md`, to be mirrored into a gitverse pipeline if/when one is configured.
+- **Icon:** left as `app_icon.png` (388×388); electron-builder upscales to Linux desktop sizes with minor quality loss. A ≥512² replacement is noted as a future nicety in `BUILDING-linux.md`. Desktop-entry/MIME association not added (AppImage runs standalone).
 
 ### Stage 3 exit criteria
-- Toolbar works out-of-the-box on Linux (open folder, open file/solution equivalents).
-- Update flow is coherent on Linux (no dead Windows-only buttons).
-- Windows-only features (Unreal/Unity) hidden or gracefully unavailable.
-- CI produces both Windows and Linux artifacts.
+- ✅ Toolbar works out-of-the-box on Linux (open folder via `xdg-open`).
+- ✅ Update flow is coherent on Linux (notify-only, no dead Windows-only buttons).
+- ✅ Windows-only features (Unreal/Unity) hidden and gracefully unavailable.
+- ⚠️ CI: documented manual matrix instead of an automated one (host is gitverse.ru, not GitHub).
 
 ---
 

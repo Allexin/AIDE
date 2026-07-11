@@ -1,6 +1,7 @@
 import { execSync } from 'child_process'
 import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
+import { isWindows } from '../platform'
 
 /**
  * Run `reg query <keyPath> /v <valueName>` and return the REG_SZ value, or null on any error.
@@ -50,6 +51,9 @@ function getEngineAssociation(projectDir: string): string | null {
  * Returns the engine root path (e.g. "C:\Program Files\Epic Games\UE_5.4"), or null.
  */
 export function findUnrealEngineDir(projectDir: string): string | null {
+  // Engine discovery relies on the Windows registry; unsupported elsewhere.
+  if (!isWindows) return null
+
   const association = getEngineAssociation(projectDir)
   if (!association) return null
 
@@ -79,5 +83,8 @@ export function findUnrealEngineDir(projectDir: string): string | null {
  * This is used to open a project in the correct engine editor version.
  */
 export function findUnrealVersionSelector(): string | null {
+  // UnrealVersionSelector is registered in the Windows registry only.
+  if (!isWindows) return null
+
   return queryRegSZ('HKCR\\Unreal.ProjectFile\\shell\\switchversion', 'Icon')
 }

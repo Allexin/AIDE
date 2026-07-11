@@ -14,6 +14,13 @@ export interface ProcInfo {
   name: string
 }
 
+/** Human-readable OS name for prompts / UI text. */
+export function osDisplayName(): string {
+  if (isWindows) return 'Windows 11'
+  if (isMac) return 'macOS'
+  return 'Linux'
+}
+
 /** Interactive login shell for the integrated terminal. */
 export function defaultShell(): { file: string; args: string[] } {
   if (isWindows) return { file: 'powershell.exe', args: [] }

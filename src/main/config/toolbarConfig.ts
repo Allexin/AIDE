@@ -1,5 +1,16 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs'
 import { join } from 'path'
+import { isWindows, isMac } from '../platform'
+
+/**
+ * Command that opens a folder in the OS file manager.
+ * Windows: Explorer, macOS: Finder (`open`), Linux: `xdg-open`.
+ */
+function openFolderCommand(): string {
+  if (isWindows) return 'explorer.exe .'
+  if (isMac) return 'open .'
+  return 'xdg-open .'
+}
 
 export interface ToolbarChannel {
   name: string
@@ -49,8 +60,8 @@ const DEFAULT_TOOLBAR: ToolbarConfig = {
     {
       id: 'open-explorer',
       icon: '📂',
-      tooltip: 'Open project in Explorer',
-      command: 'explorer.exe .',
+      tooltip: 'Open project in file manager',
+      command: openFolderCommand(),
       cwd: '${projectRoot}'
     }
   ]
@@ -64,8 +75,8 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
       {
         id: 'open-explorer',
         icon: '📂',
-        tooltip: 'Open project in Explorer',
-        command: 'explorer.exe .',
+        tooltip: 'Open project in file manager',
+        command: openFolderCommand(),
         cwd: '${projectRoot}',
         sound: false
       }
@@ -390,17 +401,33 @@ export const PRESET_GROUPS: ToolbarPresetGroup[] = [
   }
 ]
 
+// Preset groups available on the current OS. Unreal/Unity are Windows-only.
+const WINDOWS_ONLY_PRESETS = new Set(['unreal', 'unity'])
+
+/**
+ * Preset groups filtered for the current platform (hides Windows-only groups on
+ * Linux/macOS).
+ */
+export function getAvailablePresetGroups(): ToolbarPresetGroup[] {
+  if (isWindows) return PRESET_GROUPS
+  return PRESET_GROUPS.filter((g) => !WINDOWS_ONLY_PRESETS.has(g.type))
+}
+
 /**
  * Detect project type from file/dir presence.
  * Returns a PRESET_GROUPS type string or null if unknown.
  */
 export function detectProjectType(projectDir: string): string | null {
-  try {
-    const entries = readdirSync(projectDir)
-    if (entries.some((e) => e.endsWith('.uproject'))) return 'unreal'
-    if (entries.includes('Assets') && entries.includes('ProjectSettings')) return 'unity'
-  } catch {
-    // ignore read errors
+  // Unreal/Unity toolchains are Windows-only in AIDE (registry-based engine
+  // discovery, cmd/PowerShell build commands); skip their detection elsewhere.
+  if (isWindows) {
+    try {
+      const entries = readdirSync(projectDir)
+      if (entries.some((e) => e.endsWith('.uproject'))) return 'unreal'
+      if (entries.includes('Assets') && entries.includes('ProjectSettings')) return 'unity'
+    } catch {
+      // ignore read errors
+    }
   }
   if (existsSync(join(projectDir, 'package.json'))) return 'npm'
   if (existsSync(join(projectDir, 'Cargo.toml'))) return 'rust'
