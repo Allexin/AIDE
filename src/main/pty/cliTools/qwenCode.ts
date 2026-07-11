@@ -1,10 +1,10 @@
 import { existsSync, readdirSync, readFileSync, statSync, watch as fsWatch, writeFileSync, mkdirSync, copyFileSync, unlinkSync } from 'fs'
-import { execFile } from 'child_process'
 import { homedir, platform } from 'os'
 import { join } from 'path'
 import type { CliTool, CliSession, UsageInfo, HistoryEntry, SettingsField } from './types'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
+import { findExecutable } from '../../platform'
 import { readQwenSessionHistory, watchQwenSessionFile } from './qwenCodeScanner'
 
 const LOG_CH = 'Qwen Code'
@@ -213,9 +213,7 @@ export const qwenCodeTool: CliTool = {
   installUrl: 'https://www.npmjs.com/package/@qwen-code/qwen-code',
 
   async isInstalled(): Promise<boolean> {
-    return new Promise((resolve) => {
-      execFile('where', ['qwen'], { timeout: 3000 }, (err) => resolve(!err))
-    })
+    return findExecutable('qwen')
   },
 
   newSessionCommand(): string {

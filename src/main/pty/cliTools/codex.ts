@@ -10,6 +10,7 @@
 import { execFile } from 'child_process'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
+import { findExecutable } from '../../platform'
 import { dirname, join } from 'path'
 import type { CliTool, CliSession, SettingsField, HistoryEntry, UsageInfo } from './types'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
@@ -271,18 +272,7 @@ and must not be selected.`,
   // ── Install check ───────────────────────────────────────────────────────────
 
   async isInstalled(): Promise<boolean> {
-    const inPath = await new Promise<boolean>((resolve) => {
-      execFile('where', ['codex'], { timeout: 3000 }, (err) => resolve(!err))
-    })
-    if (inPath) return true
-    return new Promise((resolve) => {
-      execFile(
-        'powershell.exe',
-        ['-NoProfile', '-Command', 'Get-Command codex -ErrorAction SilentlyContinue'],
-        { timeout: 5000 },
-        (err, stdout) => resolve(!err && stdout.trim().length > 0)
-      )
-    })
+    return findExecutable('codex')
   },
 
   // ── Commands ──────────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@
 import { existsSync, readFileSync } from 'fs'
 import { execFile } from 'child_process'
 import { join } from 'path'
+import { findExecutable } from '../../platform'
 import type { CliTool, CliSession, UsageInfo, SettingsField, HistoryEntry } from './types'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
@@ -104,9 +105,7 @@ export const openCodeTool: CliTool = {
   // ── Install check ─────────────────────────────────────────────────────────
 
   async isInstalled(): Promise<boolean> {
-    return new Promise((resolve) => {
-      execFile('where', ['opencode'], { timeout: 3000 }, (err) => resolve(!err))
-    })
+    return findExecutable('opencode')
   },
 
   // ── Commands ──────────────────────────────────────────────────────────────

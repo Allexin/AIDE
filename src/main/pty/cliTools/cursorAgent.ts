@@ -2,6 +2,7 @@ import { execFile } from 'child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
+import { findExecutable } from '../../platform'
 import { randomUUID } from 'crypto'
 import { session } from 'electron'
 import type { CliTool, SettingsField, UsageInfo } from './types'
@@ -478,19 +479,7 @@ export const cursorAgentTool: CliTool = {
   installUrl: 'https://cursor.com/docs/cli/installation',
 
   async isInstalled(): Promise<boolean> {
-    const inPath = await new Promise<boolean>((resolve) => {
-      execFile('where', ['agent'], { timeout: 3000 }, (err) => resolve(!err))
-    })
-    if (inPath) return true
-
-    return new Promise<boolean>((resolve) => {
-      execFile(
-        'powershell.exe',
-        ['-NoProfile', '-Command', 'Get-Command agent -ErrorAction SilentlyContinue'],
-        { timeout: 5000 },
-        (err, stdout) => resolve(!err && stdout.trim().length > 0)
-      )
-    })
+    return findExecutable('agent')
   },
 
   newSessionCommand(): string {

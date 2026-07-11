@@ -7,6 +7,7 @@ import { getToolById, getDefaultTool } from './cliTools/registry'
 import { cliLog } from './cliTools/cliLogger'
 import { getHookServer } from '../hooks/hookServer'
 import type { HookBinding } from '../hooks/hookServer'
+import { defaultShell } from '../platform'
 import type { SavedSessionEntry } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 
@@ -564,7 +565,8 @@ export class PtyManager {
       this.send('terminal:tab-event', { tabId, event })
     )
 
-    const pty = nodePty.spawn('powershell.exe', [], {
+    const { file: shellFile, args: shellArgs } = defaultShell()
+    const pty = nodePty.spawn(shellFile, shellArgs, {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,

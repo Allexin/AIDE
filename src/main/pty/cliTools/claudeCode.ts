@@ -1,6 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, renameSync, watch, openSync, fstatSync, readSync, closeSync } from 'fs'
 import type { FSWatcher } from 'fs'
-import { execFile } from 'child_process'
 import { homedir } from 'os'
 import { join } from 'path'
 import { session } from 'electron'
@@ -10,6 +9,8 @@ import { scanSessions as scanDiskSessions, watchSessionsDir, getSessionsDir, rea
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
 import { createJsonlSmartCompactCapability, runProcess } from './smartCompactJsonl'
+import { findExecutable, listProcesses } from '../../platform'
+import { resolveOwnerPidFromSnapshot } from '../../platform/processTree'
 
 const LOG_CH = 'Claude Code Errors'
 const TOOL_NAME = 'Claude Code'
@@ -172,19 +173,7 @@ type is not user/assistant are session metadata and must never be selected.`,
   installUrl: 'https://claude.ai/download',
 
   async isInstalled(): Promise<boolean> {
-    const inPath = await new Promise<boolean>((resolve) => {
-      execFile('where', ['claude'], { timeout: 3000 }, (err) => resolve(!err))
-    })
-    if (inPath) return true
-    // where only finds executables; also check PowerShell functions/aliases
-    return new Promise<boolean>((resolve) => {
-      execFile(
-        'powershell.exe',
-        ['-NoProfile', '-Command', 'Get-Command claude -ErrorAction SilentlyContinue'],
-        { timeout: 5000 },
-        (err, stdout) => resolve(!err && stdout.trim().length > 0)
-      )
-    })
+    return findExecutable('claude')
   },
 
   settingsFields(): SettingsField[] {
@@ -531,64 +520,10 @@ type is not user/assistant are session metadata and must never be selected.`,
   async resolveOwnerPid(candidatePids: number[]): Promise<number | null> {
     if (candidatePids.length === 0) return null
     try {
-      const json = await new Promise<string>((resolve, reject) => {
-        execFile(
-          'powershell.exe',
-          [
-            '-NoProfile',
-            '-Command',
-            'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress'
-          ],
-          { timeout: 5000 },
-          (err, stdout) => {
-            if (err) reject(err)
-            else resolve(stdout.trim())
-          }
-        )
-      })
-      if (!json) return null
-      const parsed = JSON.parse(json)
-      const allProcs: Array<{ ProcessId: number; ParentProcessId: number; Name: string }> = Array.isArray(parsed)
-        ? parsed
-        : [parsed]
-
-      // Build parent map for ancestor chain traversal
-      const parentMap = new Map<number, number>()
-      for (const proc of allProcs) {
-        parentMap.set(proc.ProcessId, proc.ParentProcessId)
-      }
-
-      const pidSet = new Set(candidatePids)
-
-      // Walk up from a given PID to find the first ancestor that is one of our candidate PTY PIDs.
-      // This handles multi-hop chains: powershell → cmd.exe (npm shim) → claude.exe
-      const findAncestorInSet = (startPid: number): number | null => {
-        let pid = startPid
-        const visited = new Set<number>()
-        while (pid && pid !== 0 && !visited.has(pid)) {
-          if (pidSet.has(pid)) return pid
-          visited.add(pid)
-          pid = parentMap.get(pid) ?? 0
-        }
-        return null
-      }
-
-      // Collect all claude-related processes descended from one of our candidate PTYs
-      const matches: Array<{ pid: number; ancestor: number }> = []
-      for (const proc of allProcs) {
-        if (!(proc.Name ?? '').toLowerCase().startsWith('claude')) continue
-        const ancestor = findAncestorInSet(proc.ParentProcessId)
-        if (ancestor !== null) {
-          matches.push({ pid: proc.ProcessId, ancestor })
-        }
-      }
-
-      if (matches.length === 0) return null
-
-      // When multiple tabs are waiting: pick the most recently started claude (highest PID)
-      // so that each new session file is matched to the tab that just launched it.
-      matches.sort((a, b) => b.pid - a.pid)
-      return matches[0].ancestor
+      const procs = await listProcesses()
+      // Handles multi-hop chains: powershell → cmd.exe (npm shim) → claude.exe on
+      // Windows, or bash → node → claude on Linux.
+      return resolveOwnerPidFromSnapshot(procs, candidatePids, (name) => name.startsWith('claude'))
     } catch (e) {
       cliLog(LOG_CH, `[resolveOwnerPid] failed: ${e}`)
       return null

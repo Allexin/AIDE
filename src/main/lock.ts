@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
 import { join } from 'path'
-import { execSync } from 'child_process'
+import { processStartTimeMs } from './platform'
 
 interface LockData {
   pid: number
@@ -48,7 +48,7 @@ export function releaseLock(projectDir: string): void {
 function isLockValid(lock: LockData): boolean {
   if (!isProcessRunning(lock.pid)) return false
 
-  const startTime = getProcessStartTimeMs(lock.pid)
+  const startTime = processStartTimeMs(lock.pid)
   if (startTime === null) {
     // Can't determine start time — fall back to PID-only check (original behaviour)
     return true
@@ -63,18 +63,5 @@ function isProcessRunning(pid: number): boolean {
     return true
   } catch {
     return false
-  }
-}
-
-function getProcessStartTimeMs(pid: number): number | null {
-  try {
-    const ticks = execSync(
-      `powershell -NoProfile -NonInteractive -Command "[DateTimeOffset]::new((Get-Process -Id ${pid} -ErrorAction Stop).StartTime).ToUnixTimeMilliseconds()"`,
-      { timeout: 3000, encoding: 'utf8' }
-    ).trim()
-    const ms = parseInt(ticks, 10)
-    return isNaN(ms) ? null : ms
-  } catch {
-    return null
   }
 }
