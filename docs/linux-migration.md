@@ -1,6 +1,6 @@
 # Linux Migration Plan
 
-Status: **Stage 1 implemented** (from-source launch). Stages 2–3 pending.
+Status: **Stages 1–2 implemented** (from-source launch + tool parity + Linux build config). Stage 3 pending. On-Linux smoke test and artifact test still owed (no Linux box in the implementing session).
 Target: run AIDE on Linux (x64) in addition to Windows. macOS is out of scope for now, though the same platform-abstraction layer keeps the door open.
 
 AIDE is Electron + React + TypeScript. Electron, React, Monaco, xterm.js, and Zustand are all cross-platform, so the renderer needs almost no work. Every real blocker lives in the **main process**, where the app shells out to `powershell.exe`, queries WMI (`Get-CimInstance Win32_Process`), and reads Windows-specific paths. The strategy is to funnel all of that through a small **platform abstraction layer** so the rest of the code stays platform-agnostic.
@@ -119,7 +119,9 @@ Every tool's `isInstalled` shells out to `where <bin>` + `powershell.exe … Get
 
 ---
 
-## Stage 2 — Important features
+## Stage 2 — Important features ✅ implemented
+
+Landed: codex/cursorAgent/openCode `resolveOwnerPid` now route through `platform/processTree.ts` (`qwenCode` has no owner resolution, so nothing to port); `cursorAgent` config path gained macOS + Linux (XDG `~/.config/Cursor`) branches; `electron-builder.yml` gained a `linux` target (AppImage + deb, x64) plus `asarUnpack` for the native `.node` modules, and `package.json` gained `pack:linux`. Typechecks + builds on Windows; producing/launching the actual AppImage on Linux is still owed.
 
 Goal: the other CLI tools work at parity, and there is a real installable Linux artifact.
 
@@ -140,13 +142,10 @@ Audit per-tool home directories — most already use `homedir()` and XDG-friendl
 - `qwenCode.ts` → `~/.qwen` ✓
 - **`cursorAgent.ts:129-130`** → uses `process.env.APPDATA` with a Windows fallback (`AppData/Roaming/Cursor`). **Needs a Linux branch** (`~/.config/Cursor` or XDG). This is the only tool with a hard Windows path.
 
-### 2.3 Linux build target — **blocker for distribution**
-- **Now:** `package.json` `pack` script is `electron-builder --win …`; there is **no** `electron-builder` config file at all (defaults only).
-- **Change:** add a `build` section (or `electron-builder.yml`) with a `linux` target:
-  - `target: [AppImage, deb]` (AppImage = portable; deb = apt users)
-  - set `category`, `icon` (needs a PNG/icns set alongside the Windows `.ico`), `maintainer`
-  - add `"pack:linux": "electron-builder --linux --publish=never"`
-- Verify `asarUnpack` covers native `.node` binaries for `node-pty`/`better-sqlite3`.
+### 2.3 Linux build target — **blocker for distribution** ✅
+- **Was:** `electron-builder.yml` existed but had only a `win` (7z) target. (Earlier note said no config file existed — that was wrong.)
+- **Done:** added a `linux` target (`AppImage` + `deb`, x64) with `category: Development`, `icon: app_icon.png` (388×388 — electron-builder may warn; a 512² set is a Stage 3 nicety), `maintainer`; added `asarUnpack` for `**/*.node` + `node-pty`/`better-sqlite3`; added `pack:linux` script.
+- **Owed:** run `npm run pack:linux` on Linux and confirm the AppImage launches with a working terminal + sqlite.
 
 ### 2.4 CLI launch ergonomics
 - Confirm `aide .` / cwd-with-`.aide/` detection (Stage 1 startup options) resolves paths correctly with Linux separators. Path handling uses `path.join`, so this is mostly verification, but test symlinked and relative project paths.

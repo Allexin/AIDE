@@ -10,7 +10,8 @@
 import { execFile } from 'child_process'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
-import { findExecutable } from '../../platform'
+import { findExecutable, listProcesses } from '../../platform'
+import { resolveOwnerPidFromSnapshot } from '../../platform/processTree'
 import { dirname, join } from 'path'
 import type { CliTool, CliSession, SettingsField, HistoryEntry, UsageInfo } from './types'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
@@ -396,55 +397,8 @@ and must not be selected.`,
   async resolveOwnerPid(candidatePids: number[]): Promise<number | null> {
     if (candidatePids.length === 0) return null
     try {
-      const json = await new Promise<string>((resolve, reject) => {
-        execFile(
-          'powershell.exe',
-          [
-            '-NoProfile',
-            '-Command',
-            'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress'
-          ],
-          { timeout: 5000 },
-          (err, stdout) => {
-            if (err) reject(err)
-            else resolve(stdout.trim())
-          }
-        )
-      })
-      if (!json) return null
-
-      const parsed = JSON.parse(json)
-      const allProcs: Array<{ ProcessId: number; ParentProcessId: number; Name: string }> = Array.isArray(parsed)
-        ? parsed
-        : [parsed]
-
-      const parentMap = new Map<number, number>()
-      for (const proc of allProcs) {
-        parentMap.set(proc.ProcessId, proc.ParentProcessId)
-      }
-
-      const candidateSet = new Set(candidatePids)
-      const findAncestorInSet = (startPid: number): number | null => {
-        let pid = startPid
-        const visited = new Set<number>()
-        while (pid && !visited.has(pid)) {
-          if (candidateSet.has(pid)) return pid
-          visited.add(pid)
-          pid = parentMap.get(pid) ?? 0
-        }
-        return null
-      }
-
-      const matches: Array<{ pid: number; ancestor: number }> = []
-      for (const proc of allProcs) {
-        if (!(proc.Name ?? '').toLowerCase().startsWith('codex')) continue
-        const ancestor = findAncestorInSet(proc.ParentProcessId)
-        if (ancestor !== null) matches.push({ pid: proc.ProcessId, ancestor })
-      }
-
-      if (matches.length === 0) return null
-      matches.sort((a, b) => b.pid - a.pid)
-      return matches[0].ancestor
+      const procs = await listProcesses()
+      return resolveOwnerPidFromSnapshot(procs, candidatePids, (name) => name.startsWith('codex'))
     } catch (e) {
       cliLog(LOG_CH, `[resolveOwnerPid] failed: ${e}`)
       return null

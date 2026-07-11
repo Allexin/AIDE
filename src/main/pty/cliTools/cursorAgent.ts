@@ -1,8 +1,8 @@
-import { execFile } from 'child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
-import { findExecutable } from '../../platform'
+import { findExecutable, isMac, isWindows, listProcesses } from '../../platform'
+import { resolveOwnerPidFromSnapshot } from '../../platform/processTree'
 import { randomUUID } from 'crypto'
 import { session } from 'electron'
 import type { CliTool, SettingsField, UsageInfo } from './types'
@@ -127,8 +127,16 @@ function resolveProxyAddress(): string | null {
 }
 
 function getCursorRootDir(): string {
-  const appData = process.env.APPDATA
-  return appData ? join(appData, 'Cursor') : join(homedir(), 'AppData', 'Roaming', 'Cursor')
+  if (isWindows) {
+    const appData = process.env.APPDATA
+    return appData ? join(appData, 'Cursor') : join(homedir(), 'AppData', 'Roaming', 'Cursor')
+  }
+  if (isMac) {
+    return join(homedir(), 'Library', 'Application Support', 'Cursor')
+  }
+  // Linux: follow XDG, defaulting to ~/.config/Cursor
+  const xdg = process.env.XDG_CONFIG_HOME
+  return join(xdg && xdg.trim() ? xdg : join(homedir(), '.config'), 'Cursor')
 }
 
 function getCursorAuthPath(): string {
@@ -546,54 +554,16 @@ export const cursorAgentTool: CliTool = {
     }
     cliLog(LOG_CH, `[resolveOwnerPid] candidates=[${candidatePids.join(', ')}]`)
     try {
-      const json = await new Promise<string>((resolve, reject) => {
-        execFile(
-          'powershell.exe',
-          [
-            '-NoProfile',
-            '-Command',
-            'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress'
-          ],
-          { timeout: 5000 },
-          (err, stdout) => (err ? reject(err) : resolve(stdout.trim()))
-        )
-      })
-      if (!json) {
-        cliLog(LOG_CH, '[resolveOwnerPid] no process snapshot data')
-        return null
-      }
-
-      const parsed = JSON.parse(json)
-      const allProcs: Array<{ ProcessId: number; ParentProcessId: number; Name: string }> =
-        Array.isArray(parsed) ? parsed : [parsed]
-      cliLog(LOG_CH, `[resolveOwnerPid] process snapshot size=${allProcs.length}`)
-
-      const parentMap = new Map<number, number>()
-      for (const proc of allProcs) parentMap.set(proc.ProcessId, proc.ParentProcessId)
-      const pidSet = new Set(candidatePids)
-
-      const findAncestor = (startPid: number): number | null => {
-        let pid = startPid
-        const visited = new Set<number>()
-        while (pid && pid !== 0 && !visited.has(pid)) {
-          if (pidSet.has(pid)) return pid
-          visited.add(pid)
-          pid = parentMap.get(pid) ?? 0
-        }
-        return null
-      }
-
-      const matches: Array<{ pid: number; ancestor: number }> = []
-      for (const proc of allProcs) {
-        const name = (proc.Name ?? '').toLowerCase()
-        // Cursor CLI process names observed on Windows are expected to include
-        // "agent" (e.g. agent.exe), sometimes wrapped by cursor launchers.
-        if (!name.startsWith('agent') && !name.includes('cursor')) continue
-        const ancestor = findAncestor(proc.ParentProcessId)
-        if (ancestor !== null) matches.push({ pid: proc.ProcessId, ancestor })
-      }
-
-      if (matches.length === 0) {
+      const procs = await listProcesses()
+      cliLog(LOG_CH, `[resolveOwnerPid] process snapshot size=${procs.length}`)
+      // Cursor CLI process names include "agent" (agent.exe / cursor-agent),
+      // sometimes wrapped by cursor launchers.
+      const owner = resolveOwnerPidFromSnapshot(
+        procs,
+        candidatePids,
+        (name) => name.startsWith('agent') || name.includes('cursor')
+      )
+      if (owner === null) {
         warnOnce(
           'owner-pid-no-match',
           'Could not map new Cursor Agent session to a PTY tab (no matching descendants). If Cursor changed process naming/launch chain, mapping rules may need updates.'
@@ -601,15 +571,8 @@ export const cursorAgentTool: CliTool = {
         cliLog(LOG_CH, '[resolveOwnerPid] no matching Cursor/Agent descendants for candidate PTYs')
         return null
       }
-
-      matches.sort((a, b) => b.pid - a.pid)
-      const chosen = matches[0]
-      const sample = matches
-        .slice(0, 5)
-        .map((m) => `${m.pid}->${m.ancestor}`)
-        .join(', ')
-      cliLog(LOG_CH, `[resolveOwnerPid] matches=${matches.length} sample=[${sample}] chosen=${chosen.pid}->${chosen.ancestor}`)
-      return chosen.ancestor
+      cliLog(LOG_CH, `[resolveOwnerPid] chosen owner=${owner}`)
+      return owner
     } catch (e) {
       warnOnce(
         'owner-pid-failed',

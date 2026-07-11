@@ -9,9 +9,9 @@
  */
 
 import { existsSync, readFileSync } from 'fs'
-import { execFile } from 'child_process'
 import { join } from 'path'
-import { findExecutable } from '../../platform'
+import { findExecutable, listProcesses } from '../../platform'
+import { resolveOwnerPidFromSnapshot } from '../../platform/processTree'
 import type { CliTool, CliSession, UsageInfo, SettingsField, HistoryEntry } from './types'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
@@ -217,49 +217,8 @@ export const openCodeTool: CliTool = {
   async resolveOwnerPid(candidatePids: number[]): Promise<number | null> {
     if (candidatePids.length === 0) return null
     try {
-      const json = await new Promise<string>((resolve, reject) => {
-        execFile(
-          'powershell.exe',
-          [
-            '-NoProfile',
-            '-Command',
-            'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress'
-          ],
-          { timeout: 5000 },
-          (err, stdout) => (err ? reject(err) : resolve(stdout.trim()))
-        )
-      })
-      if (!json) return null
-
-      const parsed = JSON.parse(json)
-      const allProcs: Array<{ ProcessId: number; ParentProcessId: number; Name: string }> =
-        Array.isArray(parsed) ? parsed : [parsed]
-
-      const parentMap = new Map<number, number>()
-      for (const proc of allProcs) parentMap.set(proc.ProcessId, proc.ParentProcessId)
-      const pidSet = new Set(candidatePids)
-
-      const findAncestor = (startPid: number): number | null => {
-        let pid = startPid
-        const visited = new Set<number>()
-        while (pid && pid !== 0 && !visited.has(pid)) {
-          if (pidSet.has(pid)) return pid
-          visited.add(pid)
-          pid = parentMap.get(pid) ?? 0
-        }
-        return null
-      }
-
-      const matches: Array<{ pid: number; ancestor: number }> = []
-      for (const proc of allProcs) {
-        if (!(proc.Name ?? '').toLowerCase().startsWith('opencode')) continue
-        const ancestor = findAncestor(proc.ParentProcessId)
-        if (ancestor !== null) matches.push({ pid: proc.ProcessId, ancestor })
-      }
-
-      if (matches.length === 0) return null
-      matches.sort((a, b) => b.pid - a.pid)
-      return matches[0].ancestor
+      const procs = await listProcesses()
+      return resolveOwnerPidFromSnapshot(procs, candidatePids, (name) => name.startsWith('opencode'))
     } catch (e) {
       cliLog(LOG_CH, `[resolveOwnerPid] failed: ${e}`)
       return null

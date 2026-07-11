@@ -4,12 +4,32 @@ productName: AIDE
 directories:
   output: release
 
+# Native modules must be unpacked from the asar so their .node binaries can be
+# dlopen'd at runtime (applies to every target, incl. Linux AppImage/deb).
+asarUnpack:
+  - "**/*.node"
+  - "node_modules/node-pty/**"
+  - "node_modules/better-sqlite3/**"
+
 win:
   icon: app_icon.ico
   artifactName: AIDE-${version}-portable.7z
   signAndEditExecutable: false
   target:
     - target: 7z
+      arch:
+        - x64
+
+linux:
+  icon: app_icon.png
+  category: Development
+  maintainer: Alexander Basov <alexander@basov.link>
+  artifactName: AIDE-${version}-${arch}.${ext}
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
       arch:
         - x64
 
