@@ -9,6 +9,15 @@ import type { CliTool, SettingsField, UsageInfo } from './types'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
 import {
+  getActiveAccount,
+  getSubscriptionUsageCache,
+  listAccounts,
+  releaseSubscriptionUsageRefresh,
+  setSubscriptionUsageCache,
+  tryAcquireSubscriptionUsageRefresh,
+  updateAccount as updateStoredAccount
+} from '../../config/accountStorage'
+import {
   getCursorSessionFilePath,
   parseCursorThinkingBlocks,
   readCursorSessionHistory,
@@ -24,7 +33,7 @@ const LOG_CH = 'Cursor Agent CLI'
 const APP_USER_KEY = 'src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser'
 const DEFAULT_BACKEND_URL = 'https://api2.cursor.sh'
 const USAGE_CACHE_PATH = join(homedir(), '.aide', 'cursor-agent-usage.json')
-const USAGE_CACHE_MAX_AGE_MS = 5 * 60 * 1000
+const DEFAULT_USAGE_CACHE_MAX_AGE_MS = 20 * 60_000
 const USAGE_BACKOFF_BASE_MS = 60_000
 const USAGE_BACKOFF_MAX_MS = 30 * 60 * 1000
 const INACTIVITY_THRESHOLD = 5 // seconds of silence -> completeAndWait (same behavior as Qwen/OpenCode)
@@ -466,18 +475,176 @@ async function refreshCursorAccessToken(bundle: CursorAccountBundle): Promise<Cu
       })
     })
     if (!res.ok) return bundle
-    const payload = await res.json() as { access_token?: string; refresh_token?: string }
-    if (!payload.access_token) return bundle
+    const payload = await res.json() as { access_token?: string; id_token?: string; refresh_token?: string; shouldLogout?: boolean }
+    const nextAccessToken = payload.access_token || payload.id_token
+    if (!nextAccessToken || payload.shouldLogout === true) return bundle
 
     const refreshed: CursorAccountBundle = {
       ...bundle,
-      accessToken: payload.access_token,
+      accessToken: nextAccessToken,
       refreshToken: payload.refresh_token ?? bundle.refreshToken
     }
     writeAccountBundle(refreshed)
     return refreshed
   } catch {
     return bundle
+  }
+}
+
+function cursorUsageFromPayloads(
+  payloads: { usage: Record<string, unknown>; plan: Record<string, unknown> },
+  bundle: CursorAccountBundle,
+  fetchedAt: number
+): UsageInfo | null {
+  const usage = payloads.usage
+  const plan = payloads.plan
+  const planUsage = (
+    (usage.plan_usage as Record<string, unknown> | undefined) ??
+    (usage.planUsage as Record<string, unknown> | undefined) ??
+    {}
+  )
+  const planInfo = (
+    (plan.plan_info as Record<string, unknown> | undefined) ??
+    (plan.planInfo as Record<string, unknown> | undefined) ??
+    {}
+  )
+
+  const totalSpend = pickNumberField(planUsage, ['total_spend', 'totalSpend']) ?? 0
+  const includedSpend = pickNumberField(planUsage, ['included_spend', 'includedSpend']) ?? 0
+  const bonusSpend = pickNumberField(planUsage, ['bonus_spend', 'bonusSpend']) ?? 0
+  const apiSpend = pickNumberField(planUsage, ['api_spend', 'apiSpend']) ?? 0
+  const autoSpend = pickNumberField(planUsage, ['auto_spend', 'autoSpend']) ?? 0
+  const limitFromUsage = pickNumberField(planUsage, ['limit']) ?? 0
+  const apiLimit = pickNumberField(planUsage, ['api_limit', 'apiLimit']) ?? 0
+  const autoLimit = pickNumberField(planUsage, ['auto_limit', 'autoLimit']) ?? 0
+  const includedAmountFromPlan = pickNumberField(planInfo, ['included_amount_cents', 'includedAmountCents']) ?? 0
+
+  let usedCents = totalSpend
+  if (usedCents <= 0 && (apiSpend > 0 || autoSpend > 0)) usedCents = apiSpend + autoSpend
+  if (usedCents <= 0 && includedSpend > 0) usedCents = includedSpend
+
+  let limitCents = limitFromUsage
+  if (limitCents <= 0 && includedAmountFromPlan > 0) limitCents = includedAmountFromPlan
+  if (limitCents <= 0 && (apiLimit > 0 || autoLimit > 0)) limitCents = apiLimit + autoLimit
+
+  const remainingRaw = pickNumberField(planUsage, ['remaining'])
+  const remainingCents = remainingRaw != null
+    ? remainingRaw
+    : (limitCents > 0 ? Math.max(0, limitCents - usedCents) : 0)
+  const totalPercent = normalizePercent(pickField(planUsage, ['total_percent_used', 'totalPercentUsed']))
+  const apiPercent = normalizePercent(pickField(planUsage, ['api_percent_used', 'apiPercentUsed']))
+  const autoPercent = normalizePercent(pickField(planUsage, ['auto_percent_used', 'autoPercentUsed']))
+  const computedPercent = limitCents > 0 ? Math.round((usedCents / limitCents) * 100) : null
+  const primaryPercent = apiPercent ?? totalPercent ?? computedPercent
+  const secondaryPercent = totalPercent ?? computedPercent
+  if (primaryPercent === null && secondaryPercent === null) return null
+
+  const maximum = Math.max(primaryPercent ?? 0, secondaryPercent ?? 0)
+  const level: UsageInfo['level'] = maximum > 90 ? 'critical' : maximum < 50 ? 'normal' : 'warn'
+  const planName =
+    pickStringField(planInfo, ['plan_name', 'planName']) ??
+    bundle.membershipType ??
+    'unknown'
+  const displayMessage = pickStringField(usage, ['display_message', 'displayMessage']) ?? ''
+  const hasLimit = limitCents > 0 || totalPercent !== null || apiPercent !== null || autoPercent !== null
+  const billingCycleEndMs =
+    parseEpochMs(pickField(usage, ['billing_cycle_end', 'billingCycleEnd'])) ??
+    parseEpochMs(pickField(planInfo, ['billing_cycle_end', 'billingCycleEnd']))
+  const resetAt = billingCycleEndMs != null
+    ? new Date(billingCycleEndMs).toLocaleString(undefined, { timeZoneName: 'short' })
+    : null
+  const displayPercent = (value: number | null): string => value === null ? 'n/a' : `${value}%`
+
+  cliLog(
+    LOG_CH,
+    `[usage] parsed metrics plan=${planName} total=${totalSpend} included=${includedSpend} api=${apiSpend} auto=${autoSpend} limit=${limitCents} pct(primary/total/auto)=${primaryPercent ?? 'n/a'}/${secondaryPercent ?? 'n/a'}/${autoPercent ?? 'n/a'} keys(planUsage)=[${Object.keys(planUsage).join(',')}]`
+  )
+
+  return {
+    summary: `${displayPercent(primaryPercent)} / ${displayPercent(secondaryPercent)}`,
+    tooltip: [
+      `Plan: ${planName}`,
+      `API usage: ${displayPercent(apiPercent ?? primaryPercent)}`,
+      `Total usage: ${displayPercent(secondaryPercent)}`,
+      `Used: ${formatUsdFromCents(usedCents)}`,
+      includedAmountFromPlan > 0 ? `Included: ${formatUsdFromCents(includedSpend)} / ${formatUsdFromCents(includedAmountFromPlan)}` : null,
+      apiSpend > 0 || apiPercent !== null ? `API: ${formatUsdFromCents(apiSpend)}${apiPercent !== null ? ` (${apiPercent}%)` : ''}` : null,
+      autoSpend > 0 || autoPercent !== null ? `Auto: ${formatUsdFromCents(autoSpend)}${autoPercent !== null ? ` (${autoPercent}%)` : ''}` : null,
+      bonusSpend > 0 ? `Bonus: ${formatUsdFromCents(bonusSpend)}` : null,
+      `Remaining: ${formatUsdFromCents(remainingCents)}`,
+      hasLimit ? `Limit: ${formatUsdFromCents(limitCents)}` : 'Limit: not set',
+      resetAt ? `Resets: ${resetAt}` : null,
+      displayMessage ? `Message: ${displayMessage}` : null
+    ].filter((value): value is string => !!value).join('\n'),
+    level,
+    fetchedAt,
+    hasLimit
+  }
+}
+
+function saveRefreshedCursorAccount(accountId: string, bundle: CursorAccountBundle): void {
+  const stored = listAccounts(TOOL_ID).find((account) => account.id === accountId)
+  if (!stored) return
+  const credentials = { ...stored.credentials, ...bundle }
+  const identifier = bundle.email || stored.identifier
+  updateStoredAccount(TOOL_ID, accountId, identifier, credentials, stored.revision)
+}
+
+async function refreshCursorUsage(
+  bundle: CursorAccountBundle,
+  currentAccount: string | null,
+  activeAccountId: string | null,
+  staleShared: ReturnType<typeof getSubscriptionUsageCache>
+): Promise<UsageInfo | null> {
+  let leaseOwner: string | null = null
+  if (activeAccountId) {
+    leaseOwner = randomUUID()
+    if (!tryAcquireSubscriptionUsageRefresh(TOOL_ID, activeAccountId, leaseOwner, Date.now(), 60_000)) {
+      return staleShared ? cursorUsageFromPayloads(
+        staleShared.payload as { usage: Record<string, unknown>; plan: Record<string, unknown> },
+        bundle,
+        staleShared.fetchedAtMs
+      ) : null
+    }
+  }
+
+  try {
+    let accessToken = bundle.accessToken
+    if (!accessToken) return null
+    const backendUrl = bundle.backendUrl || DEFAULT_BACKEND_URL
+    let payloads = await fetchCursorUsagePayloads(accessToken, backendUrl)
+    if (!payloads) {
+      const refreshed = await refreshCursorAccessToken(bundle)
+      if (refreshed.accessToken && refreshed.accessToken !== accessToken) {
+        accessToken = refreshed.accessToken
+        if (activeAccountId) saveRefreshedCursorAccount(activeAccountId, refreshed)
+        payloads = await fetchCursorUsagePayloads(accessToken, backendUrl)
+      }
+    }
+    if (!payloads) return staleShared ? cursorUsageFromPayloads(
+      staleShared.payload as { usage: Record<string, unknown>; plan: Record<string, unknown> },
+      bundle,
+      staleShared.fetchedAtMs
+    ) : null
+
+    const fetchedAt = Date.now()
+    if (activeAccountId) setSubscriptionUsageCache(TOOL_ID, activeAccountId, payloads, fetchedAt, 'aide')
+    const result = cursorUsageFromPayloads(payloads, bundle, fetchedAt)
+    if (result) {
+      writeUsageCache({
+        account: currentAccount,
+        summary: result.summary,
+        tooltip: result.tooltip,
+        level: result.level,
+        hasLimit: result.hasLimit !== false,
+        fetchedAt: result.fetchedAt
+      })
+    }
+    return result
+  } finally {
+    if (activeAccountId && leaseOwner) {
+      releaseSubscriptionUsageRefresh(TOOL_ID, activeAccountId, leaseOwner)
+    }
   }
 }
 
@@ -692,12 +859,28 @@ export const cursorAgentTool: CliTool = {
     writeAccountBundle(next)
   },
 
-  async getUsageInfo(): Promise<UsageInfo | null> {
+  async getUsageInfo(cacheMaxAgeMs = DEFAULT_USAGE_CACHE_MAX_AGE_MS): Promise<UsageInfo | null> {
     const bundle = loadCurrentAccountBundle()
     const currentAccount = bundle.email ?? null
+    const activeAccountId = getActiveAccount(TOOL_ID)
+    const sharedCache = activeAccountId
+      ? getSubscriptionUsageCache(TOOL_ID, activeAccountId)
+      : null
+    if (sharedCache && Date.now() - sharedCache.fetchedAtMs < cacheMaxAgeMs) {
+      const shared = cursorUsageFromPayloads(
+        sharedCache.payload as { usage: Record<string, unknown>; plan: Record<string, unknown> },
+        bundle,
+        sharedCache.fetchedAtMs
+      )
+      if (shared) {
+        if (usageSuppressed) usageSuppressed = false
+        return shared
+      }
+      cliLog(LOG_CH, '[usage] shared SQLite cache has no usable Cursor percentages')
+    }
 
     const cached = readUsageCache(currentAccount)
-    if (cached && Date.now() - cached.fetchedAt < USAGE_CACHE_MAX_AGE_MS) {
+    if (cached && Date.now() - cached.fetchedAt < cacheMaxAgeMs) {
       if (usageSuppressed) usageSuppressed = false
       return usageFromCache(cached)
     }
@@ -716,125 +899,7 @@ export const cursorAgentTool: CliTool = {
       return cached ? usageFromCache(cached) : null
     }
 
-    let accessToken = bundle.accessToken
-    if (!accessToken) return null
-    const backendUrl = bundle.backendUrl || DEFAULT_BACKEND_URL
-
-    let payloads = await fetchCursorUsagePayloads(accessToken, backendUrl)
-    if (!payloads) {
-      const refreshed = await refreshCursorAccessToken(bundle)
-      if (refreshed.accessToken && refreshed.accessToken !== accessToken) {
-        accessToken = refreshed.accessToken
-        payloads = await fetchCursorUsagePayloads(accessToken, backendUrl)
-      }
-    }
-    if (!payloads) return cached ? usageFromCache(cached) : null
-
-    const usage = payloads.usage
-    const plan = payloads.plan
-    const planUsage = (
-      (usage.plan_usage as Record<string, unknown> | undefined) ??
-      (usage.planUsage as Record<string, unknown> | undefined) ??
-      {}
-    )
-    const planInfo = (
-      (plan.plan_info as Record<string, unknown> | undefined) ??
-      (plan.planInfo as Record<string, unknown> | undefined) ??
-      {}
-    )
-
-    // On some Pro accounts, total_spend/limit represent on-demand values only.
-    // Prefer subscription-related usage fields with robust fallbacks.
-    const totalSpend = pickNumberField(planUsage, ['total_spend', 'totalSpend']) ?? 0
-    const includedSpend = pickNumberField(planUsage, ['included_spend', 'includedSpend']) ?? 0
-    const bonusSpend = pickNumberField(planUsage, ['bonus_spend', 'bonusSpend']) ?? 0
-    const apiSpend = pickNumberField(planUsage, ['api_spend', 'apiSpend']) ?? 0
-    const autoSpend = pickNumberField(planUsage, ['auto_spend', 'autoSpend']) ?? 0
-
-    const limitFromUsage = pickNumberField(planUsage, ['limit']) ?? 0
-    const apiLimit = pickNumberField(planUsage, ['api_limit', 'apiLimit']) ?? 0
-    const autoLimit = pickNumberField(planUsage, ['auto_limit', 'autoLimit']) ?? 0
-    const includedAmountFromPlan = pickNumberField(planInfo, ['included_amount_cents', 'includedAmountCents']) ?? 0
-
-    let usedCents = totalSpend
-    if (usedCents <= 0 && (apiSpend > 0 || autoSpend > 0)) {
-      usedCents = apiSpend + autoSpend
-    }
-    if (usedCents <= 0 && includedSpend > 0) {
-      usedCents = includedSpend
-    }
-
-    let limitCents = limitFromUsage
-    if (limitCents <= 0 && includedAmountFromPlan > 0) {
-      limitCents = includedAmountFromPlan
-    }
-    if (limitCents <= 0 && (apiLimit > 0 || autoLimit > 0)) {
-      limitCents = apiLimit + autoLimit
-    }
-
-    const remainingRaw = pickNumberField(planUsage, ['remaining'])
-    const remainingCents = remainingRaw != null
-      ? remainingRaw
-      : (limitCents > 0 ? Math.max(0, limitCents - usedCents) : 0)
-
-    const totalPercent = normalizePercent(pickField(planUsage, ['total_percent_used', 'totalPercentUsed']))
-    const apiPercent = normalizePercent(pickField(planUsage, ['api_percent_used', 'apiPercentUsed']))
-    const autoPercent = normalizePercent(pickField(planUsage, ['auto_percent_used', 'autoPercentUsed']))
-    const computedPercent = limitCents > 0 ? Math.round((usedCents / limitCents) * 100) : 0
-    const primaryPercent = apiPercent ?? totalPercent ?? computedPercent
-    const secondaryPercent = totalPercent ?? computedPercent
-    const level: UsageInfo['level'] =
-      primaryPercent >= 90 ? 'critical' : primaryPercent >= 70 ? 'warn' : 'normal'
-    const planName =
-      pickStringField(planInfo, ['plan_name', 'planName']) ??
-      bundle.membershipType ??
-      'unknown'
-    const displayMessage = pickStringField(usage, ['display_message', 'displayMessage']) ?? ''
-    const hasLimit = limitCents > 0 || totalPercent !== null || apiPercent !== null || autoPercent !== null
-    const billingCycleEndMs =
-      parseEpochMs(pickField(usage, ['billing_cycle_end', 'billingCycleEnd'])) ??
-      parseEpochMs(pickField(planInfo, ['billing_cycle_end', 'billingCycleEnd']))
-    const resetAt = billingCycleEndMs != null
-      ? new Date(billingCycleEndMs).toLocaleString(undefined, { timeZoneName: 'short' })
-      : null
-
-    cliLog(
-      LOG_CH,
-      `[usage] parsed metrics plan=${planName} total=${totalSpend} included=${includedSpend} api=${apiSpend} auto=${autoSpend} limit=${limitCents} pct(primary/total/auto)=${primaryPercent}/${secondaryPercent}/${autoPercent ?? 'n/a'} keys(planUsage)=[${Object.keys(planUsage).join(',')}]`
-    )
-
-    const result: UsageInfo = {
-      summary: hasLimit
-        ? `${primaryPercent}% / ${secondaryPercent}% / ${formatUsdFromCents(usedCents)}`
-        : formatUsdFromCents(usedCents),
-      tooltip: [
-        `Plan: ${planName}`,
-        `API usage: ${apiPercent ?? primaryPercent}%`,
-        `Total usage: ${secondaryPercent}%`,
-        `Used: ${formatUsdFromCents(usedCents)}`,
-        includedAmountFromPlan > 0 ? `Included: ${formatUsdFromCents(includedSpend)} / ${formatUsdFromCents(includedAmountFromPlan)}` : null,
-        apiSpend > 0 || apiPercent !== null ? `API: ${formatUsdFromCents(apiSpend)}${apiPercent !== null ? ` (${apiPercent}%)` : ''}` : null,
-        autoSpend > 0 || autoPercent !== null ? `Auto: ${formatUsdFromCents(autoSpend)}${autoPercent !== null ? ` (${autoPercent}%)` : ''}` : null,
-        bonusSpend > 0 ? `Bonus: ${formatUsdFromCents(bonusSpend)}` : null,
-        `Remaining: ${formatUsdFromCents(remainingCents)}`,
-        hasLimit ? `Limit: ${formatUsdFromCents(limitCents)}` : 'Limit: not set',
-        resetAt ? `Resets: ${resetAt}` : null,
-        displayMessage ? `Message: ${displayMessage}` : null
-      ].filter((x): x is string => !!x).join('\n'),
-      level,
-      fetchedAt: Date.now(),
-      hasLimit
-    }
-
-    writeUsageCache({
-      account: currentAccount,
-      summary: result.summary,
-      tooltip: result.tooltip,
-      level: result.level,
-      hasLimit: result.hasLimit !== false,
-      fetchedAt: result.fetchedAt
-    })
-    return result
+    return await refreshCursorUsage(bundle, currentAccount, activeAccountId, sharedCache)
   },
 
   parseThinkingBlocks(line: string): string[] {

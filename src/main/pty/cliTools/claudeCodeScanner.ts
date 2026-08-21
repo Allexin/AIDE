@@ -1,7 +1,8 @@
 import { existsSync, readdirSync, watch, FSWatcher, openSync, readSync, fstatSync, closeSync } from 'fs'
-import { stat as fsStat, readFile } from 'fs/promises'
+import { stat as fsStat, readFile, open } from 'fs/promises'
 import { join } from 'path'
 import { homedir } from 'os'
+import { getCachedMeta, setCachedMeta, pruneCache } from './sessionMetaCache'
 import type { HistoryBlock, HistoryEntry } from './types'
 
 export interface DiskSession {
@@ -24,6 +25,46 @@ export function encodeProjectPath(projectPath: string): string {
 
 export function getSessionsDir(projectPath: string): string {
   return join(homedir(), '.claude', 'projects', encodeProjectPath(projectPath))
+}
+
+/** Bytes read from each end of a transcript when listing sessions. */
+const EDGE_CHUNK_BYTES = 64 * 1024
+
+/** Namespace for this tool's entries in the shared on-disk metadata cache. */
+const CACHE_NS = 'claude-code'
+
+/**
+ * Read a bounded window from both ends of a transcript.
+ *
+ * Session listings only ever look at the beginning and the end of a
+ * conversation, so a file of any size costs at most two fixed-size reads. For
+ * files smaller than one window the head is the whole file and the tail is
+ * empty.
+ */
+async function readHeadTail(
+  filePath: string,
+  size: number
+): Promise<{ headLines: string[]; tailLines: string[] }> {
+  const handle = await open(filePath, 'r')
+  try {
+    const headLength = Math.min(size, EDGE_CHUNK_BYTES)
+    const headBuf = Buffer.alloc(headLength)
+    await handle.read(headBuf, 0, headLength, 0)
+    const headLines = headBuf.toString('utf-8').split('\n').filter((l) => l.trim())
+
+    if (size <= EDGE_CHUNK_BYTES) return { headLines, tailLines: [] }
+
+    const tailStart = Math.max(headLength, size - EDGE_CHUNK_BYTES)
+    const tailLength = size - tailStart
+    const tailBuf = Buffer.alloc(tailLength)
+    await handle.read(tailBuf, 0, tailLength, tailStart)
+    const tailLines = tailBuf.toString('utf-8').split('\n').filter((l) => l.trim())
+    // The window almost certainly starts mid-record.
+    tailLines.shift()
+    return { headLines, tailLines }
+  } finally {
+    await handle.close()
+  }
 }
 
 /** Extract the user-defined title from parsed JSONL lines (type:"custom-title" entry). */
@@ -103,6 +144,7 @@ export async function scanSessions(projectPath: string): Promise<DiskSession[]> 
     return []
   }
 
+  const seenPaths = new Set<string>()
   const sessions = await Promise.all(
     jsonlFiles.map(async (filename) => {
       const sessionId = filename.slice(0, -6)
@@ -112,20 +154,41 @@ export async function scanSessions(projectPath: string): Promise<DiskSession[]> 
       let firstMessage = ''
       let title = ''
       try {
-        const [fileStat, content] = await Promise.all([
-          fsStat(fullPath),
-          readFile(fullPath, 'utf-8')
-        ])
+        const fileStat = await fsStat(fullPath)
         mtime = fileStat.mtimeMs
-        const lines = content.split('\n').filter((l) => l.trim())
-        summary = extractSummary(lines)
-        firstMessage = extractFirstUserMessage(lines)
-        title = extractLastUserMessage(lines)
+        seenPaths.add(fullPath)
+
+        // A transcript that has not changed since it was last listed cannot
+        // have a different preview, so a finished session is answered from the
+        // cache forever and costs only the stat above. An active one changes
+        // size on every turn and falls through to the bounded read below.
+        const cached = getCachedMeta(CACHE_NS, fullPath, fileStat.mtimeMs, fileStat.size)
+        if (cached) {
+          summary = cached.summary ?? ''
+          firstMessage = cached.firstMessage ?? ''
+          title = cached.title ?? ''
+        } else {
+          // Only the two ends of the transcript are needed: the first user
+          // message is near the start, the title and the most recent user
+          // message near the end. Reading the middle put entire conversation
+          // histories on the main-process heap for nothing.
+          const { headLines, tailLines } = await readHeadTail(fullPath, fileStat.size)
+          summary = extractSummary(tailLines) || extractSummary(headLines)
+          firstMessage = extractFirstUserMessage(headLines)
+          title = extractLastUserMessage(tailLines) || extractLastUserMessage(headLines)
+          setCachedMeta(CACHE_NS, fullPath, fileStat.mtimeMs, fileStat.size, {
+            summary,
+            firstMessage,
+            title
+          })
+        }
       } catch {}
       return { sessionId, summary, firstMessage, title, mtime }
     })
   )
 
+  // Scoped to this project's directory — other projects were not enumerated here.
+  pruneCache(CACHE_NS, seenPaths, sessionsDir)
   sessions.sort((a, b) => b.mtime - a.mtime)
   return sessions
 }

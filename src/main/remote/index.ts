@@ -18,6 +18,7 @@ import { readToolbarButtons as readProjectToolbarButtons, type ToolbarButton, is
 import { spawnButtonProcess, killButtonProcess, addProcessObserver, addOutputObserver, getRunningButtonIds } from '../toolbar/processManager'
 import { addLogObserver } from '../pty/cliTools/cliLogger'
 import { addFsChangeObserver, addGitStatusObserver } from '../filetree/watcher'
+import { logEvent } from '../diagnostics'
 import { runGitStatus } from '../filetree/gitStatus'
 
 const AGGREGATOR_PORT = 3847
@@ -130,6 +131,14 @@ export class RemoteServer {
     this.ownServer = http.createServer((req, res) => this.handleTerminalHttp(req, res))
     this.ownWss = new WebSocketServer({ server: this.ownServer })
     this.ownWss.on('connection', (ws, req) => this.handleConnection(ws, req))
+    // Without these, an `'error'` event has no listener and is thrown instead —
+    // in the main process that takes down every window at once.
+    this.ownServer.on('error', (err: NodeJS.ErrnoException) => {
+      logEvent('remote-own-server-error', { code: err?.code ?? null, message: err?.message ?? String(err) }, 'warn')
+    })
+    this.ownWss.on('error', (err: Error) => {
+      logEvent('remote-own-wss-error', { message: err?.message ?? String(err) }, 'warn')
+    })
 
     this.ownServer.listen(0, () => {
       this.ownPort = (this.ownServer!.address() as { port: number }).port
@@ -508,6 +517,7 @@ export class RemoteServer {
   private tryBecomeAggregator(): void {
     const aggServer = http.createServer((req, res) => this.handleAggregatorHttp(req, res))
     aggServer.once('error', (err: NodeJS.ErrnoException) => {
+      logEvent('aggregator-bind-error', { code: err?.code ?? null, message: err?.message ?? String(err) }, 'warn')
       if (err.code === 'EADDRINUSE') {
         // Another instance just won the port race — wait and register with it.
         setTimeout(() => this.connectToAggregator(), 500)
@@ -515,8 +525,17 @@ export class RemoteServer {
     })
     aggServer.listen(AGGREGATOR_PORT, () => {
       this.aggregatorServer = aggServer
+      // `once` above is consumed only on a failed bind; on this path it is still
+      // attached, but it would fire at most once more. Runtime errors need a
+      // permanent listener or they are thrown and kill the main process.
+      aggServer.on('error', (err: NodeJS.ErrnoException) => {
+        logEvent('aggregator-server-error', { code: err?.code ?? null, message: err?.message ?? String(err) }, 'warn')
+      })
       const aggWss = new WebSocketServer({ server: aggServer })
       aggWss.on('connection', (ws, req) => this.handleAggWsConnection(ws, req))
+      aggWss.on('error', (err: Error) => {
+        logEvent('aggregator-wss-error', { message: err?.message ?? String(err) }, 'warn')
+      })
       this.aggregatorWss = aggWss
       this.registerSelf()
       this.startCleanupLoop()

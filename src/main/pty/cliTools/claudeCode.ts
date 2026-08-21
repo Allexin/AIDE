@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, renameS
 import type { FSWatcher } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 import { session } from 'electron'
 import type { CliTool, CliSession, SettingsField, UsageInfo, HistoryEntry, HookLaunchContext } from './types'
 import { writeTabHookSettings, cleanupTabHookSettings } from './claudeHooks'
@@ -11,6 +12,15 @@ import { cliLog } from './cliLogger'
 import { createJsonlSmartCompactCapability, runProcess } from './smartCompactJsonl'
 import { findExecutable, listProcesses } from '../../platform'
 import { resolveOwnerPidFromSnapshot } from '../../platform/processTree'
+import {
+  getActiveAccount,
+  getSubscriptionUsageCache,
+  listAccounts,
+  releaseSubscriptionUsageRefresh,
+  setSubscriptionUsageCache,
+  tryAcquireSubscriptionUsageRefresh,
+  updateAccount as updateStoredAccount
+} from '../../config/accountStorage'
 
 const LOG_CH = 'Claude Code Errors'
 const TOOL_NAME = 'Claude Code'
@@ -85,6 +95,13 @@ const usageBackoff = { delay: 60_000, until: 0 }
  *  Starts true (app launch) and is set true again on importCredentials (account switch). */
 let usageSuppressed = true
 
+function formatUsageReset(value: string): string {
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime())
+    ? value
+    : parsed.toLocaleString(undefined, { timeZoneName: 'short' })
+}
+
 function usageFromCache(cached: Record<string, unknown>): UsageInfo {
   const s = (cached.session as Record<string, unknown>)?.percent as number ?? 0
   const w = (cached.week as Record<string, unknown>)?.percent as number ?? 0
@@ -94,9 +111,57 @@ function usageFromCache(cached: Record<string, unknown>): UsageInfo {
   const wResets = (cached.week as Record<string, unknown>)?.resets as string ?? ''
   return {
     summary: `${s}% / ${w}%`,
-    tooltip: `session: ${s}%${sResets ? ` resets ${sResets}` : ''}\nweek: ${w}%${wResets ? ` resets ${wResets}` : ''}`,
+    tooltip: `session: ${s}%${sResets ? ` resets ${formatUsageReset(sResets)}` : ''}\nweek: ${w}%${wResets ? ` resets ${formatUsageReset(wResets)}` : ''}`,
     level: lvl,
     fetchedAt: (cached.updatedAt as number) || Date.now()
+  }
+}
+
+function sharedUsageFromPayload(data: Record<string, unknown>, fetchedAt: number): UsageInfo | null {
+  const fiveHour = data.five_hour as { utilization?: unknown; resets_at?: unknown } | undefined
+  const sevenDay = data.seven_day as { utilization?: unknown; resets_at?: unknown } | undefined
+  if (typeof fiveHour?.utilization !== 'number' || typeof sevenDay?.utilization !== 'number') return null
+  return usageFromCache({
+    session: {
+      percent: Math.round(fiveHour.utilization),
+      resets: typeof fiveHour.resets_at === 'string' ? fiveHour.resets_at : ''
+    },
+    week: {
+      percent: Math.round(sevenDay.utilization),
+      resets: typeof sevenDay.resets_at === 'string' ? sevenDay.resets_at : ''
+    },
+    updatedAt: fetchedAt
+  })
+}
+
+function resolveSavedClaudeAccountId(identifier: string | null): string | null {
+  if (!identifier) return null
+  const accounts = listAccounts(TOOL_ID)
+  const activeId = getActiveAccount(TOOL_ID)
+  const active = accounts.find((account) => account.id === activeId)
+  if (active?.identifier === identifier) return active.id
+  return accounts.find((account) => account.identifier === identifier)?.id ?? null
+}
+
+function syncActiveClaudeCredentials(accountId: string, identifier: string): void {
+  const saved = listAccounts(TOOL_ID).find((account) => account.id === accountId)
+  if (!saved || saved.identifier !== identifier || !existsSync(CREDENTIALS_JSON) || !existsSync(CLAUDE_JSON)) return
+  try {
+    const root = JSON.parse(readFileSync(CLAUDE_JSON, 'utf-8')) as Record<string, unknown>
+    const oauthAccount = root.oauthAccount as Record<string, unknown> | undefined
+    if (oauthAccount?.emailAddress !== identifier) return
+    const liveCredentials = JSON.parse(readFileSync(CREDENTIALS_JSON, 'utf-8')) as Record<string, unknown>
+    const savedSnapshot = saved.credentials._credentialsJson as Record<string, unknown> | undefined
+    const liveOauth = liveCredentials.claudeAiOauth as Record<string, unknown> | undefined
+    const savedOauth = savedSnapshot?.claudeAiOauth as Record<string, unknown> | undefined
+    if (!liveOauth?.accessToken || liveOauth.accessToken === savedOauth?.accessToken) return
+
+    const credentials: Record<string, unknown> = { ...saved.credentials, _credentialsJson: liveCredentials }
+    if (root.oauthAccount !== undefined) credentials.oauthAccount = root.oauthAccount
+    if (root.userID !== undefined) credentials.userID = root.userID
+    updateStoredAccount(TOOL_ID, accountId, identifier, credentials, saved.revision)
+  } catch (e) {
+    cliLog(LOG_CH, `[usage] failed to synchronize active account credentials: ${e}`)
   }
 }
 
@@ -351,8 +416,7 @@ type is not user/assistant are session metadata and must never be selected.`,
     }
   },
 
-  async getUsageInfo(): Promise<UsageInfo | null> {
-    const CACHE_MAX_AGE = 7 * 60 * 1000 // 7 minutes
+  async getUsageInfo(cacheMaxAgeMs = 20 * 60_000): Promise<UsageInfo | null> {
     const cachePath = join(homedir(), '.aide', 'usage.json')
 
     // Resolve current account for cache ownership check
@@ -364,6 +428,20 @@ type is not user/assistant are session metadata and must never be selected.`,
       }
     } catch { /* ignore */ }
 
+    const currentAccountId = resolveSavedClaudeAccountId(currentAccount)
+    if (currentAccountId && currentAccount) syncActiveClaudeCredentials(currentAccountId, currentAccount)
+    const sharedCache = currentAccountId
+      ? getSubscriptionUsageCache(TOOL_ID, currentAccountId)
+      : null
+    if (sharedCache && Date.now() - sharedCache.fetchedAtMs < cacheMaxAgeMs) {
+      const cachedUsage = sharedUsageFromPayload(sharedCache.payload, sharedCache.fetchedAtMs)
+      if (cachedUsage) {
+        if (usageSuppressed) usageSuppressed = false
+        return cachedUsage
+      }
+      cliLog(LOG_CH, '[usage] shared SQLite cache is missing five_hour or seven_day utilization')
+    }
+
     // ── Try cached file first (shared across multiple AIDE instances) ──
     try {
       if (existsSync(cachePath)) {
@@ -371,7 +449,15 @@ type is not user/assistant are session metadata and must never be selected.`,
         // If cache has an account field and it doesn't match current → cache miss
         const cacheAccount = cached.account as string | undefined
         const accountMatch = !cacheAccount || !currentAccount || cacheAccount === currentAccount
-        if (accountMatch && cached.updatedAt && Date.now() - cached.updatedAt < CACHE_MAX_AGE) {
+        if (accountMatch && cached.updatedAt && Date.now() - cached.updatedAt < cacheMaxAgeMs) {
+          if (currentAccountId) {
+            const sessionBucket = cached.session as Record<string, unknown> | undefined
+            const weekBucket = cached.week as Record<string, unknown> | undefined
+            setSubscriptionUsageCache(TOOL_ID, currentAccountId, {
+              five_hour: { utilization: sessionBucket?.percent, resets_at: sessionBucket?.resets },
+              seven_day: { utilization: weekBucket?.percent, resets_at: weekBucket?.resets }
+            }, cached.updatedAt, 'aide-file')
+          }
           if (usageSuppressed) usageSuppressed = false
           return usageFromCache(cached)
         }
@@ -407,6 +493,21 @@ type is not user/assistant are session metadata and must never be selected.`,
     if (!accessToken) {
       cliLog(LOG_CH, '[usage] no access token found in credentials')
       return null
+    }
+
+    let refreshLeaseOwner: string | null = null
+    if (currentAccountId) {
+      refreshLeaseOwner = randomUUID()
+      const acquired = tryAcquireSubscriptionUsageRefresh(
+        TOOL_ID,
+        currentAccountId,
+        refreshLeaseOwner,
+        Date.now(),
+        60_000
+      )
+      if (!acquired) {
+        return sharedCache ? sharedUsageFromPayload(sharedCache.payload, sharedCache.fetchedAtMs) : null
+      }
     }
 
     try {
@@ -448,37 +549,36 @@ type is not user/assistant are session metadata and must never be selected.`,
 
       const data = (await res.json()) as Record<string, unknown>
 
-      const parts: string[] = []
-      const tipParts: string[] = []
-      let maxUtil = 0
-
-      for (const [key, val] of Object.entries(data)) {
-        if (val && typeof val === 'object' && 'utilization' in (val as Record<string, unknown>)) {
-          const bucket = val as { utilization: number | null; resets_at?: string }
-          if (bucket.utilization == null) continue
-          const util = bucket.utilization
-          if (util > maxUtil) maxUtil = util
-          const label = key.replace(/_/g, ' ')
-          parts.push(`${Math.round(util)}%`)
-          const resetStr = bucket.resets_at
-            ? ` resets ${new Date(bucket.resets_at).toLocaleString(undefined, { timeZoneName: 'short' })}`
-            : ''
-          tipParts.push(`${label}: ${Math.round(util)}%${resetStr}`)
+      const expectedBuckets = [
+        ['five_hour', data.five_hour],
+        ['seven_day', data.seven_day]
+      ] as const
+      const responseAnomalies: string[] = []
+      for (const [key, value] of expectedBuckets) {
+        if (!value || typeof value !== 'object') {
+          responseAnomalies.push(`missing ${key}`)
+          continue
+        }
+        const bucket = value as Record<string, unknown>
+        if (typeof bucket.utilization !== 'number') responseAnomalies.push(`${key}.utilization invalid`)
+        if (bucket.utilization !== 0 &&
+            (typeof bucket.resets_at !== 'string' || Number.isNaN(new Date(bucket.resets_at).getTime()))) {
+          responseAnomalies.push(`${key}.resets_at invalid`)
         }
       }
+      if (responseAnomalies.length > 0) {
+        cliLog(LOG_CH, `[usage] response anomaly (${responseAnomalies.join(', ')}): ${JSON.stringify(data)}`)
+      }
 
-      if (parts.length === 0) {
-        cliLog(LOG_CH, `[usage] no utilization buckets found in response: ${JSON.stringify(data)}`)
+      const now = Date.now()
+      const result = sharedUsageFromPayload(data, now)
+      if (!result) {
+        cliLog(LOG_CH, `[usage] required utilization buckets not found in response: ${JSON.stringify(data)}`)
         return null
       }
 
-      const level: UsageInfo['level'] = maxUtil >= 90 ? 'critical' : maxUtil >= 70 ? 'warn' : 'normal'
-      const now = Date.now()
-      const result: UsageInfo = {
-        summary: parts.join(' / '),
-        tooltip: tipParts.join('\n'),
-        level,
-        fetchedAt: now
+      if (currentAccountId) {
+        setSubscriptionUsageCache(TOOL_ID, currentAccountId, data, now, 'aide')
       }
 
       // ── Write cache ──
@@ -486,20 +586,24 @@ type is not user/assistant are session metadata and must never be selected.`,
         const dir = join(homedir(), '.aide')
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
-        const bucketEntries = Object.entries(data)
-          .filter(([, v]) => v && typeof v === 'object' && 'utilization' in (v as Record<string, unknown>))
-          .map(([, v]) => v as { utilization: number | null; resets_at?: string })
-          .filter((b) => b.utilization != null)
-
         const toCache = (b?: { utilization: number | null; resets_at?: string }): { percent: number; resets: string } => ({
           percent: b ? Math.round(b.utilization!) : 0,
-          resets: b?.resets_at ? new Date(b.resets_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: undefined }) : ''
+          // Preserve the server timestamp. Formatting it before persistence
+          // previously made fresh and cached tooltips alternate between a full
+          // date and a bare hour.
+          resets: b?.resets_at ?? ''
         })
+
+        const fiveHour = data.five_hour as { utilization: number | null; resets_at?: string } | undefined
+        const sevenDay = data.seven_day as { utilization: number | null; resets_at?: string } | undefined
+        if (fiveHour?.utilization == null || sevenDay?.utilization == null) {
+          throw new Error('required five_hour or seven_day bucket is missing; cache was not updated')
+        }
 
         const cacheData = {
           account: currentAccount ?? undefined,
-          session: toCache(bucketEntries[0]),
-          week: toCache(bucketEntries[1]),
+          session: toCache(fiveHour),
+          week: toCache(sevenDay),
           updatedAt: Date.now()
         }
 
@@ -514,6 +618,10 @@ type is not user/assistant are session metadata and must never be selected.`,
     } catch (e) {
       cliLog(LOG_CH, `[usage] fetch error: ${e}`)
       return null
+    } finally {
+      if (currentAccountId && refreshLeaseOwner) {
+        releaseSubscriptionUsageRefresh(TOOL_ID, currentAccountId, refreshLeaseOwner)
+      }
     }
   },
 

@@ -10,6 +10,7 @@ import type { HookBinding } from '../hooks/hookServer'
 import { defaultShell } from '../platform'
 import type { SavedSessionEntry } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
+import { logEvent, countPtyData } from '../diagnostics'
 
 
 export interface SessionTabInfo {
@@ -575,6 +576,7 @@ export class PtyManager {
     })
 
     pty.onData((data) => {
+      countPtyData(data.length)
       this.feedHealthCheck(tabId, data)
       this.extractTitle(tabId, data)
       tool?.onPtyActivity?.(tabId)
@@ -585,7 +587,17 @@ export class PtyManager {
         this.send('cli:log', { channel: `pty-raw[${tabId}]`, message: escaped })
       }
     })
-    pty.onExit(() => this.send('terminal:tab-exited', { tabId }))
+    logEvent('pty-spawn', { tabId, shell: shellFile, cwd: this.projectPath, pid: pty.pid })
+    pty.onExit(({ exitCode, signal }) => {
+      // An exit code or signal here is the difference between "the CLI finished"
+      // and "the CLI was killed", which the tab-exited event alone cannot tell.
+      logEvent(
+        'pty-exit',
+        { tabId, pid: pty.pid, exitCode, signal: signal ?? null },
+        exitCode === 0 ? 'info' : 'warn'
+      )
+      this.send('terminal:tab-exited', { tabId })
+    })
 
     return pty
   }

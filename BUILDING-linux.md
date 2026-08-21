@@ -39,6 +39,20 @@ correct one when it can't find the requested package.
 sudo dnf install @development-tools python3 git
 ```
 
+### Gentoo
+```bash
+sudo emerge --ask sys-devel/gcc sys-devel/make dev-lang/python dev-vcs/git \
+     net-libs/nodejs
+```
+
+Ensure that `python3`, `node`, and `npm` are on `PATH` before continuing. On a
+minimal profile, install Electron's runtime libraries as well:
+```bash
+sudo emerge --ask dev-libs/nss media-libs/alsa-lib media-libs/mesa \
+     x11-libs/gtk+:3 x11-libs/libX11 x11-libs/libXcomposite \
+     x11-libs/libXdamage x11-libs/libXrandr x11-libs/libxcb
+```
+
 Electron itself pulls in a few shared libraries at runtime (X11, nss, etc.).
 On a minimal/server install add:
 ```bash

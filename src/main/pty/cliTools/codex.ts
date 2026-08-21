@@ -493,7 +493,7 @@ and must not be selected.`,
     }
   },
 
-  async getUsageInfo(): Promise<UsageInfo | null> {
-    return getCodexUsageInfo()
+  async getUsageInfo(cacheMaxAgeMs?: number): Promise<UsageInfo | null> {
+    return getCodexUsageInfo(cacheMaxAgeMs)
   }
 }

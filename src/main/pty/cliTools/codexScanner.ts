@@ -1,9 +1,10 @@
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync, statSync, watch } from 'fs'
 import type { FSWatcher } from 'fs'
-import { readFile, stat as fsStat } from 'fs/promises'
+import { readFile, stat as fsStat, open } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { HistoryBlock, HistoryEntry } from './types'
+import { getCachedMeta, setCachedMeta, pruneCache } from './sessionMetaCache'
 
 export interface CodexDiskSession {
   sessionId: string
@@ -144,41 +145,148 @@ function extractFirstAndLastUserMessage(lines: string[]): { firstMessage: string
   return { firstMessage, title }
 }
 
-async function readCodexDiskSession(filePath: string, projectPath: string): Promise<CodexDiskSession | null> {
-  let content = ''
-  let mtime = 0
+/**
+ * How much of a transcript is read to answer a listing question.
+ *
+ * Codex keeps every session for every project in one flat directory, and a
+ * long-running project accumulates them fast — each `/compact` starts a new
+ * one. Measured on this machine: 277 files, 443 MB, the largest 83 MB. Reading
+ * them in full to answer "which sessions belong to this project?" put well over
+ * a gigabyte of transcript text on the main-process heap at once, which is what
+ * killed the app.
+ *
+ * Everything the session list needs lives at the two ends of the file: the
+ * `session_meta` record is the first line, the most recent user message is near
+ * the end. So both ends are read, and nothing in between ever is.
+ */
+const META_CHUNK_BYTES = 64 * 1024
+const TAIL_CHUNK_BYTES = 64 * 1024
+
+/** Read a bounded window from a file without pulling in the whole thing. */
+async function readChunk(filePath: string, offset: number, length: number): Promise<string> {
+  const handle = await open(filePath, 'r')
   try {
-    const [fileStat, fileContent] = await Promise.all([
-      fsStat(filePath),
-      readFile(filePath, 'utf-8')
-    ])
-    mtime = fileStat.mtimeMs
-    content = fileContent
-  } catch {
-    return null
-  }
-
-  const lines = content.split('\n').filter((line) => line.trim())
-  const meta = parseSessionMetadata(lines, filePath)
-  if (!meta || !isSameProject(projectPath, meta.cwd)) return null
-  const { firstMessage, title } = extractFirstAndLastUserMessage(lines)
-
-  return {
-    sessionId: meta.sessionId,
-    filePath,
-    cwd: meta.cwd,
-    firstMessage,
-    title,
-    mtime
+    const buf = Buffer.alloc(length)
+    const { bytesRead } = await handle.read(buf, 0, length, offset)
+    return buf.subarray(0, bytesRead).toString('utf-8')
+  } finally {
+    await handle.close()
   }
 }
 
-export async function scanCodexSessions(projectPath: string): Promise<CodexDiskSession[]> {
+/** Namespace for this tool's entries in the shared on-disk metadata cache. */
+const CACHE_NS = 'codex'
+
+export interface CodexSessionRef {
+  sessionId: string
+  filePath: string
+  cwd: string
+  mtime: number
+}
+
+/**
+ * List the sessions belonging to a project, newest first, without reading any
+ * transcript body. This is the cheap half of a scan.
+ */
+export async function listCodexSessionRefs(projectPath: string): Promise<CodexSessionRef[]> {
   const files = collectJsonlFiles(getCodexSessionsRoot())
-  const sessions = await Promise.all(files.map((file) => readCodexDiskSession(file, projectPath)))
-  return sessions
-    .filter((session): session is CodexDiskSession => session !== null)
-    .sort((a, b) => b.mtime - a.mtime)
+  const refs: CodexSessionRef[] = []
+  const seen = new Set<string>()
+
+  for (const filePath of files) {
+    let fileStat: import('fs').Stats
+    try {
+      fileStat = await fsStat(filePath)
+    } catch {
+      continue
+    }
+    seen.add(filePath)
+
+    // A file already in the cache and unchanged costs nothing beyond the stat
+    // above — no read at all. Only genuinely new or rewritten transcripts are
+    // opened, which is what keeps this bounded as sessions accumulate.
+    let meta: Pick<CodexDiskSession, 'sessionId' | 'cwd'> | null = null
+    const cached = getCachedMeta(CACHE_NS, filePath, fileStat.mtimeMs, fileStat.size)
+    if (cached?.sessionId && cached.cwd !== undefined) {
+      meta = { sessionId: cached.sessionId, cwd: cached.cwd }
+    } else {
+      let head = ''
+      try {
+        head = await readChunk(filePath, 0, Math.min(fileStat.size, META_CHUNK_BYTES))
+      } catch {
+        continue
+      }
+      meta = parseSessionMetadata(head.split('\n').filter((l) => l.trim()), filePath)
+      // Negative results are cached too, otherwise an unparseable transcript is
+      // re-read on every single scan forever.
+      setCachedMeta(CACHE_NS, filePath, fileStat.mtimeMs, fileStat.size, {
+        sessionId: meta?.sessionId ?? '',
+        cwd: meta?.cwd ?? ''
+      })
+    }
+
+    if (!meta?.sessionId || !meta.cwd || !isSameProject(projectPath, meta.cwd)) continue
+    refs.push({ sessionId: meta.sessionId, filePath, cwd: meta.cwd, mtime: fileStat.mtimeMs })
+  }
+
+  pruneCache(CACHE_NS, seen)
+  return refs.sort((a, b) => b.mtime - a.mtime)
+}
+
+/**
+ * Fill in the preview fields for a set of refs. Call it with one page worth of
+ * refs, not the whole list — this is the half that touches file contents.
+ */
+export async function describeCodexSessions(refs: CodexSessionRef[]): Promise<CodexDiskSession[]> {
+  return Promise.all(
+    refs.map(async (ref): Promise<CodexDiskSession> => {
+      let firstMessage = ''
+      let title = ''
+      try {
+        const size = (await fsStat(ref.filePath)).size
+        const head = await readChunk(ref.filePath, 0, Math.min(size, META_CHUNK_BYTES))
+        const headLines = head.split('\n').filter((l) => l.trim())
+        firstMessage = extractFirstAndLastUserMessage(headLines).firstMessage
+
+        if (size > META_CHUNK_BYTES) {
+          const tailStart = Math.max(0, size - TAIL_CHUNK_BYTES)
+          const tail = await readChunk(ref.filePath, tailStart, size - tailStart)
+          const tailLines = tail.split('\n').filter((l) => l.trim())
+          // The first line of the tail window is probably truncated.
+          if (tailStart > 0) tailLines.shift()
+          title = extractFirstAndLastUserMessage(tailLines).title || firstMessage
+        } else {
+          title = extractFirstAndLastUserMessage(headLines).title
+        }
+      } catch {
+        // Preview is cosmetic — a ref with no preview still lists and resumes.
+      }
+      return {
+        sessionId: ref.sessionId,
+        filePath: ref.filePath,
+        cwd: ref.cwd,
+        firstMessage,
+        title,
+        mtime: ref.mtime
+      }
+    })
+  )
+}
+
+/** One page of sessions, newest first, plus the total available. */
+export async function scanCodexSessionsPaged(
+  projectPath: string,
+  offset: number,
+  limit: number
+): Promise<{ sessions: CodexDiskSession[]; total: number }> {
+  const refs = await listCodexSessionRefs(projectPath)
+  const page = refs.slice(offset, offset + limit)
+  return { sessions: await describeCodexSessions(page), total: refs.length }
+}
+
+export async function scanCodexSessions(projectPath: string): Promise<CodexDiskSession[]> {
+  const refs = await listCodexSessionRefs(projectPath)
+  return describeCodexSessions(refs)
 }
 
 export function scanCodexSessionIdsSync(projectPath: string): Set<string> {
@@ -205,20 +313,31 @@ export function scanCodexSessionIdsSync(projectPath: string): Set<string> {
 }
 
 export async function findCodexSessionFile(projectPath: string, sessionId: string): Promise<string | null> {
-  const sessions = await scanCodexSessions(projectPath)
-  return sessions.find((session) => session.sessionId === sessionId)?.filePath ?? null
+  // Refs carry the session id, so no transcript body needs reading to locate one.
+  const refs = await listCodexSessionRefs(projectPath)
+  return refs.find((ref) => ref.sessionId === sessionId)?.filePath ?? null
 }
 
 export function findCodexSessionFileSync(projectPath: string, sessionId: string): string | null {
   for (const filePath of collectJsonlFiles(getCodexSessionsRoot())) {
-    let content = ''
+    // Only the head is needed: `session_meta` is the first record. This used to
+    // read every transcript in full, synchronously, on the main thread.
+    let fd: number
     try {
-      content = readFileSync(filePath, 'utf-8')
+      fd = openSync(filePath, 'r')
     } catch {
       continue
     }
-    const lines = content.split('\n').filter((line) => line.trim())
-    const meta = parseSessionMetadata(lines, filePath)
+    let meta: Pick<CodexDiskSession, 'sessionId' | 'cwd'> | null = null
+    try {
+      const size = Math.min(fstatSync(fd).size, META_CHUNK_BYTES)
+      const buf = Buffer.alloc(size)
+      readSync(fd, buf, 0, size, 0)
+      const lines = buf.toString('utf-8').split('\n').filter((line) => line.trim())
+      meta = parseSessionMetadata(lines, filePath)
+    } finally {
+      closeSync(fd)
+    }
     if (!meta || meta.sessionId !== sessionId || !isSameProject(projectPath, meta.cwd)) continue
     return filePath
   }

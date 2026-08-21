@@ -1,6 +1,6 @@
 {
   "name": "aide",
-  "version": "0.1.310",
+  "version": "0.1.319",
   "description": "AI-Driven Code Editor",
   "private": true,
   "main": "out/main/index.js",
@@ -12,6 +12,7 @@
     "pack:linux": "electron-builder --linux --publish=never",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "diagnose": "node scripts/analyze-crashes.mjs",
     "rebuild": "electron-rebuild -f -w node-pty,better-sqlite3"
   },
   "dependencies": {

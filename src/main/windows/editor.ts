@@ -8,6 +8,7 @@ import { ensureDefaultToolbar, deployToolbarDocs } from '../config/toolbarConfig
 import { addRecentProject, saveOpenSessions } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { startProjectWatcher, stopProjectWatcher } from '../filetree/watcher'
+import { logEvent } from '../diagnostics'
 import { startProjectFileIndex, stopProjectFileIndex } from '../filetree/fileIndex'
 import { PtyManager } from '../pty/ptyManager'
 import { ptyRegistry } from '../pty/registry'
@@ -76,6 +77,10 @@ export function openProjectAndTrack(
     openProjects.get(projectPath)!.focus()
     return { success: false, error: 'Project is already open in this AIDE instance.' }
   }
+
+  // Logged here rather than at the call sites so that opening from the Picker,
+  // the menu and the command line all leave the same breadcrumb.
+  logEvent('project-opening', { path: projectPath })
 
   ensureAideDirectory(projectPath)
   ensureDefaultToolbar(projectPath)

@@ -288,7 +288,11 @@ const editorApi: EditorAPI = {
   },
 
   onFsChanged: (cb: (event: { path: string }) => void) => {
-    const handler = (_: unknown, event: { path: string }): void => cb(event)
+    // Main coalesces changes into one message per batch window; the callback
+    // contract stays one call per path, so renderer code is unaffected.
+    const handler = (_: unknown, event: { paths: string[] }): void => {
+      for (const path of event.paths) cb({ path })
+    }
     ipcRenderer.on('filetree:fs-changed', handler)
     return () => ipcRenderer.removeListener('filetree:fs-changed', handler)
   },

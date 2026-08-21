@@ -1,5 +1,6 @@
 import http from 'http'
 import { randomBytes } from 'crypto'
+import { logEvent } from '../diagnostics'
 
 /** A single binding fact reported by a Claude Code hook. */
 export interface HookBinding {
@@ -37,6 +38,20 @@ class HookServer {
       srv.listen(0, '127.0.0.1', () => {
         this.port = (srv.address() as { port: number }).port
         srv.removeListener('error', reject)
+        // The listen-time handler above is removed on success, which would leave
+        // the server with no `'error'` listener for the rest of the app's life.
+        // An `'error'` event on an EventEmitter with no listener is thrown, and
+        // in the main process that kills every window at once. Keep a permanent
+        // handler so a socket-level failure degrades hook binding instead.
+        srv.on('error', (err: NodeJS.ErrnoException) => {
+          logEvent('hook-server-error', { code: err?.code ?? null, message: err?.message ?? String(err) }, 'warn')
+        })
+        // Malformed or aborted client connections arrive here; Node's default
+        // handler destroys the socket, but we want it visible in diagnostics.
+        srv.on('clientError', (err: NodeJS.ErrnoException, socket) => {
+          logEvent('hook-server-client-error', { code: err?.code ?? null, message: err?.message ?? String(err) }, 'warn')
+          socket.destroy()
+        })
         resolve()
       })
     })

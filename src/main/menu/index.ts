@@ -204,14 +204,17 @@ async function autoSaveCurrentCredentials(toolId: string): Promise<boolean> {
   const t = getToolById(toolId)
   if (!t?.exportCredentials || !t?.getLoginIdentifier) return true
 
+  // Capture the revision before reading credentials. If another process
+  // rotates this account's token afterwards, our stale snapshot cannot
+  // overwrite it.
+  const saved = listAccounts(toolId).find((a) => a.id === activeId)
+  if (!saved) return true
+
   const [creds, currentIdentifier] = await Promise.all([
     t.exportCredentials(),
     t.getLoginIdentifier()
   ])
   if (!creds || !currentIdentifier) return true
-
-  const saved = listAccounts(toolId).find((a) => a.id === activeId)
-  if (!saved) return true
 
   if (saved.identifier !== currentIdentifier) {
     const { response } = await dialog.showMessageBox({
@@ -226,7 +229,7 @@ async function autoSaveCurrentCredentials(toolId: string): Promise<boolean> {
     if (response === 1) return true  // Skip — proceed without saving
   }
 
-  updateStoredAccount(toolId, activeId, currentIdentifier, creds)
+  updateStoredAccount(toolId, activeId, currentIdentifier, creds, saved.revision)
   return true
 }
 

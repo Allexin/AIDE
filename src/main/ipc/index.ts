@@ -995,10 +995,12 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   })
 
   // ── Usage info: get usage/limits for a CLI tool ────────────────────────────
-  ipcMain.handle('usage:get-info', async (_event, toolId: string) => {
+  ipcMain.handle('usage:get-info', async (event, toolId: string) => {
     const tool = getToolById(toolId)
     if (!tool?.getUsageInfo) return null
-    return tool.getUsageInfo()
+    const editorWindow = BrowserWindow.fromWebContents(event.sender)
+    const cacheMaxAgeMs = editorWindow?.isFocused() ? 5 * 60_000 : 20 * 60_000
+    return tool.getUsageInfo(cacheMaxAgeMs)
   })
 
   // ── Context insert: get text to insert for a file path ───────────────────
@@ -1054,14 +1056,17 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const tool = getToolById(toolId)
     if (!tool?.exportCredentials || !tool?.getLoginIdentifier) return null
 
+    // Capture the revision before reading credentials. If another process
+    // rotates this account's token afterwards, our stale snapshot cannot
+    // overwrite it.
+    const saved = listAccounts(toolId).find((a) => a.id === activeId)
+    if (!saved) return null
+
     const [creds, currentIdentifier] = await Promise.all([
       tool.exportCredentials(),
       tool.getLoginIdentifier()
     ])
     if (!creds || !currentIdentifier) return null
-
-    const saved = listAccounts(toolId).find((a) => a.id === activeId)
-    if (!saved) return null
 
     if (!forceOverwrite && saved.identifier !== currentIdentifier) {
       return {
@@ -1071,7 +1076,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
       }
     }
 
-    updateStoredAccount(toolId, activeId, currentIdentifier, creds)
+    updateStoredAccount(toolId, activeId, currentIdentifier, creds, saved.revision)
     return null
   }
 
@@ -1114,12 +1119,15 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   ipcMain.handle('accounts:update', async (_event, toolId: string, accountId: string) => {
     const tool = getToolById(toolId)
     if (!tool?.exportCredentials || !tool?.getLoginIdentifier) return null
+    // See autoSaveCurrentCredentials: revision must precede the external read.
+    const stored = listAccounts(toolId).find((account) => account.id === accountId)
+    if (!stored) return null
     const [creds, identifier] = await Promise.all([
       tool.exportCredentials(),
       tool.getLoginIdentifier()
     ])
     if (!creds || !identifier) return null
-    const result = updateStoredAccount(toolId, accountId, identifier, creds)
+    const result = updateStoredAccount(toolId, accountId, identifier, creds, stored.revision)
     if (result) setActiveAccount(toolId, accountId)
     broadcastAccountsChanged()
     return result

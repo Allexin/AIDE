@@ -138,7 +138,7 @@ export interface CliTool {
   /** Return current usage/limit info for display in the status bar.
    *  The implementation decides what to show — the caller treats it opaquely.
    */
-  getUsageInfo?(): Promise<UsageInfo | null>
+  getUsageInfo?(cacheMaxAgeMs?: number): Promise<UsageInfo | null>
 
   /** Inspect a tab title transition and react if something notable happened
    *  (e.g. detect asterisk signaling "waiting for input").

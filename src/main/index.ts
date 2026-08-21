@@ -1,4 +1,5 @@
 import { app, BrowserWindow } from 'electron'
+import { initDiagnostics, logEvent } from './diagnostics'
 import { initAppConfig } from './config/appConfig'
 import { initAppState } from './config/appState'
 import { initAccountStorage } from './config/accountStorage'
@@ -12,6 +13,10 @@ import { RemoteServer } from './remote'
 import { ptyRegistry } from './pty/registry'
 import { startHookServer } from './hooks/hookServer'
 import { getCommandLineArgumentsHelp, hasCommandLineHelpArg, resolveStartupArgs } from './startupArgs'
+import { flush as flushSessionMetaCache } from './pty/cliTools/sessionMetaCache'
+
+// Started before anything else so that a crash during startup is still recorded.
+initDiagnostics()
 
 // Map of projectPath → editor BrowserWindow
 const openProjects = new Map<string, BrowserWindow>()
@@ -33,13 +38,17 @@ if (hasCommandLineHelpArg(userArgs)) {
 
   // Start the hook server before any tab spawns so port/token are available when
   // a Claude Code session launches (deterministic tab -> transcript binding).
-  await startHookServer().catch(() => {
-    // If it fails to bind, tabs launch without hooks and fall back to file-watch
-    // session assignment; nothing else breaks.
-  })
+  await startHookServer()
+    .then((srv) => logEvent('hook-server-started', { port: srv.getPort() }))
+    .catch((err: Error) => {
+      // If it fails to bind, tabs launch without hooks and fall back to file-watch
+      // session assignment; nothing else breaks.
+      logEvent('hook-server-start-failed', { message: err?.message ?? String(err) }, 'warn')
+    })
 
   const remoteServer = new RemoteServer(ptyRegistry, openProjects)
   remoteServer.start()
+  logEvent('remote-server-started')
   setRemoteServer(remoteServer)
 
   setupIpcHandlers(openProjects, remoteServer)
@@ -53,12 +62,14 @@ if (hasCommandLineHelpArg(userArgs)) {
       terminal: startupArgs.terminal,
       noGlobalState: startupArgs.noGlobalState
     })
+    logEvent('project-open', { path: startupArgs.projectPath, success: result.success })
     if (!result.success) {
       // Path exists but couldn't be opened (locked, etc.) — fall back to Picker
       createPickerWindow()
     }
   } else {
     createPickerWindow()
+    logEvent('picker-open')
   }
 
   app.on('activate', () => {
@@ -75,6 +86,9 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  // Persist any session metadata learned this run; the cache writes are
+  // debounced, so a quit can otherwise discard the last few minutes of scanning.
+  flushSessionMetaCache()
   for (const [projectPath] of openProjects) {
     releaseLock(projectPath)
   }

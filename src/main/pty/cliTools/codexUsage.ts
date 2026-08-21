@@ -1,8 +1,20 @@
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
+import { randomUUID } from 'crypto'
+import { session } from 'electron'
 import type { UsageInfo } from './types'
 import { cliLog } from './cliLogger'
+import { getToolConfig } from '../../config/appConfig'
+import {
+  getActiveAccount,
+  getSubscriptionUsageCache,
+  listAccounts,
+  releaseSubscriptionUsageRefresh,
+  setSubscriptionUsageCache,
+  tryAcquireSubscriptionUsageRefresh,
+  updateAccount as updateStoredAccount
+} from '../../config/accountStorage'
 
 const LOG_CH = 'Codex'
 const CODEX_HOME = join(homedir(), '.codex')
@@ -11,6 +23,10 @@ const CACHE_PATH = join(CODEX_HOME, 'aide-usage-cache.json')
 const LOCK_PATH = `${CACHE_PATH}.lock`
 const CACHE_MAX_AGE_MS = 30_000
 const STALE_CACHE_MAX_AGE_MS = 5 * 60_000
+const DEFAULT_SHARED_CACHE_MAX_AGE_MS = 20 * 60_000
+const USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
+const TOKEN_URL = 'https://auth.openai.com/oauth/token'
+const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const LOCK_STALE_MS = 15_000
 const MAX_FILES_TO_SCAN = 80
 const MAX_TAIL_BYTES = 256 * 1024
@@ -49,6 +65,46 @@ interface UsageSnapshot {
   fetchedAt: number
 }
 
+interface ApiRateLimitWindow {
+  used_percent?: unknown
+  limit_window_seconds?: unknown
+  reset_at?: unknown
+}
+
+function usageFromSharedCache(payload: Record<string, unknown>, fetchedAt: number): UsageInfo | null {
+  const rateLimit = payload.rate_limit
+  if (!rateLimit || typeof rateLimit !== 'object') return null
+  const limits = rateLimit as Record<string, unknown>
+  const windows = [limits.primary_window, limits.secondary_window]
+    .filter((value): value is ApiRateLimitWindow => !!value && typeof value === 'object')
+  const findWindow = (seconds: number): ApiRateLimitWindow | undefined =>
+    windows.find((window) => window.limit_window_seconds === seconds)
+  const five = findWindow(5 * 60 * 60)
+  const week = findWindow(7 * 24 * 60 * 60)
+  const percent = (window?: ApiRateLimitWindow): number | null =>
+    typeof window?.used_percent === 'number' && Number.isFinite(window.used_percent)
+      ? window.used_percent
+      : null
+  const fivePct = percent(five)
+  const weekPct = percent(week)
+  if (fivePct === null && weekPct === null) return null
+  const values = [fivePct, weekPct].filter((value): value is number => value !== null)
+  const maximum = Math.max(...values)
+  const level: UsageInfo['level'] = maximum > 90 ? 'critical' : maximum < 50 ? 'normal' : 'warn'
+  const display = (value: number | null): string => value === null ? '–' : `${Math.round(value)}%`
+  const reset = (window?: ApiRateLimitWindow): string => {
+    if (typeof window?.reset_at !== 'number') return 'unknown'
+    return new Date(window.reset_at * 1000).toLocaleString()
+  }
+  return {
+    summary: `${display(fivePct)} / ${display(weekPct)}`,
+    tooltip: `5h limit: ${display(fivePct)}, resets ${reset(five)}\nweekly limit: ${display(weekPct)}, resets ${reset(week)}`,
+    level,
+    fetchedAt,
+    hasLimit: true
+  }
+}
+
 function loadJsonFile(path: string): Record<string, unknown> | null {
   if (!existsSync(path)) return null
   try {
@@ -65,6 +121,129 @@ function getNestedString(obj: unknown, path: string[]): string | null {
     cur = (cur as Record<string, unknown>)[key]
   }
   return typeof cur === 'string' && cur.trim() ? cur.trim() : null
+}
+
+function writeAuthJson(auth: Record<string, unknown>): void {
+  const path = join(CODEX_HOME, 'auth.json')
+  mkdirSync(dirname(path), { recursive: true })
+  const tmp = `${path}.tmp`
+  writeFileSync(tmp, JSON.stringify(auth, null, 2), 'utf-8')
+  renameSync(tmp, path)
+}
+
+function saveRefreshedCodexAccount(accountId: string, auth: Record<string, unknown>): void {
+  const stored = listAccounts('codex').find((account) => account.id === accountId)
+  if (!stored) return
+  updateStoredAccount(
+    'codex',
+    accountId,
+    stored.identifier,
+    { ...stored.credentials, authJson: auth },
+    stored.revision
+  )
+}
+
+async function configureUsageProxy(): Promise<ReturnType<typeof session.fromPartition>> {
+  const usageSession = session.fromPartition('codex-usage-api', { cache: false })
+  const proxy = getToolConfig('codex').proxy
+  await usageSession.setProxy({ proxyRules: typeof proxy === 'string' ? proxy : '' })
+  return usageSession
+}
+
+async function requestCodexUsage(
+  usageSession: ReturnType<typeof session.fromPartition>,
+  auth: Record<string, unknown>
+): Promise<Response> {
+  const accessToken = getNestedString(auth, ['tokens', 'access_token'])
+  const accountId = getNestedString(auth, ['tokens', 'account_id'])
+  if (!accessToken || !accountId) throw new Error('Codex auth.json has no OAuth access token or account ID')
+  return await usageSession.fetch(USAGE_URL, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'ChatGPT-Account-Id': accountId,
+      Accept: 'application/json',
+      'User-Agent': 'codex-cli'
+    }
+  })
+}
+
+async function refreshCodexAuth(
+  usageSession: ReturnType<typeof session.fromPartition>,
+  auth: Record<string, unknown>
+): Promise<Record<string, unknown> | null> {
+  const refreshToken = getNestedString(auth, ['tokens', 'refresh_token'])
+  if (!refreshToken) return null
+  const response = await usageSession.fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      client_id: CODEX_CLIENT_ID,
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken
+    })
+  })
+  if (!response.ok) {
+    cliLog(LOG_CH, `[usage] OAuth refresh failed: HTTP ${response.status}`)
+    return null
+  }
+  const payload = await response.json() as Record<string, unknown>
+  if (typeof payload.access_token !== 'string' || !payload.access_token) return null
+  const previousTokens = auth.tokens && typeof auth.tokens === 'object'
+    ? auth.tokens as Record<string, unknown>
+    : {}
+  const tokens = {
+    ...previousTokens,
+    access_token: payload.access_token,
+    refresh_token: typeof payload.refresh_token === 'string' && payload.refresh_token
+      ? payload.refresh_token
+      : previousTokens.refresh_token,
+    id_token: typeof payload.id_token === 'string' && payload.id_token
+      ? payload.id_token
+      : previousTokens.id_token
+  }
+  return { ...auth, tokens, last_refresh: new Date().toISOString() }
+}
+
+async function fetchLiveCodexUsage(
+  activeAccountId: string,
+  stale: ReturnType<typeof getSubscriptionUsageCache>
+): Promise<UsageInfo | null> {
+  const owner = randomUUID()
+  if (!tryAcquireSubscriptionUsageRefresh('codex', activeAccountId, owner, Date.now(), 60_000)) {
+    return stale ? usageFromSharedCache(stale.payload, stale.fetchedAtMs) : null
+  }
+  try {
+    let auth = loadJsonFile(join(CODEX_HOME, 'auth.json'))
+    if (!auth) return stale ? usageFromSharedCache(stale.payload, stale.fetchedAtMs) : null
+    const usageSession = await configureUsageProxy()
+    let response = await requestCodexUsage(usageSession, auth)
+    if (response.status === 401) {
+      const refreshed = await refreshCodexAuth(usageSession, auth)
+      if (!refreshed) return stale ? usageFromSharedCache(stale.payload, stale.fetchedAtMs) : null
+      auth = refreshed
+      writeAuthJson(auth)
+      saveRefreshedCodexAccount(activeAccountId, auth)
+      response = await requestCodexUsage(usageSession, auth)
+    }
+    if (!response.ok) {
+      cliLog(LOG_CH, `[usage] endpoint failed: HTTP ${response.status}`)
+      return stale ? usageFromSharedCache(stale.payload, stale.fetchedAtMs) : null
+    }
+    const payload = await response.json() as Record<string, unknown>
+    const fetchedAt = Date.now()
+    const usage = usageFromSharedCache(payload, fetchedAt)
+    if (!usage) {
+      cliLog(LOG_CH, `[usage] endpoint returned no recognized five-hour or weekly window; keys=[${Object.keys(payload).join(',')}]`)
+      return stale ? usageFromSharedCache(stale.payload, stale.fetchedAtMs) : null
+    }
+    setSubscriptionUsageCache('codex', activeAccountId, payload, fetchedAt, 'aide')
+    return usage
+  } catch (e) {
+    cliLog(LOG_CH, `[usage] endpoint refresh failed: ${e}`)
+    return stale ? usageFromSharedCache(stale.payload, stale.fetchedAtMs) : null
+  } finally {
+    releaseSubscriptionUsageRefresh('codex', activeAccountId, owner)
+  }
 }
 
 function currentAccountKey(): string | undefined {
@@ -305,7 +484,22 @@ function usageFromSnapshot(snapshot: UsageSnapshot): UsageInfo | null {
   }
 }
 
-export async function getCodexUsageInfo(): Promise<UsageInfo | null> {
+export async function getCodexUsageInfo(cacheMaxAgeMs = DEFAULT_SHARED_CACHE_MAX_AGE_MS): Promise<UsageInfo | null> {
+  const activeAccountId = getActiveAccount('codex')
+  const shared = activeAccountId
+    ? getSubscriptionUsageCache('codex', activeAccountId)
+    : null
+  if (shared && Date.now() - shared.fetchedAtMs < cacheMaxAgeMs) {
+    const usage = usageFromSharedCache(shared.payload, shared.fetchedAtMs)
+    if (usage) return usage
+    cliLog(LOG_CH, '[usage] shared SQLite cache has no recognized five-hour or weekly window')
+  }
+
+  if (activeAccountId) {
+    const live = await fetchLiveCodexUsage(activeAccountId, shared)
+    if (live) return live
+  }
+
   const accountKey = currentAccountKey()
 
   const fresh = readCache(CACHE_MAX_AGE_MS, accountKey)
