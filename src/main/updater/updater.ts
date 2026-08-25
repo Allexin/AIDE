@@ -4,7 +4,8 @@ import { readFileSync, writeFileSync, existsSync } from 'fs'
 import https from 'https'
 import { getAppConfig } from '../config/appConfig'
 
-export const RELEASES_URL = 'https://gitverse.ru/basovav/AIDE/releases'
+export const RELEASES_URL = 'https://github.com/Allexin/AIDE/releases'
+const RELEASES_API_URL = 'https://api.github.com/repos/Allexin/AIDE/releases?per_page=100'
 
 export interface ReleaseInfo {
   version: string // e.g. "0.1.144"
@@ -25,6 +26,13 @@ interface UpdatesState {
   lastNotifiedAt: number
   skippedVersion: string | null
   cachedReleases: ReleaseInfo[]
+}
+
+interface GitHubRelease {
+  tag_name: string
+  body: string | null
+  draft: boolean
+  prerelease: boolean
 }
 
 let stateFilePath = ''
@@ -71,10 +79,20 @@ export function compareVersions(a: string, b: string): number {
 function fetchPage(url: string, redirects = 5): Promise<string> {
   return new Promise((resolve, reject) => {
     if (redirects <= 0) { reject(new Error('Too many redirects')); return }
-    https.get(url, { headers: { 'User-Agent': 'AIDE-Updater/1.0' } }, (res) => {
+    https.get(url, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'AIDE-Updater/1.0'
+      }
+    }, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        fetchPage(res.headers.location, redirects - 1).then(resolve, reject)
+        fetchPage(new URL(res.headers.location, url).toString(), redirects - 1).then(resolve, reject)
         res.resume()
+        return
+      }
+      if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume()
+        reject(new Error(`GitHub API returned HTTP ${res.statusCode ?? 'unknown'}`))
         return
       }
       const chunks: Buffer[] = []
@@ -85,27 +103,26 @@ function fetchPage(url: string, redirects = 5): Promise<string> {
   })
 }
 
-function parseReleases(html: string): ReleaseInfo[] {
-  const releases: ReleaseInfo[] = []
-  // Format in release description:
-  //   AIDE Stable Release 0.1.144
-  //   <changelog text>
-  //   AIDE Release Date 2026-04-05
-  const pattern = /AIDE Stable Release\s+([\d.]+)\s*([\s\S]*?)AIDE Release Date[^\n]*/g
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(html)) !== null) {
-    releases.push({ version: match[1].trim(), notes: match[2].trim() })
-  }
-  return releases
+function parseReleases(json: string): ReleaseInfo[] {
+  const payload: unknown = JSON.parse(json)
+  if (!Array.isArray(payload)) throw new Error('Unexpected GitHub releases response')
+
+  return (payload as GitHubRelease[]).flatMap(release => {
+    if (release.draft || release.prerelease || typeof release.tag_name !== 'string') return []
+
+    const versionMatch = /^v?(\d+(?:\.\d+)+)$/.exec(release.tag_name.trim())
+    if (!versionMatch) return []
+
+    const body = typeof release.body === 'string' ? release.body.trim() : ''
+    const notesMatch = /AIDE Stable Release\s+v?[\d.]+\s*([\s\S]*?)AIDE Release Date[^\n]*/.exec(body)
+    return [{ version: versionMatch[1], notes: notesMatch?.[1].trim() ?? body }]
+  })
 }
 
 export async function checkForUpdates(): Promise<void> {
   try {
-    const html = await fetchPage(RELEASES_URL)
-    const releases = parseReleases(html)
-    if (releases.length > 0) {
-      state.cachedReleases = releases
-    }
+    const json = await fetchPage(RELEASES_API_URL)
+    state.cachedReleases = parseReleases(json)
     state.lastCheckedAt = Date.now()
     saveState()
     broadcastStatusChanged()

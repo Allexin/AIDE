@@ -4,12 +4,12 @@
  *
  * Usage: node scripts/release.mjs
  *
- * - Fetches previous stable release from GitVerse (fail-fast internet check)
+ * - Fetches previous stable release from GitHub (fail-fast internet check)
  * - Runs npm run build (bumps patch version + builds via electron-vite)
  * - Packages portable zip via electron-builder
  * - Creates git commit + tag
  * - Generates release notes via Claude Code
- * - Prints files to upload to GitVerse
+ * - Prints files to upload to GitHub Releases
  */
 
 import { readFileSync, writeFileSync } from 'fs'
@@ -35,8 +35,8 @@ function readVersion() {
 
 console.log('\n📦 AIDE Release Tool\n')
 
-// Step 1: fetch previous stable release from GitVerse (fail fast before any heavy work)
-console.log('🌐 Fetching previous stable release from GitVerse...')
+// Step 1: fetch previous stable release from GitHub (fail fast before any heavy work)
+console.log('🌐 Fetching previous stable release from GitHub...')
 const prevResult = spawnSync('node', ['scripts/get-prev-release.mjs'], {
   cwd: ROOT,
   encoding: 'utf8'
@@ -143,7 +143,7 @@ console.log(`
 ║         Release v${version.padEnd(24)}║
 ╚══════════════════════════════════════════╝
 
-📤 Upload to GitVerse release:
+📤 Upload to GitHub release:
    release/AIDE-${version}-portable.7z
 
 📋 Paste into release description:
