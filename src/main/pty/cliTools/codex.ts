@@ -28,7 +28,6 @@ import {
 } from './codexScanner'
 import { getCodexUsageInfo } from './codexUsage'
 import { cliLog } from './cliLogger'
-import { createJsonlSmartCompactCapability, runProcess } from './smartCompactJsonl'
 
 const TOOL_ID = 'codex'
 const TOOL_NAME = 'Codex'
@@ -36,66 +35,6 @@ const LOG_CH = 'Codex'
 const CODEX_HOME = join(homedir(), '.codex')
 const AUTH_JSON = join(CODEX_HOME, 'auth.json')
 const CONFIG_TOML = join(CODEX_HOME, 'config.toml')
-
-function smartCompactText(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (!Array.isArray(value)) return ''
-  return value.map((item) => {
-    if (typeof item === 'string') return item
-    if (!item || typeof item !== 'object') return ''
-    const block = item as Record<string, unknown>
-    if (typeof block.text === 'string') return block.text
-    if (typeof block.input_text === 'string') return block.input_text
-    return ''
-  }).join('')
-}
-
-function codexUserText(record: { value: Record<string, unknown> | null }): string {
-  const obj = record.value
-  const payload = obj?.payload as Record<string, unknown> | undefined
-  if (obj?.type === 'event_msg' && payload?.type === 'user_message') {
-    return typeof payload.message === 'string' ? payload.message : ''
-  }
-  if (obj?.type === 'response_item' && payload?.type === 'message' && payload.role === 'user') {
-    return smartCompactText(payload.content)
-  }
-  return ''
-}
-
-function isCodexUserTurnStart(records: Array<{ value: Record<string, unknown> | null }>, index: number): boolean {
-  const record = records[index]
-  const next = records[index + 1]
-  if (!record || !next) return false
-  const obj = record.value
-  const payload = obj?.payload as Record<string, unknown> | undefined
-  if (obj?.type !== 'response_item' || payload?.type !== 'message' || payload.role !== 'user') return false
-  const text = codexUserText(record)
-  return text.length > 0 && codexUserText(next) === text
-}
-
-function codexCompletedTurnLink(
-  records: Array<{ line: number; value: Record<string, unknown> | null }>,
-  index: number
-): string | null {
-  let start = -1
-  for (let i = index; i >= 0; i--) {
-    if (isCodexUserTurnStart(records, i)) { start = i; break }
-  }
-  if (start < 0) return null
-
-  let end = -1
-  for (let i = start + 2; i < records.length; i++) {
-    if (isCodexUserTurnStart(records, i)) break
-    const obj = records[i].value
-    const payload = obj?.payload as Record<string, unknown> | undefined
-    if (obj?.type === 'event_msg' && payload?.type === 'task_complete') {
-      end = i
-      break
-    }
-  }
-  if (end < 0 || index < start || index > end) return null
-  return `turn:${records[start].line}`
-}
 
 const signalByTab = new Map<string, (event: string) => void>()
 
@@ -233,41 +172,6 @@ export const codexTool: CliTool = {
   id: TOOL_ID,
   name: TOOL_NAME,
 
-  smartCompact: createJsonlSmartCompactCapability({
-    locateSessionFile: findCodexSessionFileSync,
-    getStorageInstructions: (sessionFile) => `Codex stores this rollout as JSONL at ${sessionFile}.
-The session_meta record identifies the session and must never be selected. Conversation records are
-event_msg records with payload.type=user_message and response_item records whose payload.type is
-message, reasoning, function_call, or function_call_output. Match function_call.call_id to
-function_call_output.call_id and always select both records. Other records are operational metadata
-and must not be selected.`,
-    runAutonomous: ({ workspace, prompt, onOutput }) => runProcess(
-      'codex',
-      ['exec', '--ephemeral', '--sandbox', 'workspace-write', '--skip-git-repo-check', prompt],
-      { cwd: workspace.directory, env: codexTool.getEnvOverrides?.(), onOutput }
-    ),
-    describeRecord: (record, records) => {
-      const obj = record.value
-      const payload = obj?.payload as Record<string, unknown> | undefined
-      const index = record.line - 1
-      const turnLink = codexCompletedTurnLink(records, index)
-      if (turnLink) {
-        const isUserRecord = obj?.type === 'event_msg' && payload?.type === 'user_message'
-          || obj?.type === 'response_item' && payload?.type === 'message' && payload.role === 'user'
-        const isAssistantRecord = obj?.type === 'event_msg' && payload?.type === 'agent_message'
-          || obj?.type === 'response_item' && payload?.type === 'message' && payload.role === 'assistant'
-        const preview = isUserRecord || isAssistantRecord ? codexUserText(record).trim().slice(0, 500) : ''
-        return {
-          removable: true,
-          role: isUserRecord ? 'user' : isAssistantRecord ? 'assistant' : 'operation',
-          preview,
-          links: [turnLink]
-        }
-      }
-
-      return { removable: false, role: 'metadata', preview: '', links: [] }
-    }
-  }),
   installUrl: 'https://github.com/openai/codex',
 
   // ── Install check ───────────────────────────────────────────────────────────

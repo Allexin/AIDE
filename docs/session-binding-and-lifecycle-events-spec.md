@@ -175,12 +175,6 @@ only needed for the dropped `tool-activity`).
 for one-time trust config; temp-file synthesis is a separate step tied to the
 Claude tool's first launch, not to the project.
 
-**Note — autonomous invocations are intentionally exempt.** `smartCompact`'s
-`runAutonomous` calls `claude -p …` directly via `runProcess`
-(`claudeCode.ts:112`), bypassing `newSessionCommand`/`resumeCommand`. Those runs
-are headless and need no tab binding, so they must **not** get `--settings`/hook
-env — leave them as-is. Flagged here so nobody "fixes" the inconsistency.
-
 ---
 
 ## 5. Per-tab identity injection

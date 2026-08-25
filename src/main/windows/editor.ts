@@ -2,6 +2,7 @@ import { BrowserWindow, shell, dialog } from 'electron'
 import { join, basename } from 'path'
 import { existsSync, appendFileSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
+import { rendererDevUrl } from '../devEnv'
 import { checkAndAcquireLock, releaseLock } from '../lock'
 import { ensureAideDirectory } from '../config/projectConfig'
 import { ensureDefaultToolbar, deployToolbarDocs } from '../config/toolbarConfig'
@@ -52,8 +53,8 @@ export function createEditorWindow(projectPath: string): BrowserWindow {
   const windowTitle = `AIDE — ${folderName}(${projectPath})`
   win.webContents.on('did-finish-load', () => win.setTitle(windowTitle))
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'] + '/?window=editor')
+  if (is.dev && rendererDevUrl) {
+    win.loadURL(rendererDevUrl + '/?window=editor')
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'), {
       query: { window: 'editor' }
@@ -177,8 +178,7 @@ export function openProjectAndTrack(
 
     if (!options.noGlobalState && toSave.length > 0) {
       saveOpenSessions(projectPath, {
-        tabs: toSave,
-        activeSessionId: toSave[0]?.sessionId ?? null
+        tabs: toSave
       })
     }
 

@@ -12,7 +12,6 @@ interface UpdatesConfig {
 interface SessionsConfig {
   maxSessionsInPicker: number
   maxRecentProjects: number
-  maxRestoredSessions: number
 }
 
 interface RemoteCustomButton {
@@ -139,7 +138,7 @@ export default function SettingsApp(): React.ReactElement {
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [reasoning, setReasoning] = useState<ReasoningConfig>({ showPanel: false })
   const [updates, setUpdates] = useState<UpdatesConfig>({ notifyFrequency: 'daily' })
-  const [sessions, setSessions] = useState<SessionsConfig>({ maxSessionsInPicker: 20, maxRecentProjects: 20, maxRestoredSessions: 5 })
+  const [sessions, setSessions] = useState<SessionsConfig>({ maxSessionsInPicker: 20, maxRecentProjects: 20 })
   const [remote, setRemote] = useState<RemoteConfig>({ enabled: false, remoteHost: '', buttonSize: 'medium', buttonRows: [] })
   const [initialRemoteEnabled, setInitialRemoteEnabled] = useState(false)
   const [activatedTools, setActivatedTools] = useState<{ id: string; name: string }[]>([])
@@ -265,28 +264,6 @@ export default function SettingsApp(): React.ReactElement {
                 </select>
                 <p style={{ margin: '4px 0 0', fontSize: 11, color: '#777', lineHeight: 1.5 }}>
                   Updates are always checked daily. This controls how often a notification dialog appears.
-                </p>
-              </div>
-            </fieldset>
-
-            <fieldset style={fieldsetStyle}>
-              <legend style={legendStyle}>Sessions</legend>
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ display: 'block', marginBottom: 4, color: '#999', fontSize: 12 }}>
-                  Sessions to restore on startup
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  value={sessions.maxRestoredSessions}
-                  onChange={(e) =>
-                    setSessions({ ...sessions, maxRestoredSessions: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
-                  }
-                  style={{ ...inputStyle, width: 120 }}
-                />
-                <p style={{ margin: '4px 0 0', fontSize: 11, color: '#777', lineHeight: 1.5 }}>
-                  Number of most recent session tabs reopened when a project launches.<br />
-                  Tabs without a saved session are never restored. Set to 0 to always start fresh.
                 </p>
               </div>
             </fieldset>

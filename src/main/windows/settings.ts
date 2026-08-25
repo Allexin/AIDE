@@ -1,6 +1,7 @@
 import { BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
+import { rendererDevUrl } from '../devEnv'
 
 let settingsWin: BrowserWindow | null = null
 
@@ -36,8 +37,8 @@ export function createSettingsWindow(parentWin?: BrowserWindow): BrowserWindow {
     return { action: 'deny' }
   })
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'] + '/?window=settings')
+  if (is.dev && rendererDevUrl) {
+    win.loadURL(rendererDevUrl + '/?window=settings')
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'), {
       query: { window: 'settings' }

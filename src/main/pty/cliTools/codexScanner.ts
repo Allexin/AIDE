@@ -97,6 +97,12 @@ function extractTextFromUserEvent(payload: Record<string, unknown>): string {
     .trim()
 }
 
+/** Codex records host-provided launch context as a user message in newer rollouts. */
+function isInternalContextMessage(text: string): boolean {
+  const trimmed = text.trim()
+  return trimmed.startsWith('<environment_context>') && trimmed.endsWith('</environment_context>')
+}
+
 function extractSessionIdFromFileName(filePath: string): string {
   const base = filePath.split(/[\\/]/).pop() ?? filePath
   return base.replace(/\.jsonl$/, '').replace(/^rollout-[^-]+-[0-9a-f]+-/, '')
@@ -131,9 +137,11 @@ function extractFirstAndLastUserMessage(lines: string[]): { firstMessage: string
 
       if (obj.type === 'event_msg' && payload.type === 'user_message') {
         text = extractTextFromUserEvent(payload)
+      } else if (obj.type === 'response_item' && payload.type === 'message' && payload.role === 'user') {
+        text = extractTextFromContent(payload.content)
       }
 
-      if (!text) continue
+      if (!text || isInternalContextMessage(text)) continue
       const clipped = text.slice(0, 80)
       if (!firstMessage) firstMessage = clipped
       title = clipped
@@ -354,6 +362,16 @@ function parseMessageBlocks(payload: Record<string, unknown>): { role: 'user' | 
   }
 }
 
+function parseToolInput(payload: Record<string, unknown>): unknown {
+  const raw = payload.arguments ?? payload.input ?? {}
+  if (typeof raw !== 'string' || !raw.trim()) return raw
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return raw
+  }
+}
+
 export function parseCodexHistoryLine(line: string): HistoryEntry | null {
   let obj: CodexRecord
   try {
@@ -366,14 +384,22 @@ export function parseCodexHistoryLine(line: string): HistoryEntry | null {
 
   if (obj.type === 'event_msg' && payload.type === 'user_message') {
     const text = extractTextFromUserEvent(payload)
-    return text ? { role: 'user', blocks: [{ type: 'text', text }] } : null
+    return text && !isInternalContextMessage(text)
+      ? { role: 'user', blocks: [{ type: 'text', text }] }
+      : null
   }
 
   if (obj.type !== 'response_item') return null
 
   if (payload.type === 'message') {
     const parsed = parseMessageBlocks(payload)
-    if (parsed.role !== 'assistant' || parsed.blocks.length === 0) return null
+    if (!parsed.role || parsed.blocks.length === 0) return null
+    if (
+      parsed.role === 'user' &&
+      parsed.blocks.length === 1 &&
+      parsed.blocks[0].type === 'text' &&
+      isInternalContextMessage(parsed.blocks[0].text)
+    ) return null
     return { role: parsed.role, blocks: parsed.blocks }
   }
 
@@ -382,27 +408,19 @@ export function parseCodexHistoryLine(line: string): HistoryEntry | null {
     return text ? { role: 'assistant', blocks: [{ type: 'thinking', thinking: text }] } : null
   }
 
-  if (payload.type === 'function_call') {
-    let input: unknown = {}
-    if (typeof payload.arguments === 'string' && payload.arguments.trim()) {
-      try {
-        input = JSON.parse(payload.arguments)
-      } catch {
-        input = payload.arguments
-      }
-    }
+  if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
     return {
       role: 'assistant',
       blocks: [{
         type: 'tool_use',
         id: String(payload.call_id ?? ''),
         name: String(payload.name ?? 'unknown'),
-        input
+        input: parseToolInput(payload)
       }]
     }
   }
 
-  if (payload.type === 'function_call_output') {
+  if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
     const content = typeof payload.output === 'string'
       ? payload.output
       : JSON.stringify(payload.output ?? '')
@@ -432,7 +450,19 @@ export async function readCodexSessionHistory(filePath: string): Promise<History
     const trimmed = line.trim()
     if (!trimmed) continue
     const entry = parseCodexHistoryLine(trimmed)
-    if (entry) entries.push(entry)
+    if (!entry) continue
+
+    // Older Codex rollouts wrote the same user turn twice: first as an
+    // event_msg/user_message and then as a response_item/message. Newer
+    // rollouts only write the response_item form. Support both schemas without
+    // duplicating turns in sessions that contain the legacy pair.
+    const previous = entries.at(-1)
+    const text = entry.blocks.length === 1 && entry.blocks[0].type === 'text' ? entry.blocks[0].text : null
+    const previousText = previous?.blocks.length === 1 && previous.blocks[0].type === 'text'
+      ? previous.blocks[0].text
+      : null
+    if (entry.role === 'user' && previous?.role === 'user' && text !== null && text === previousText) continue
+    entries.push(entry)
   }
   return entries
 }
@@ -480,6 +510,7 @@ export function watchCodexSessionFile(
   let stopped = false
   let watcher: FSWatcher | null = null
   let offset = 0
+  let previousEntry: HistoryEntry | null = null
 
   try {
     const fd = openSync(filePath, 'r')
@@ -512,7 +543,14 @@ export function watchCodexSessionFile(
         const trimmed = line.trim()
         if (!trimmed) continue
         const entry = parseCodexHistoryLine(trimmed)
-        if (entry && !stopped) onEntry(entry)
+        if (!entry || stopped) continue
+        const text = entry.blocks.length === 1 && entry.blocks[0].type === 'text' ? entry.blocks[0].text : null
+        const previousText = previousEntry?.blocks.length === 1 && previousEntry.blocks[0].type === 'text'
+          ? previousEntry.blocks[0].text
+          : null
+        if (entry.role === 'user' && previousEntry?.role === 'user' && text !== null && text === previousText) continue
+        previousEntry = entry
+        onEntry(entry)
       }
     } finally {
       closeSync(fd)

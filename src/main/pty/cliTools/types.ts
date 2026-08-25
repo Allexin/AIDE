@@ -20,9 +20,6 @@ export interface CliTool {
   readonly id: string
   readonly name: string
 
-  /** Optional direct-session compaction support. */
-  readonly smartCompact?: SmartCompactCapability
-
   /** URL shown in CLI Tools Manager when the tool is not installed. */
   readonly installUrl?: string
 
@@ -199,48 +196,6 @@ export interface CliTool {
 
   /** Clean up tab-related state when a PTY tab is closed. */
   deregisterTab?(tabId: string): void
-}
-
-export interface SmartCompactCandidate {
-  id: string
-  reason: string
-  selected: boolean
-  messages: Array<{ role: string; preview: string }>
-}
-
-export interface SmartCompactAnalysis {
-  analysisId: string
-  candidates: SmartCompactCandidate[]
-  stdout: string
-  stderr: string
-}
-
-export type SmartCompactApplyResult =
-  | { status: 'applied'; removed: number; warning?: string }
-  | { status: 'conflict'; message: string }
-
-export interface SmartCompactCapability {
-  getStorageInstructions(sessionFile: string): string
-  runAutonomous(options: {
-    projectPath: string
-    workspace: { directory: string; sessionFile: string; reportFile: string }
-    prompt: string
-    onOutput?: (stream: 'stdout' | 'stderr', chunk: string) => void
-  }): Promise<{ stdout: string; stderr: string }>
-  analyzeSession(options: {
-    projectPath: string
-    sessionId: string
-    task: string
-    onOutput?: (stream: 'stdout' | 'stderr', chunk: string) => void
-  }): Promise<SmartCompactAnalysis>
-  applyDeletions(options: {
-    projectPath: string
-    sessionId: string
-    analysisId: string
-    candidateIds: string[]
-    force: boolean
-  }): Promise<SmartCompactApplyResult>
-  discardAnalysis(analysisId: string): void
 }
 
 export type HistoryBlock =

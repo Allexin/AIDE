@@ -18,7 +18,7 @@ export function getCommandLineArgumentsHelp(): string {
     '  <projectPath>             Open this project directly.',
     '  --project <projectPath>    Open this project directly.',
     '  --project=<projectPath>    Open this project directly.',
-    '  --no-restore              Start with a fresh CLI tab. Saved AIDE tabs and the latest CLI session are not restored.',
+    '  --no-restore              Exclude saved AIDE tabs from startup suggestions.',
     '  --cli <toolId>            Use a registered CLI tool for the initial tab during this launch only.',
     '  --cli=<toolId>            Use a registered CLI tool for the initial tab during this launch only.',
     '  --no-global-state         Do not add the project to recent projects or read/write saved open sessions.',

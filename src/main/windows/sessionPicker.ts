@@ -1,6 +1,7 @@
 import { BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
+import { rendererDevUrl } from '../devEnv'
 import { pickerEditorMap } from '../pty/registry'
 
 export function createSessionPickerWindow(editorWin: BrowserWindow): BrowserWindow {
@@ -28,8 +29,8 @@ export function createSessionPickerWindow(editorWin: BrowserWindow): BrowserWind
     return { action: 'deny' }
   })
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'] + '/?window=session-picker')
+  if (is.dev && rendererDevUrl) {
+    win.loadURL(rendererDevUrl + '/?window=session-picker')
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'), {
       query: { window: 'session-picker' }

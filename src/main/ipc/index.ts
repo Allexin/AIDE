@@ -35,6 +35,12 @@ import { initCliLogger } from '../pty/cliTools/cliLogger'
 import { createSessionPickerWindow } from '../windows/sessionPicker'
 import { createHistoryViewerWindow, historyViewerDataMap } from '../windows/historyViewer'
 import {
+  createStartupPickerWindow,
+  getStartupPickerContext,
+  resolveStartupPicker,
+  type StartupPickerCandidate
+} from '../windows/startupPicker'
+import {
   spawnButtonProcess,
   killButtonProcess
 } from '../toolbar/processManager'
@@ -228,7 +234,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     return { available: false, changed: [], deleted: [] }
   })
 
-  // ── Terminal: create initial tabs on project open (restore saved sessions) ──
+  // ── Terminal: choose and create initial tabs ────────────────────────────────
   ipcMain.handle('terminal:create-initial', async (event) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender)
     if (!senderWin) return null
@@ -253,19 +259,117 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
       })
     }
 
-    const saved = projectPath && useGlobalProjectState && !startupOptions.noRestore ? loadOpenSessions(projectPath) : null
-    if (saved) {
-      saved.tabs = saved.tabs.map((t) => ({ ...t, toolId: t.toolId ?? 'claude-code' }))
+    const activated = getActivatedTools()
+    const registered = getRegisteredTools()
+    const selectableTools = registered
+      .filter((tool) => activated.includes(tool.id) || tool.id === startupOptions.toolId)
+      .map((tool) => ({ id: tool.id, name: tool.name }))
+    if (selectableTools.length === 0) {
+      const fallback = getDefaultTool(activated)
+      selectableTools.push({ id: fallback.id, name: fallback.name })
     }
-    const result = await ptyMgr.createInitialTabs(
-      saved?.tabs ?? undefined,
-      saved?.activeSessionId ?? null,
-      getActivatedTools(),
-      startupOptions,
-      getAppConfig().sessions.maxRestoredSessions
-    )
+
+    const configuredToolId = projectPath ? readProjectSettings(projectPath).defaultToolId : undefined
+    const requestedToolId = startupOptions.toolId ?? configuredToolId
+    const defaultToolId = selectableTools.some((tool) => tool.id === requestedToolId)
+      ? requestedToolId!
+      : selectableTools[0].id
+
+    const saved = projectPath && useGlobalProjectState && !startupOptions.noRestore
+      ? loadOpenSessions(projectPath)
+      : null
+    const savedTabs = saved?.tabs
+      .map((entry) => ({ ...entry, toolId: entry.toolId ?? 'claude-code' }))
+      .filter((entry) => !!entry.sessionId) ?? []
+    let candidates: StartupPickerCandidate[]
+
+    if (savedTabs.length > 0) {
+      candidates = savedTabs.map((entry, index) => {
+        const tool = getToolById(entry.toolId)
+        const available = !!tool && (tool.id === 'plain-shell' || activated.includes(tool.id))
+        return {
+          ...entry,
+          key: `saved:${index}`,
+          firstMessage: '',
+          mtime: 0,
+          toolName: tool?.name ?? entry.toolId,
+          available,
+          unavailableReason: available ? undefined : 'CLI is not active'
+        }
+      })
+    } else {
+      const scanned = await Promise.all(activated.map(async (toolId) => {
+        const tool = getToolById(toolId)
+        if (!tool) return []
+        try {
+          const sessions = await tool.scanSessions(projectPath)
+          return sessions.map((session) => ({
+            sessionId: session.sessionId,
+            title: session.slug,
+            toolId: tool.id,
+            key: `recent:${tool.id}:${session.sessionId}`,
+            firstMessage: session.firstMessage ?? '',
+            mtime: session.lastModified.getTime(),
+            toolName: tool.name,
+            available: true
+          }))
+        } catch {
+          return []
+        }
+      }))
+      candidates = scanned.flat().sort((a, b) => b.mtime - a.mtime).slice(0, 5)
+    }
+
+    const initialSessionKey = candidates[0]?.key ?? null
+    const selection = await createStartupPickerWindow({
+      editorWin: senderWin,
+      projectPath,
+      candidates,
+      tools: selectableTools,
+      defaultToolId,
+      initialSessionKey
+    })
+    if (senderWin.isDestroyed()) return null
+    if (selection.sessions.length === 0 && projectPath) {
+      const settings = readProjectSettings(projectPath)
+      writeProjectSettings(projectPath, { ...settings, defaultToolId: selection.newToolId })
+    }
+    const result = await ptyMgr.createInitialTabs(selection.sessions, selection.newToolId, activated)
 
     return result
+  })
+
+  ipcMain.handle('startup-picker:get-data', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) return null
+    const context = getStartupPickerContext(win)
+    if (!context) return null
+    return {
+      candidates: context.candidates,
+      tools: context.tools,
+      defaultToolId: context.defaultToolId,
+      initialSessionKey: context.initialSessionKey
+    }
+  })
+
+  ipcMain.handle('startup-picker:get-history', async (event, sessionKey: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) return []
+    const context = getStartupPickerContext(win)
+    const candidate = context?.candidates.find((entry) => entry.key === sessionKey)
+    if (!context || !candidate?.sessionId || !candidate.available) return []
+    const tool = getToolById(candidate.toolId)
+    if (!tool?.getSessionHistory) return []
+    try {
+      return await tool.getSessionHistory(context.projectPath, candidate.sessionId)
+    } catch {
+      return []
+    }
+  })
+
+  ipcMain.handle('startup-picker:confirm', (event, selectedKeys: string[], newToolId: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (win) resolveStartupPicker(win, selectedKeys, newToolId)
   })
 
   // ── Terminal: create new session tab ─────────────────────────────────────────
@@ -323,88 +427,6 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const tabInfo = await ptyMgr.createNewSessionWithPrompt(prompt, toolId, getActivatedTools())
     senderWin.webContents.send('terminal:new-tab', tabInfo)
     return tabInfo
-  })
-
-  ipcMain.handle('smart-compact:supported', (_event, toolId: string) => {
-    return !!getToolById(toolId)?.smartCompact
-  })
-
-  ipcMain.handle('smart-compact:analyze', async (event, tabId: string, task: string) => {
-    const senderWin = BrowserWindow.fromWebContents(event.sender)
-    if (!senderWin) return { ok: false, error: 'Editor window not found' }
-    const ptyMgr = ptyRegistry.get(senderWin)
-    if (!ptyMgr) return { ok: false, error: 'Terminal manager not found' }
-    const tab = ptyMgr.getTabs().find((item) => item.tabId === tabId)
-    if (!tab?.sessionId) return { ok: false, error: 'Session is not ready' }
-    const tool = getToolById(tab.toolId)
-    if (!tool?.smartCompact) return { ok: false, error: 'Smart Compact is not supported for this CLI' }
-    let projectPath = ''
-    for (const [path, win] of openProjects) {
-      if (win === senderWin) { projectPath = path; break }
-    }
-    const target = {
-      tabId,
-      sessionId: tab.sessionId,
-      toolId: tab.toolId,
-      toolName: tab.toolName,
-      title: tab.toolName
-    }
-    let suspended = false
-    try {
-      await ptyMgr.suspendCli(tabId)
-      suspended = true
-      const analysis = await tool.smartCompact.analyzeSession({
-        projectPath,
-        sessionId: tab.sessionId,
-        task,
-        onOutput: (stream, chunk) => {
-          if (!senderWin.isDestroyed()) {
-            senderWin.webContents.send('smart-compact:output', { tabId, stream, chunk })
-          }
-        }
-      })
-      return { ok: true, target, ...analysis }
-    } catch (error) {
-      if (suspended) ptyMgr.resumeCli(tabId, tab.sessionId)
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
-    }
-  })
-
-  ipcMain.handle('smart-compact:apply', async (
-    event,
-    target: { tabId: string; sessionId: string; toolId: string; toolName: string; title: string },
-    analysisId: string,
-    candidateIds: string[],
-    force: boolean
-  ) => {
-    const senderWin = BrowserWindow.fromWebContents(event.sender)
-    if (!senderWin) throw new Error('Editor window not found')
-    let projectPath = ''
-    for (const [path, win] of openProjects) {
-      if (win === senderWin) { projectPath = path; break }
-    }
-    const capability = getToolById(target.toolId)?.smartCompact
-    if (!capability) throw new Error('Smart Compact is no longer supported for this CLI')
-    return capability.applyDeletions({
-      projectPath,
-      sessionId: target.sessionId,
-      analysisId,
-      candidateIds,
-      force
-    })
-  })
-
-  ipcMain.handle('smart-compact:resume', async (
-    event,
-    target: { tabId: string; sessionId: string; toolId: string; toolName: string; title: string },
-    analysisId?: string
-  ) => {
-    const senderWin = BrowserWindow.fromWebContents(event.sender)
-    if (!senderWin) throw new Error('Editor window not found')
-    const ptyMgr = ptyRegistry.get(senderWin)
-    if (!ptyMgr) throw new Error('Terminal manager not found')
-    if (analysisId) getToolById(target.toolId)?.smartCompact?.discardAnalysis(analysisId)
-    ptyMgr.resumeCli(target.tabId, target.sessionId)
   })
 
   // ── CLI tools: list registered tools ──────────────────────────────────────────

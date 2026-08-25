@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
+import { rendererDevUrl } from '../devEnv'
 
 export function openCliToolsWindow(parentWin: BrowserWindow): BrowserWindow {
   const win = new BrowserWindow({
@@ -27,8 +28,8 @@ export function openCliToolsWindow(parentWin: BrowserWindow): BrowserWindow {
     return { action: 'deny' }
   })
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'] + '/?window=cli-tools')
+  if (is.dev && rendererDevUrl) {
+    win.loadURL(rendererDevUrl + '/?window=cli-tools')
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'), {
       query: { window: 'cli-tools' }

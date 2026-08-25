@@ -1,6 +1,7 @@
 import { BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
+import { rendererDevUrl } from '../devEnv'
 
 export function createPickerWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -25,8 +26,8 @@ export function createPickerWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'] + '/?window=picker')
+  if (is.dev && rendererDevUrl) {
+    win.loadURL(rendererDevUrl + '/?window=picker')
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'), {
       query: { window: 'picker' }

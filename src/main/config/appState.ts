@@ -15,7 +15,6 @@ export interface SavedSessionEntry {
 
 export interface ProjectOpenSessions {
   tabs: SavedSessionEntry[]
-  activeSessionId: string | null
 }
 
 export interface AppState {

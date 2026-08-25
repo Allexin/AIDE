@@ -6,8 +6,7 @@ Proposed implementation plan.
 
 This document records the decision to replace AIDE's Codex JSONL session
 integration with the SQL-backed Codex app-server protocol. It covers session
-listing, history, status, binding, live updates, usage data, and removal of
-Smart Compact.
+listing, history, status, binding, live updates, and usage data.
 
 ## Decision
 
@@ -42,8 +41,7 @@ matches the project as a picker session. That creates several problems:
 - file watching is used as an indirect session lifecycle protocol;
 - live binding depends on timing, directory scans, and fallback heuristics;
 - reading large transcripts has previously caused excessive main-process
-  memory use;
-- AIDE's Smart Compact modifies storage owned by another application.
+  memory use.
 
 Codex already maintains the information AIDE needs in its state and history
 databases and exposes it through app-server:
@@ -334,24 +332,6 @@ the rate-limit update notification for refreshes. Preserve the existing cache
 only as a short-lived UI resilience cache; it must not be populated by rollout
 scanning.
 
-## Remove Smart Compact
-
-Smart Compact is out of scope for the new storage architecture and will be
-removed, not ported.
-
-Remove:
-
-- the Codex `smartCompact` capability;
-- Smart Compact IPC handlers and preload APIs;
-- terminal dialog and renderer state;
-- `SmartCompactCapability` and related generic types if no other tool uses
-  them;
-- `smartCompactJsonl.ts` if it becomes unused;
-- Smart Compact documentation and settings references.
-
-Native Codex compaction continues to work and is observed only through the
-context compaction notification.
-
 ## Code Removal
 
 After the SQL-backed path is complete, remove Codex-specific JSONL code from
@@ -424,7 +404,6 @@ replace it with polling heuristics.
 ### Phase 5: Usage and cleanup
 
 - Replace rollout usage scanning with app-server rate-limit APIs.
-- Remove Smart Compact.
 - Remove remaining Codex JSONL scanner/watcher/parser code.
 - Remove dead IPC/preload/renderer APIs.
 - Update architecture documentation.
@@ -496,7 +475,6 @@ The migration is complete when:
   unavailable when absent from SQL;
 - usage information no longer comes from rollout tails;
 - desktop and remote lists return the same sessions;
-- Smart Compact and all associated UI/API code are removed;
 - app-server failures never activate a JSONL fallback.
 
 ## Consequences

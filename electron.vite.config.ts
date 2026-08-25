@@ -23,6 +23,7 @@ export default defineConfig({
           picker: resolve(__dirname, 'src/preload/picker.ts'),
           editor: resolve(__dirname, 'src/preload/editor.ts'),
           sessionPicker: resolve(__dirname, 'src/preload/sessionPicker.ts'),
+          startupPicker: resolve(__dirname, 'src/preload/startupPicker.ts'),
           accountManager: resolve(__dirname, 'src/preload/accountManager.ts'),
           settings: resolve(__dirname, 'src/preload/settings.ts'),
           cliTools: resolve(__dirname, 'src/preload/cliTools.ts'),

@@ -1,6 +1,7 @@
 import { BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
+import { rendererDevUrl } from '../devEnv'
 
 let accountManagerWin: BrowserWindow | null = null
 
@@ -35,8 +36,8 @@ export function createAccountManagerWindow(parentWin?: BrowserWindow): BrowserWi
     return { action: 'deny' }
   })
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'] + '/?window=account-manager')
+  if (is.dev && rendererDevUrl) {
+    win.loadURL(rendererDevUrl + '/?window=account-manager')
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'), {
       query: { window: 'account-manager' }

@@ -1,3 +1,6 @@
+// Must be first: captures the electron-vite dev URL and strips dev-only env
+// vars before anything spawns a child process that would inherit them.
+import { strippedDevEnv } from './devEnv'
 import { app, BrowserWindow } from 'electron'
 import { initDiagnostics, logEvent } from './diagnostics'
 import { initAppConfig } from './config/appConfig'
@@ -17,6 +20,15 @@ import { flush as flushSessionMetaCache } from './pty/cliTools/sessionMetaCache'
 
 // Started before anything else so that a crash during startup is still recorded.
 initDiagnostics()
+
+// Recorded after diagnostics is up: a dev launch strips launcher-injected env
+// vars so child processes see the same environment a packaged build gives them.
+if (strippedDevEnv.vars.length > 0 || strippedDevEnv.pathEntries.length > 0) {
+  logEvent('dev-env-stripped', {
+    vars: strippedDevEnv.vars,
+    pathEntries: strippedDevEnv.pathEntries
+  })
+}
 
 // Map of projectPath → editor BrowserWindow
 const openProjects = new Map<string, BrowserWindow>()

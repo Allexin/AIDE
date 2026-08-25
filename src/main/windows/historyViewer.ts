@@ -1,6 +1,7 @@
 import { BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
+import { rendererDevUrl } from '../devEnv'
 import type { HistoryEntry } from '../pty/cliTools/types'
 import { getToolById } from '../pty/cliTools/registry'
 
@@ -82,8 +83,8 @@ export function createHistoryViewerWindow(context: HistoryViewerContext): Browse
   // Start live subscription only after the renderer has loaded its IPC listeners
   win.webContents.once('did-finish-load', () => subscribeToHistory(win, context))
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'] + '/?window=history-viewer')
+  if (is.dev && rendererDevUrl) {
+    win.loadURL(rendererDevUrl + '/?window=history-viewer')
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'), {
       query: { window: 'history-viewer' }

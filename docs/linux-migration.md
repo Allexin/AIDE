@@ -75,7 +75,7 @@ Goal: **run AIDE from source** on Linux via `npm run dev` (`electron-vite dev`) 
 - **File:** `src/main/pty/cliTools/claudeCode.ts:517` (`resolveOwnerPid`)
 - **Now:** shells out to `powershell.exe` → `Get-CimInstance Win32_Process` and walks ParentProcessId.
 - **Change:** call `platform.listProcesses()` and reuse the shared tree walk. The ancestor-chain logic is already OS-agnostic; only the data source changes.
-- Without this, new sessions are misassigned to tabs (or not bound at all), which breaks resume, titles, and Smart Compact.
+- Without this, new sessions are misassigned to tabs (or not bound at all), which breaks resume and titles.
 
 ### 1.3 Lock-file validation
 - **File:** `src/main/lock.ts:69` (`getProcessStartTimeMs`)

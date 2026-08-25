@@ -9,7 +9,6 @@ import { writeTabHookSettings, cleanupTabHookSettings } from './claudeHooks'
 import { scanSessions as scanDiskSessions, watchSessionsDir, getSessionsDir, readSessionPreview, readSessionHistory, parseHistoryLine } from './claudeCodeScanner'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
-import { createJsonlSmartCompactCapability, runProcess } from './smartCompactJsonl'
 import { findExecutable, listProcesses } from '../../platform'
 import { resolveOwnerPidFromSnapshot } from '../../platform/processTree'
 import {
@@ -168,72 +167,6 @@ function syncActiveClaudeCredentials(accountId: string, identifier: string): voi
 export const claudeCodeTool: CliTool = {
   id: 'claude-code',
   name: TOOL_NAME,
-
-  smartCompact: createJsonlSmartCompactCapability({
-    locateSessionFile: (projectPath, sessionId) => join(getSessionsDir(projectPath), `${sessionId}.jsonl`),
-    getStorageInstructions: (sessionFile) => `Claude Code stores this session as JSONL at ${sessionFile}.
-Records with type "user" or "assistant" contain message.content. Content may be text or an array
-containing text, thinking, tool_use, and tool_result blocks. Match tool_use.id to
-tool_result.tool_use_id and always select both records. Records with isMeta=true and records whose
-type is not user/assistant are session metadata and must never be selected.`,
-    runAutonomous: ({ workspace, prompt, onOutput }) => runProcess(
-      'claude',
-      ['-p', '--no-session-persistence', '--permission-mode', 'acceptEdits', '--tools', 'Read,Write', prompt],
-      { cwd: workspace.directory, env: claudeCodeTool.getEnvOverrides?.(), onOutput }
-    ),
-    describeRecord: (record) => {
-      const obj = record.value
-      if (!obj || (obj.type !== 'user' && obj.type !== 'assistant') || obj.isMeta === true) {
-        return { removable: false, role: 'metadata', preview: '', links: [] }
-      }
-      const message = obj.message as Record<string, unknown> | undefined
-      const content = message?.content
-      const blocks = Array.isArray(content) ? content : [content]
-      const texts: string[] = []
-      const links: string[] = []
-      for (const block of blocks) {
-        if (typeof block === 'string') texts.push(block)
-        else if (block && typeof block === 'object') {
-          const b = block as Record<string, unknown>
-          if (typeof b.text === 'string') texts.push(b.text)
-          if (b.type === 'tool_use' && typeof b.id === 'string') links.push(`tool:${b.id}`)
-          if (b.type === 'tool_result' && typeof b.tool_use_id === 'string') links.push(`tool:${b.tool_use_id}`)
-        }
-      }
-      return {
-        removable: true,
-        role: String(obj.type),
-        preview: texts.join('\n').trim().slice(0, 500) || `[${String(obj.type)} record]`,
-        links
-      }
-    },
-    prepareRetainedRecords: (retained, original) => {
-      const retainedUuids = new Set(retained.flatMap((record) => {
-        const uuid = record.value?.uuid
-        return typeof uuid === 'string' ? [uuid] : []
-      }))
-      const parentByUuid = new Map<string, string | null>()
-      for (const record of original) {
-        const uuid = record.value?.uuid
-        if (typeof uuid !== 'string') continue
-        const parent = record.value?.parentUuid
-        parentByUuid.set(uuid, typeof parent === 'string' && parent ? parent : null)
-      }
-
-      return retained.map((record) => {
-        const value = record.value
-        if (!value || typeof value.parentUuid !== 'string' || retainedUuids.has(value.parentUuid)) return record
-        let parent: string | null = value.parentUuid
-        const visited = new Set<string>()
-        while (parent && !retainedUuids.has(parent) && !visited.has(parent)) {
-          visited.add(parent)
-          parent = parentByUuid.get(parent) ?? null
-        }
-        const next = { ...value, parentUuid: parent }
-        return { ...record, value: next, raw: JSON.stringify(next) }
-      })
-    }
-  }),
 
   installUrl: 'https://claude.ai/download',
 

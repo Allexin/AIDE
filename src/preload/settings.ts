@@ -27,7 +27,6 @@ export interface UpdatesConfig {
 export interface SessionsConfig {
   maxSessionsInPicker: number
   maxRecentProjects: number
-  maxRestoredSessions: number
 }
 
 export interface RemoteCustomButton {
