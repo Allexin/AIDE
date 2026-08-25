@@ -1,6 +1,6 @@
 {
   "name": "aide",
-  "version": "0.1.335",
+  "version": "0.1.339",
   "description": "AI-Driven Code Editor",
   "private": true,
   "main": "out/main/index.js",
@@ -22,6 +22,8 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "better-sqlite3": "^11.10.0",
+    "dompurify": "^3.2.7",
+    "marked": "^14.0.0",
     "monaco-editor": "^0.55.1",
     "node-pty": "^1.1.0",
     "qrcode": "^1.5.4",

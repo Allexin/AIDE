@@ -20,6 +20,7 @@ import { addLogObserver } from '../pty/cliTools/cliLogger'
 import { addFsChangeObserver, addGitStatusObserver } from '../filetree/watcher'
 import { logEvent } from '../diagnostics'
 import { runGitStatus } from '../filetree/gitStatus'
+import type { HistoryEntry } from '../pty/cliTools/types'
 
 const AGGREGATOR_PORT = 3847
 const SESSION_TTL = 24 * 60 * 60 * 1000  // 24 hours
@@ -49,6 +50,16 @@ interface RemoteTreeNode {
   relativePath: string
   type: 'file' | 'directory'
   size?: number
+}
+
+interface RemoteHistoryPage {
+  entries: HistoryEntry[]
+  nextBefore: number | null
+  hasMore: boolean
+  total: number
+  toolName: string
+  sessionId: string | null
+  available: boolean
 }
 
 function getLocalIps(): string[] {
@@ -289,6 +300,31 @@ export class RemoteServer {
 
     allSessions.sort((a, b) => b.mtime - a.mtime)
     return { sessions: allSessions.slice(offset, offset + limit), total: allSessions.length }
+  }
+
+  private async getHistoryPage(projectPath: string, tabId: string, before: number | null, limit: number): Promise<RemoteHistoryPage> {
+    const tab = this.getProjectTabs(projectPath).find((item) => item.tabId === tabId)
+    if (!tab?.sessionId) {
+      return { entries: [], nextBefore: null, hasMore: false, total: 0, toolName: tab?.toolName ?? '', sessionId: null, available: false }
+    }
+
+    const tool = getToolById(tab.toolId)
+    if (!tool?.getSessionHistory) {
+      return { entries: [], nextBefore: null, hasMore: false, total: 0, toolName: tab.toolName, sessionId: tab.sessionId, available: false }
+    }
+
+    const allEntries = await tool.getSessionHistory(projectPath, tab.sessionId)
+    const end = before === null ? allEntries.length : Math.max(0, Math.min(allEntries.length, before))
+    const start = Math.max(0, end - limit)
+    return {
+      entries: allEntries.slice(start, end),
+      nextBefore: start > 0 ? start : null,
+      hasMore: start > 0,
+      total: allEntries.length,
+      toolName: tab.toolName,
+      sessionId: tab.sessionId,
+      available: true
+    }
   }
 
   private resolveRemoteFilePath(projectPath: string, relPath: string): { fullPath: string; relativePath: string } | null {
@@ -857,6 +893,20 @@ export class RemoteServer {
       return
     }
 
+    if (path === '/api/history' && req.method === 'GET') {
+      const port = Number(urlObj.searchParams.get('port'))
+      const projectId = urlObj.searchParams.get('project') ?? ''
+      const tabId = urlObj.searchParams.get('tab') ?? ''
+      const before = urlObj.searchParams.has('before') ? Math.max(0, Number(urlObj.searchParams.get('before')) || 0) : null
+      const limit = Math.max(1, Math.min(50, Number(urlObj.searchParams.get('limit') ?? 10) || 10))
+      if (!port || !tabId || !this.registry.has(this.registryKey(port, projectId))) {
+        res.writeHead(404); res.end('Project or tab not found'); return
+      }
+      const query = `/api/history?project=${encodeURIComponent(projectId)}&tab=${encodeURIComponent(tabId)}&limit=${limit}${before === null ? '' : `&before=${before}`}`
+      this.proxyToInstance(port, query, res)
+      return
+    }
+
     if (path === '/api/sessions/resume' && req.method === 'POST') {
       const port = Number(urlObj.searchParams.get('port'))
       const projectId = urlObj.searchParams.get('project') ?? ''
@@ -1049,6 +1099,8 @@ export class RemoteServer {
       'xterm.js':    { path: join(app.getAppPath(), 'node_modules/@xterm/xterm/lib/xterm.js'),        type: 'application/javascript' },
       'xterm.css':   { path: join(app.getAppPath(), 'node_modules/@xterm/xterm/css/xterm.css'),        type: 'text/css' },
       'addon-fit.js':{ path: join(app.getAppPath(), 'node_modules/@xterm/addon-fit/lib/addon-fit.js'), type: 'application/javascript' },
+      'marked.js':   { path: join(app.getAppPath(), 'node_modules/marked/lib/marked.umd.js'),          type: 'application/javascript' },
+      'purify.js':   { path: join(app.getAppPath(), 'node_modules/dompurify/dist/purify.min.js'),      type: 'application/javascript' },
     }
     const file = STATIC_FILES[filename]
     if (!file) { res.writeHead(404); res.end(); return }
@@ -1150,6 +1202,23 @@ export class RemoteServer {
       }).catch(() => {
         res.writeHead(500)
         res.end('Failed to load sessions')
+      })
+      return
+    }
+
+    if (path === '/api/history' && req.method === 'GET') {
+      const projectPath = urlObj.searchParams.get('project') ?? ''
+      const tabId = urlObj.searchParams.get('tab') ?? ''
+      const before = urlObj.searchParams.has('before') ? Math.max(0, Number(urlObj.searchParams.get('before')) || 0) : null
+      const limit = Math.max(1, Math.min(50, Number(urlObj.searchParams.get('limit') ?? 10) || 10))
+      if (!this.findProjectWindow(projectPath) || !tabId) {
+        res.writeHead(404); res.end('Project or tab not found'); return
+      }
+      this.getHistoryPage(projectPath, tabId, before, limit).then((page) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(page))
+      }).catch(() => {
+        res.writeHead(500); res.end('Failed to load history')
       })
       return
     }
@@ -1295,6 +1364,7 @@ export class RemoteServer {
   private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
     let authenticated = false
     let activeTabId: string | null = null
+    let historyCleanup: (() => void) | null = null
     const projectPath = new URL(req.url ?? '/', 'http://x').searchParams.get('project') ?? ''
 
     const send = (data: object): void => {
@@ -1405,6 +1475,26 @@ export class RemoteServer {
             this.logWatchers.add(ws)
             break
           }
+          case 'history-subscribe': {
+            historyCleanup?.()
+            historyCleanup = null
+            const tabId = String(msg.tabId ?? activeTabId ?? '')
+            const tab = (projectPath ? this.getProjectTabs(projectPath) : this.bridge.getAllTabs()).find((item) => item.tabId === tabId)
+            const tool = tab ? getToolById(tab.toolId) : null
+            if (!projectPath || !tab?.sessionId || !tool?.subscribeToSessionHistory) {
+              send({ type: 'history-subscribed', tabId, available: false })
+              break
+            }
+            historyCleanup = tool.subscribeToSessionHistory(projectPath, tab.sessionId, (entry) => {
+              send({ type: 'history-entry', tabId, entry })
+            })
+            send({ type: 'history-subscribed', tabId, available: true })
+            break
+          }
+          case 'history-unsubscribe':
+            historyCleanup?.()
+            historyCleanup = null
+            break
         }
       } catch {}
     })
@@ -1414,6 +1504,8 @@ export class RemoteServer {
       this.toolbarWatchers.delete(ws)
       this.logWatchers.delete(ws)
       this.fileWatchers.delete(ws)
+      historyCleanup?.()
+      historyCleanup = null
     })
   }
 }
@@ -2054,6 +2146,27 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     #tb-log { flex: 1; min-height: 0; overflow-y: auto; font: 11px/1.5 monospace; padding: 4px 8px; }
     #tb-log p { margin: 0; white-space: pre-wrap; word-break: break-all; color: #ccc; }
     #tb-log .tb-sep { color: #888; }
+    #history-panel { display: none; position: absolute; inset: 0; z-index: 5; min-height: 0; flex-direction: column; background: #1e1e1e; }
+    body.history-open #history-panel { display: flex; }
+    #history-head { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: #252526; border-bottom: 1px solid #3d3d3d; }
+    #history-title { flex: 1; min-width: 0; color: #d4d4d4; font: 13px/1.3 monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #history-new { display: none; flex-shrink: 0; padding: 4px 8px; color: #fff; background: #0e639c; border: 0; border-radius: 10px; font: 11px/1 monospace; cursor: pointer; }
+    #history-close { background: none; border: 0; color: #999; font: 18px/1 monospace; cursor: pointer; padding: 2px 6px; }
+    #history-view { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; color: #d4d4d4; font: 13px/1.5 system-ui, sans-serif; }
+    .history-state { padding: 16px; color: #858585; font: 12px/1.5 monospace; text-align: center; }
+    .history-entry { padding: 10px 14px; border-bottom: 1px solid #2d2d2d; }
+    .history-role { margin-bottom: 5px; color: #4ec9b0; font: bold 11px/1.3 monospace; text-transform: uppercase; letter-spacing: .04em; }
+    .history-entry.user .history-role { color: #569cd6; }
+    .history-md { overflow-wrap: anywhere; }
+    .history-md > :first-child { margin-top: 0; }
+    .history-md > :last-child { margin-bottom: 0; }
+    .history-md p, .history-md ul, .history-md ol, .history-md blockquote, .history-md pre { margin: 7px 0; }
+    .history-md ul, .history-md ol { padding-left: 22px; }
+    .history-md blockquote { padding-left: 10px; color: #9a9a9a; border-left: 3px solid #555; }
+    .history-md code { padding: 1px 4px; background: #2a2a2a; border-radius: 3px; font: 12px/1.4 Consolas, monospace; }
+    .history-md pre { padding: 9px; overflow-x: auto; background: #181818; border: 1px solid #333; border-radius: 4px; }
+    .history-md pre code { padding: 0; background: transparent; }
+    .history-md a { color: #4fc3f7; }
     body.size-small .cbtn, body.size-small .tb-btn { padding: 3px 7px; font-size: 11px; }
     body.size-large .cbtn, body.size-large .tb-btn { padding: 7px 14px; font-size: 14px; }
     .tb-extra-row { flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: #252526; border-bottom: 1px solid #3d3d3d; overflow-x: auto; }
@@ -2128,6 +2241,14 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
         <div id="viewer-body"><div class="viewer-placeholder">Select a file to preview it.</div></div>
         <div id="file-toast"></div>
       </section>
+      <section id="history-panel">
+        <div id="history-head">
+          <div id="history-title">History</div>
+          <button id="history-new"></button>
+          <button id="history-close" title="Close">×</button>
+        </div>
+        <div id="history-view"><div class="history-state">Open History to load messages.</div></div>
+      </section>
     </aside>
     <div id="files-backdrop"></div>
     <div id="file-context-menu"></div>
@@ -2149,6 +2270,8 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
   </div>
   <script src="/static/xterm.js"></script>
   <script src="/static/addon-fit.js"></script>
+  <script src="/static/marked.js"></script>
+  <script src="/static/purify.js"></script>
   <script>
     var port = ${port}
     var projectId = ${projectIdJson}
@@ -2165,6 +2288,17 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     var logBuf = {}
     var logActiveChannel = null
     var filesOpen = window.matchMedia && window.matchMedia('(min-width: 900px)').matches
+    var historyOpen = false
+    var historyRestoreFilesOpen = filesOpen
+    var historyLoading = false
+    var historyLoaded = false
+    var historyBefore = null
+    var historyHasMore = false
+    var historyTotal = 0
+    var historyToolName = ''
+    var historyPending = []
+    var historyNewCount = 0
+    var historyRequest = 0
     var treeCache = {}
     var expandedDirs = new Set([''])
     var selectedFile = null
@@ -2238,6 +2372,7 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     function applyFilesOpen() {
       document.body.classList.toggle('files-open', filesOpen)
       document.body.classList.toggle('file-preview', filePreviewOpen)
+      document.body.classList.toggle('history-open', historyOpen)
       setTimeout(doResize, 20)
     }
     function showFileTree() {
@@ -2456,7 +2591,206 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
       if (!inputMode) renderButtons()
     }
     function closeFiles() {
+      if (historyOpen) {
+        closeHistory()
+        return
+      }
       filesOpen = false
+      applyFilesOpen()
+      if (!inputMode) renderButtons()
+    }
+
+    // --- Session history drawer ---
+    function historyApi(before) {
+      var url = '/api/history?port=' + port + '&project=' + encodeURIComponent(projectId) + '&tab=' + encodeURIComponent(activeTabId || '') + '&limit=10'
+      return before == null ? url : url + '&before=' + encodeURIComponent(before)
+    }
+    function historyBlockMarkdown(block) {
+      if (!block) return ''
+      if (block.type === 'text') return block.text || ''
+      var NL = String.fromCharCode(10)
+      if (block.type === 'thinking') {
+        return '> **Thinking**' + NL + '>' + NL + String(block.thinking || '').split(NL).map(function(line) { return '> ' + line }).join(NL)
+      }
+      var fence = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96)
+      if (block.type === 'tool_use') {
+        var input = ''
+        try { input = JSON.stringify(block.input, null, 2) } catch (err) { input = String(block.input || '') }
+        return '**' + String(block.name || 'tool') + '**' + NL + NL + fence + 'json' + NL + input + NL + fence
+      }
+      if (block.type === 'tool_result') {
+        var content = block.content
+        if (Array.isArray(content)) content = content.filter(function(item) { return item && item.type === 'text' }).map(function(item) { return item.text || '' }).join(NL)
+        return '**Result**' + NL + NL + fence + NL + String(content || '') + NL + fence
+      }
+      return ''
+    }
+    function renderHistoryMarkdown(entry) {
+      var NL = String.fromCharCode(10)
+      var source = (entry.blocks || []).map(historyBlockMarkdown).filter(Boolean).join(NL + NL)
+      try {
+        var html = window.marked.parse(source, { gfm: true, breaks: true })
+        return window.DOMPurify.sanitize(html)
+      } catch (err) {
+        return '<p>' + esc(source).split(NL).join('<br>') + '</p>'
+      }
+    }
+    function makeHistoryEntry(entry) {
+      var row = document.createElement('article')
+      row.className = 'history-entry ' + (entry.role === 'user' ? 'user' : 'assistant')
+      var role = document.createElement('div')
+      role.className = 'history-role'
+      role.textContent = entry.role === 'user' ? 'You' : (historyToolName || 'Assistant')
+      var body = document.createElement('div')
+      body.className = 'history-md'
+      body.innerHTML = renderHistoryMarkdown(entry)
+      Array.prototype.forEach.call(body.querySelectorAll('a'), function(link) {
+        link.target = '_blank'
+        link.rel = 'noopener noreferrer'
+      })
+      row.appendChild(role)
+      row.appendChild(body)
+      return row
+    }
+    function setHistoryState(text) {
+      var view = document.getElementById('history-view')
+      view.innerHTML = ''
+      var state = document.createElement('div')
+      state.className = 'history-state'
+      state.textContent = text
+      view.appendChild(state)
+    }
+    function updateHistoryHeader() {
+      var title = 'History'
+      if (historyToolName) title += ' · ' + historyToolName
+      if (historyLoaded) title += ' · ' + historyTotal
+      document.getElementById('history-title').textContent = title
+      var badge = document.getElementById('history-new')
+      badge.style.display = historyNewCount > 0 ? 'block' : 'none'
+      badge.textContent = historyNewCount + ' new'
+    }
+    function isHistoryNearBottom() {
+      var view = document.getElementById('history-view')
+      return view.scrollHeight - view.scrollTop - view.clientHeight < 80
+    }
+    function scrollHistoryToBottom() {
+      var view = document.getElementById('history-view')
+      view.scrollTop = view.scrollHeight
+      historyNewCount = 0
+      updateHistoryHeader()
+    }
+    function appendHistoryEntry(entry, forceBottom) {
+      var view = document.getElementById('history-view')
+      var nearBottom = forceBottom || isHistoryNearBottom()
+      var state = view.querySelector('.history-state')
+      if (state) state.remove()
+      view.appendChild(makeHistoryEntry(entry))
+      historyTotal += 1
+      if (nearBottom) {
+        requestAnimationFrame(scrollHistoryToBottom)
+      } else {
+        historyNewCount += 1
+        updateHistoryHeader()
+      }
+    }
+    function entryKey(entry) {
+      try { return JSON.stringify(entry) } catch (err) { return String(entry) }
+    }
+    function flushPendingHistory(pageEntries) {
+      var overlap = Math.min(pageEntries.length, historyPending.length)
+      while (overlap > 0) {
+        var matches = true
+        for (var i = 0; i < overlap; i++) {
+          if (entryKey(pageEntries[pageEntries.length - overlap + i]) !== entryKey(historyPending[i])) { matches = false; break }
+        }
+        if (matches) break
+        overlap -= 1
+      }
+      var pending = historyPending.slice(overlap)
+      historyPending = []
+      pending.forEach(function(entry) { appendHistoryEntry(entry, true) })
+    }
+    function loadHistoryPage(before) {
+      if (historyLoading || !activeTabId) return
+      historyLoading = true
+      var request = historyRequest
+      var initial = before == null
+      var view = document.getElementById('history-view')
+      var anchor = initial ? null : view.firstElementChild
+      var anchorTop = anchor ? anchor.offsetTop - view.scrollTop : 0
+      if (initial) setHistoryState('Loading history...')
+      fetch(historyApi(before))
+        .then(function(response) {
+          if (!response.ok) throw new Error('history request failed')
+          return response.json()
+        })
+        .then(function(page) {
+          if (request !== historyRequest || !historyOpen) throw new Error('stale history request')
+          historyToolName = page.toolName || historyToolName
+          historyBefore = page.nextBefore
+          historyHasMore = !!page.hasMore
+          historyTotal = page.total || 0
+          if (initial) view.innerHTML = ''
+          if (!page.available) {
+            historyLoaded = true
+            setHistoryState('History is not available for this session yet.')
+            updateHistoryHeader()
+            return
+          }
+          var fragment = document.createDocumentFragment()
+          ;(page.entries || []).forEach(function(entry) { fragment.appendChild(makeHistoryEntry(entry)) })
+          if (initial) view.appendChild(fragment)
+          else view.insertBefore(fragment, view.firstChild)
+          historyLoaded = true
+          updateHistoryHeader()
+          if (initial) {
+            if (!page.entries || page.entries.length === 0) setHistoryState('No history entries yet.')
+            else requestAnimationFrame(scrollHistoryToBottom)
+            flushPendingHistory(page.entries || [])
+          } else if (anchor) {
+            view.scrollTop = anchor.offsetTop - anchorTop
+          }
+        })
+        .catch(function() {
+          if (request === historyRequest && historyOpen && initial) setHistoryState('Failed to load history.')
+        })
+        .finally(function() { if (request === historyRequest) historyLoading = false })
+    }
+    function subscribeHistory() {
+      if (!isConnected() || !activeTabId) return
+      historyRequest += 1
+      historyLoading = false
+      historyPending = []
+      historyLoaded = false
+      sendWs({ type: 'history-subscribe', tabId: activeTabId })
+    }
+    function openHistory() {
+      if (!activeTabId) { setStatus('No tab selected'); return }
+      if (tbOpen) closeShutter()
+      historyRestoreFilesOpen = filesOpen
+      historyOpen = true
+      filesOpen = true
+      historyLoading = false
+      historyLoaded = false
+      historyBefore = null
+      historyHasMore = false
+      historyTotal = 0
+      historyToolName = ''
+      historyPending = []
+      historyNewCount = 0
+      setHistoryState(isConnected() ? 'Subscribing...' : 'Waiting for connection...')
+      updateHistoryHeader()
+      applyFilesOpen()
+      subscribeHistory()
+      if (!inputMode) renderButtons()
+    }
+    function closeHistory() {
+      if (!historyOpen) return
+      sendWs({ type: 'history-unsubscribe' })
+      historyRequest += 1
+      historyLoading = false
+      historyOpen = false
+      filesOpen = historyRestoreFilesOpen
       applyFilesOpen()
       if (!inputMode) renderButtons()
     }
@@ -2850,6 +3184,13 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
         b.addEventListener('click', (function(s) { return function() { sk(s) } })(btn.send))
         ctrlBar.appendChild(b)
       })
+      var history = document.createElement('button')
+      history.className = 'cbtn'
+      history.style.color = historyOpen ? '#ffffff' : '#4ec9b0'
+      history.style.borderColor = '#4ec9b0'
+      history.textContent = 'History'
+      history.addEventListener('click', function() { historyOpen ? closeHistory() : openHistory() })
+      ctrlBar.appendChild(history)
       var kb = makeKbBtn()
       kb.addEventListener('click', switchToInput)
       ctrlBar.appendChild(kb)
@@ -2948,6 +3289,7 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
           sendWs({ type: 'toolbar-list' })
           sendWs({ type: 'log-subscribe' })
         }
+        if (historyOpen) subscribeHistory()
       } else if (msg.type === 'auth-fail') {
         shouldReconnect = false
         setStatus('Auth failed — session expired, reload the page')
@@ -2983,6 +3325,18 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
           if (logActiveChannel === null) switchLogChannel(msg.channel)
         }
         appendLogLine(msg.channel, msg.line)
+      } else if (msg.type === 'history-subscribed') {
+        if (!historyOpen || msg.tabId !== activeTabId) return
+        if (msg.available) loadHistoryPage(null)
+        else {
+          historyLoaded = true
+          setHistoryState('History is not available for this session yet.')
+          updateHistoryHeader()
+        }
+      } else if (msg.type === 'history-entry') {
+        if (!historyOpen || msg.tabId !== activeTabId || !msg.entry) return
+        if (!historyLoaded) historyPending.push(msg.entry)
+        else appendHistoryEntry(msg.entry, false)
       } else if (msg.type === 'file-changed') {
         handleRemoteFileChanged(msg.path || '')
       } else if (msg.type === 'file-context-inserted') {
@@ -3036,7 +3390,17 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     document.getElementById('files-fab').addEventListener('click', function() { filesOpen ? closeFiles() : openFiles() })
     document.getElementById('files-back').addEventListener('click', showFileTree)
     document.getElementById('files-close').addEventListener('click', closeFiles)
-    document.getElementById('files-backdrop').addEventListener('click', closeFiles)
+    document.getElementById('files-backdrop').addEventListener('click', function() { historyOpen ? closeHistory() : closeFiles() })
+    document.getElementById('history-close').addEventListener('click', closeHistory)
+    document.getElementById('history-new').addEventListener('click', scrollHistoryToBottom)
+    document.getElementById('history-view').addEventListener('scroll', function() {
+      var view = document.getElementById('history-view')
+      if (view.scrollTop < 48 && historyHasMore && !historyLoading) loadHistoryPage(historyBefore)
+      if (isHistoryNearBottom() && historyNewCount > 0) {
+        historyNewCount = 0
+        updateHistoryHeader()
+      }
+    })
     document.getElementById('mode-raw').addEventListener('click', function() { setViewerMode('raw') })
     document.getElementById('mode-diff').addEventListener('click', function() { setViewerMode('diff') })
     window.addEventListener('resize', function() {
