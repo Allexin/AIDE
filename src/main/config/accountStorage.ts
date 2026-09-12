@@ -330,6 +330,13 @@ export function setSubscriptionUsageCache(
   `).run(toolId, accountId, JSON.stringify(payload), fetchedAtMs, source)
 }
 
+export function clearSubscriptionUsageCache(toolId: string, accountId: string): void {
+  db().prepare(`
+    DELETE FROM subscription_usage_cache
+    WHERE tool_id = ? AND account_id = ?
+  `).run(toolId, accountId)
+}
+
 export function tryAcquireSubscriptionUsageRefresh(
   toolId: string,
   accountId: string,

@@ -9,6 +9,7 @@ import type { CliTool, SettingsField, UsageInfo } from './types'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
 import {
+  clearSubscriptionUsageCache,
   getActiveAccount,
   getSubscriptionUsageCache,
   listAccounts,
@@ -189,6 +190,30 @@ function readAuthJson(): CursorAuthJson {
   }
 }
 
+function getCursorCliConfigPath(): string {
+  return join(homedir(), '.cursor', 'cli-config.json')
+}
+
+interface CursorCliAuthInfo {
+  email?: string
+  displayName?: string
+  userId?: number
+  authId?: string
+}
+
+// Cursor moved the CLI session token to auth.json, which carries no identity.
+// The signed-in email now lives in cli-config.json.
+function readCliAuthInfo(): CursorCliAuthInfo {
+  const configPath = getCursorCliConfigPath()
+  if (!existsSync(configPath)) return {}
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, 'utf-8')) as { authInfo?: CursorCliAuthInfo }
+    return parsed.authInfo && typeof parsed.authInfo === 'object' ? parsed.authInfo : {}
+  } catch {
+    return {}
+  }
+}
+
 function writeJsonAtomic(filePath: string, payload: unknown): void {
   const dir = dirname(filePath)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
@@ -253,6 +278,7 @@ function loadCurrentAccountBundle(): CursorAccountBundle {
     'cursorAuth/googleKey'
   ])
   const appUser = readAppUserFromStateDb()
+  const cliAuthInfo = readCliAuthInfo()
   const stateAccessToken = keyMap['cursorAuth/accessToken']
   const stateRefreshToken = keyMap['cursorAuth/refreshToken']
   if (!stateAccessToken && !stateRefreshToken && (auth.accessToken || auth.refreshToken)) {
@@ -263,7 +289,7 @@ function loadCurrentAccountBundle(): CursorAccountBundle {
   }
 
   return {
-    email: keyMap['cursorAuth/cachedEmail'],
+    email: keyMap['cursorAuth/cachedEmail'] || cliAuthInfo.email,
     accessToken: stateAccessToken || auth.accessToken,
     refreshToken: stateRefreshToken || auth.refreshToken,
     signUpType: keyMap['cursorAuth/cachedSignUpType'],
@@ -590,6 +616,41 @@ function saveRefreshedCursorAccount(accountId: string, bundle: CursorAccountBund
   updateStoredAccount(TOOL_ID, accountId, identifier, credentials, stored.revision)
 }
 
+// Cursor issues a single 60-day `type: session` JWT and stores it as both
+// accessToken and refreshToken, so refreshCursorAccessToken can only ever fire
+// once that token is already dead. Following the CLI's own auth.json is what
+// actually keeps a saved profile signed in.
+function syncStoredCursorAccountFromLive(accountId: string, bundle: CursorAccountBundle): void {
+  if (!bundle.accessToken) return
+  const stored = listAccounts(TOOL_ID).find((account) => account.id === accountId)
+  if (!stored) return
+  if (stored.credentials.accessToken === bundle.accessToken) return
+
+  const liveIdentifier = bundle.email
+  if (liveIdentifier && liveIdentifier.toLowerCase() !== stored.identifier.toLowerCase()) {
+    warnOnce(
+      'account-identity-mismatch',
+      `Live Cursor login (${liveIdentifier}) does not match saved profile "${stored.name}" (${stored.identifier}). Credential sync skipped.`
+    )
+    return
+  }
+
+  const credentials: Record<string, unknown> = {
+    ...stored.credentials,
+    accessToken: bundle.accessToken
+  }
+  if (bundle.refreshToken) credentials.refreshToken = bundle.refreshToken
+
+  const updated = updateStoredAccount(TOOL_ID, accountId, stored.identifier, credentials, stored.revision)
+  if (!updated) {
+    cliLog(LOG_CH, `[account] live token sync lost a revision race for ${stored.name}; will retry next cycle`)
+    return
+  }
+  // The cached payload was fetched for the previous session.
+  clearSubscriptionUsageCache(TOOL_ID, accountId)
+  cliLog(LOG_CH, `[account] imported live Cursor session token into saved profile ${stored.name}`)
+}
+
 async function refreshCursorUsage(
   bundle: CursorAccountBundle,
   currentAccount: string | null,
@@ -863,6 +924,7 @@ export const cursorAgentTool: CliTool = {
     const bundle = loadCurrentAccountBundle()
     const currentAccount = bundle.email ?? null
     const activeAccountId = getActiveAccount(TOOL_ID)
+    if (activeAccountId) syncStoredCursorAccountFromLive(activeAccountId, bundle)
     const sharedCache = activeAccountId
       ? getSubscriptionUsageCache(TOOL_ID, activeAccountId)
       : null
