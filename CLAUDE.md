@@ -34,13 +34,13 @@ Electron + React + TypeScript desktop code editor. Windows only.
 ### Project Lifecycle
 - App launch → Project Picker (recent projects list + "Open Folder")
 - CLI launch with path (`aide.exe .`) or cwd with `.aide/` → opens editor directly
-- Lock file (`.aide/lock`) prevents two instances on the same project
+- Per-user, per-host lock prevents duplicate local instances without blocking SMB collaborators
 
 ### Layout & Panels
 - Panels: file tree column, editor area, terminal area, log strip, status bar
 - Editor + terminal split: active panel gets 75%, inactive 25%
 - Terminal collapses to 20px strip with vertical "Claude Code" label
-- Panel ratios stored in `.aide/settings.json`
+- Panel ratios stored in `.aide/users/<user>/settings.json`
 
 ### File Tree
 - Lazy directory loading, dot-prefixed entries hidden
@@ -61,7 +61,7 @@ Electron + React + TypeScript desktop code editor. Windows only.
 - Large file confirmation dialog (configurable `maxFileSizeMb`)
 
 ### Toolbar
-- Buttons loaded from `aide/toolbar.json` (shared) + `.aide/toolbar.json` (local, wins on duplicate id)
+- Buttons loaded from `aide/toolbar.json` (shared) + `.aide/users/<user>/toolbar.json` (personal, wins on duplicate id)
 - Each button spawns a child process; output routed to log channels
 - Spinner overlay while process runs; kill/restart dialog on re-click
 - Running processes check before app close or project switch
@@ -84,7 +84,7 @@ Electron + React + TypeScript desktop code editor. Windows only.
 - **All UI text MUST be in English.** No Russian or other non-English strings in any component, tooltip, dialog, or label. This is a strict requirement.
 - IPC channels use namespaced format: `domain:action` (e.g. `filetree:git-status`, `editor:git-show-head`)
 - Stores are single-file Zustand stores with `use[Name]Store` naming
-- The `.aide/` directory inside each project stores local config (settings, toolbar, terminal titles)
+- The `.aide/users/<user>/` directory inside each project stores per-user config; `.aide/docs/` remains shared
 - Git operations run with timeouts (15s for status, 5s for branch) to avoid hangs
 - FS watcher skips dot-prefixed paths (`.git`, `.aide`, etc.)
 - **Logging**: NEVER use `console.log`/`console.warn`/`console.error` for debug or any other logs. Use the built-in log system: `logManager.append(channel, message)` from `useLogStore.ts`. Logs appear in the Log Panel UI. Import: `import { logManager } from '../../store/useLogStore'`

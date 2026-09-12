@@ -1,5 +1,6 @@
 import { join } from 'path'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs'
+import { ensureProjectUserDirectory, getProjectUserPath } from './projectUserData'
 
 export interface ProjectSettings {
   activePanelRatio: number
@@ -16,10 +17,11 @@ const DEFAULTS: ProjectSettings = {
 
 export function ensureAideDirectory(projectDir: string): void {
   mkdirSync(join(projectDir, '.aide'), { recursive: true })
+  ensureProjectUserDirectory(projectDir)
 }
 
 export function readProjectSettings(projectDir: string): ProjectSettings {
-  const settingsPath = join(projectDir, '.aide', 'settings.json')
+  const settingsPath = getProjectUserPath(projectDir, 'settings.json')
 
   if (!existsSync(settingsPath)) {
     return { ...DEFAULTS }
@@ -35,7 +37,7 @@ export function readProjectSettings(projectDir: string): ProjectSettings {
 }
 
 export function writeProjectSettings(projectDir: string, settings: ProjectSettings): void {
-  const settingsPath = join(projectDir, '.aide', 'settings.json')
+  const settingsPath = getProjectUserPath(projectDir, 'settings.json')
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8')
 }
 

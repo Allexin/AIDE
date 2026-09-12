@@ -19,6 +19,7 @@ import { getRunningCount, killAllProcesses, detachAllProcesses, disposeProcessMa
 import { startToolbarWatcher } from '../toolbar/toolbarWatcher'
 import { rebuildMenu, removeEditorWindow } from '../menu'
 import type { StartupTerminalOptions } from '../pty/ptyManager'
+import { getProjectUserPath } from '../config/projectUserData'
 
 export interface OpenProjectOptions {
   terminal?: StartupTerminalOptions
@@ -84,8 +85,6 @@ export function openProjectAndTrack(
   logEvent('project-opening', { path: projectPath })
 
   ensureAideDirectory(projectPath)
-  ensureDefaultToolbar(projectPath)
-  deployToolbarDocs(projectPath)
 
   const lockResult = checkAndAcquireLock(projectPath)
   if (!lockResult.acquired) {
@@ -94,6 +93,9 @@ export function openProjectAndTrack(
       error: `This project is already open in another AIDE instance (PID ${lockResult.pid}).`
     }
   }
+
+  ensureDefaultToolbar(projectPath)
+  deployToolbarDocs(projectPath)
 
   if (!options.noGlobalState) {
     addRecentProject(projectPath, getAppConfig().sessions.maxRecentProjects)
@@ -171,7 +173,7 @@ export function openProjectAndTrack(
     }))
 
     // DEBUG: log what we're saving
-    const dbg = join(projectPath, '.aide', 'session-debug.log')
+    const dbg = getProjectUserPath(projectPath, 'session-debug.log')
     try {
       appendFileSync(dbg, `\n=== SAVE ${new Date().toISOString()} ===\nall tabs: ${JSON.stringify(sessions, null, 2)}\ntoSave: ${JSON.stringify(toSave, null, 2)}\n`)
     } catch {}

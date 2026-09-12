@@ -11,6 +11,7 @@ import { defaultShell } from '../platform'
 import type { SavedSessionEntry } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { logEvent, countPtyData } from '../diagnostics'
+import { getProjectUserPath } from '../config/projectUserData'
 
 
 export interface SessionTabInfo {
@@ -95,7 +96,7 @@ export class PtyManager {
 
   private debugLog(msg: string): void {
     try {
-      const dbg = join(this.projectPath, '.aide', 'session-debug.log')
+      const dbg = getProjectUserPath(this.projectPath, 'session-debug.log')
       appendFileSync(dbg, `${new Date().toISOString()} ${msg}\n`)
     } catch {}
   }

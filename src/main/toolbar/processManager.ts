@@ -2,6 +2,7 @@ import { BrowserWindow } from 'electron'
 import { ChildProcess, spawn } from 'child_process'
 import type { ToolbarButton } from '../config/toolbarConfig'
 import { findUnrealEngineDir, findUnrealVersionSelector } from '../unreal/engineFinder'
+import { getProjectUserDirectory } from '../config/projectUserData'
 
 interface RunningProcess {
   proc: ChildProcess
@@ -61,6 +62,9 @@ export function spawnButtonProcess(
 
   let command = button.command.replace(/\$\{projectRoot\}/g, projectRoot)
   let cwd = (button.cwd ?? '${projectRoot}').replace(/\$\{projectRoot\}/g, projectRoot)
+  const aideUserDir = getProjectUserDirectory(projectRoot)
+  command = command.replace(/\$\{aideUserDir\}/g, aideUserDir)
+  cwd = cwd.replace(/\$\{aideUserDir\}/g, aideUserDir)
 
   // Resolve ${unrealEngine} — lazily, only when the placeholder is present
   if (command.includes('${unrealEngine}') || cwd.includes('${unrealEngine}')) {

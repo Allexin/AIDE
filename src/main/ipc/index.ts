@@ -754,7 +754,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   // ── Toolbar: get all preset groups ───────────────────────────────────────────
   ipcMain.handle('toolbar:get-presets', () => getAvailablePresetGroups())
 
-  // ── Toolbar: save local buttons (replaces .aide/toolbar.json buttons array) ──
+  // ── Toolbar: save current user's buttons ────────────────────────────────────
   ipcMain.handle('toolbar:save-buttons', (event, buttons: ToolbarItem[]) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender)
     if (!senderWin) return []
@@ -769,7 +769,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     return []
   })
 
-  // ── Toolbar: set project type (persists to .aide/toolbar.json) ───────────────
+  // ── Toolbar: set project type in the current user's config ──────────────────
   ipcMain.handle('toolbar:set-project-type', (event, type: string) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender)
     if (!senderWin) return

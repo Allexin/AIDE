@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { isWindows, isMac } from '../platform'
+import { getProjectUserPath } from './projectUserData'
 
 /**
  * Command that opens a folder in the OS file manager.
@@ -447,11 +448,11 @@ export function detectProjectType(projectDir: string): string | null {
 }
 
 /**
- * Reads the local .aide/toolbar.json for this project.
+ * Reads the current user's local toolbar.json for this project.
  * Returns a ToolbarConfig with defaults if the file is missing/corrupt.
  */
 export function readLocalToolbarConfig(projectDir: string): ToolbarConfig {
-  const localPath = join(projectDir, '.aide', 'toolbar.json')
+  const localPath = getProjectUserPath(projectDir, 'toolbar.json')
   if (!existsSync(localPath)) return { projectType: '', buttons: [] }
   try {
     const raw = readFileSync(localPath, 'utf8')
@@ -463,20 +464,20 @@ export function readLocalToolbarConfig(projectDir: string): ToolbarConfig {
 }
 
 /**
- * Writes the given config to .aide/toolbar.json.
+ * Writes the given config to the current user's toolbar.json.
  * Assumes .aide directory already exists (ensureAideDirectory is called first).
  */
 export function writeLocalToolbarConfig(projectDir: string, config: ToolbarConfig): void {
-  const localPath = join(projectDir, '.aide', 'toolbar.json')
+  const localPath = getProjectUserPath(projectDir, 'toolbar.json')
   writeFileSync(localPath, JSON.stringify(config, null, 2), 'utf8')
 }
 
 /**
- * Writes default toolbar config to .aide/toolbar.json if it does not exist yet.
+ * Writes default toolbar config for the current user if it does not exist yet.
  * Called on first project open.
  */
 export function ensureDefaultToolbar(projectDir: string): void {
-  const localPath = join(projectDir, '.aide', 'toolbar.json')
+  const localPath = getProjectUserPath(projectDir, 'toolbar.json')
   if (!existsSync(localPath)) {
     writeFileSync(localPath, JSON.stringify(DEFAULT_TOOLBAR, null, 2), 'utf8')
   }
@@ -505,11 +506,11 @@ export function deployToolbarDocs(projectPath: string): void {
 
 /**
  * Reads and merges toolbar buttons from aide/toolbar.json (shared) and
- * .aide/toolbar.json (local). Local wins on duplicate id.
+ * the current user's .aide toolbar config. The user config wins on duplicate id.
  */
 export function readToolbarButtons(projectDir: string): ToolbarItem[] {
   const sharedPath = join(projectDir, 'aide', 'toolbar.json')
-  const localPath = join(projectDir, '.aide', 'toolbar.json')
+  const localPath = getProjectUserPath(projectDir, 'toolbar.json')
 
   const readItems = (filePath: string): ToolbarItem[] => {
     if (!existsSync(filePath)) return []

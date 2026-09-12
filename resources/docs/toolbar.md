@@ -7,9 +7,9 @@ The toolbar is configured via JSON files that define buttons appearing in the ed
 | File | Tracked | Purpose |
 |------|---------|---------|
 | `aide/toolbar.json` | Yes (shared) | Team-shared buttons committed to the repo |
-| `.aide/toolbar.json` | No (local) | Personal buttons, ignored by git |
+| `.aide/users/<user>/toolbar.json` | No (local) | Personal buttons, isolated by OS user and ignored by git |
 
-When both files exist, buttons are merged. If a button `id` appears in both files, the local (`.aide`) version wins.
+When both files exist, buttons are merged. If a button `id` appears in both files, the current user's version wins.
 
 ## File Format
 
@@ -52,6 +52,7 @@ These placeholders are expanded at runtime in `command` and `cwd`:
 | Variable | Description |
 |----------|-------------|
 | `${projectRoot}` | Absolute path to the project directory |
+| `${aideUserDir}` | Absolute path to the current user's private `.aide` directory |
 | `${unrealEngine}` | Path to the Unreal Engine installation (Unreal projects only) |
 | `${unrealVersionSelector}` | Path to UnrealVersionSelector.exe (Unreal projects only) |
 
@@ -78,7 +79,7 @@ When a button command is too complex to fit in a JSON string, move it to an exte
 | Config file | Scripts directory |
 |-------------|-------------------|
 | `aide/toolbar.json` (shared) | `aide/scripts/` |
-| `.aide/toolbar.json` (local) | `.aide/scripts/` |
+| `.aide/users/<user>/toolbar.json` (local) | `${aideUserDir}/scripts/` |
 
 This way shared scripts are committed to the repo alongside the shared config, and personal scripts stay local alongside the local config.
 
@@ -112,7 +113,7 @@ npm test
 }
 ```
 
-For `.aide/toolbar.json` personal buttons, place scripts in `.aide/scripts/` and reference them as `.aide/scripts/my-script.ps1`.
+For personal buttons, place scripts in `${aideUserDir}/scripts/` and reference them with the same variable, for example `${aideUserDir}/scripts/my-script.ps1`.
 
 ## Splitters
 

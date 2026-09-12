@@ -1,42 +1,74 @@
-import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
-import { join } from 'path'
+import { randomUUID } from 'crypto'
+import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
+import { dirname } from 'path'
 import { processStartTimeMs } from './platform'
+import { getProjectHostLockPath } from './config/projectUserData'
 
 interface LockData {
   pid: number
   lockedAt: number // ms since epoch — when the project was opened
+  instanceId: string
 }
 
 type LockResult = { acquired: true } | { acquired: false; pid: number }
 
 export function checkAndAcquireLock(projectDir: string): LockResult {
-  const lockPath = join(projectDir, '.aide', 'lock')
+  const lockPath = getProjectHostLockPath(projectDir)
+  mkdirSync(dirname(lockPath), { recursive: true })
+  const lockData: LockData = { pid: process.pid, lockedAt: Date.now(), instanceId: randomUUID() }
 
-  if (existsSync(lockPath)) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const data: LockData = JSON.parse(readFileSync(lockPath, 'utf8'))
-      if (!isNaN(data.pid) && isLockValid(data)) {
+      writeFileSync(lockPath, JSON.stringify(lockData), { encoding: 'utf8', flag: 'wx' })
+      ownedLocks.set(lockPath, lockData.instanceId)
+      return { acquired: true }
+    } catch {
+      // Usually EEXIST. Inspect the owner before deciding whether to retry.
+    }
+
+    let observed = ''
+    try {
+      observed = readFileSync(lockPath, 'utf8')
+      const data = JSON.parse(observed) as LockData
+      if (Number.isInteger(data.pid) && data.pid > 0 && isLockValid(data)) {
         return { acquired: false, pid: data.pid }
       }
     } catch {
-      // Malformed lock file — treat as stale
+      // Missing, unreadable or malformed locks are stale candidates.
+    }
+
+    try {
+      // Do not delete a fresh lock that replaced the stale one after we read it.
+      if (readFileSync(lockPath, 'utf8') === observed) unlinkSync(lockPath)
+    } catch {
+      // The next exclusive-create attempt will resolve the race.
     }
   }
 
-  const lockData: LockData = { pid: process.pid, lockedAt: Date.now() }
-  writeFileSync(lockPath, JSON.stringify(lockData), 'utf8')
-  return { acquired: true }
+  try {
+    const data = JSON.parse(readFileSync(lockPath, 'utf8')) as LockData
+    return { acquired: false, pid: Number.isFinite(data.pid) ? data.pid : 0 }
+  } catch {
+    return { acquired: false, pid: 0 }
+  }
 }
 
+const ownedLocks = new Map<string, string>()
+
 export function releaseLock(projectDir: string): void {
-  const lockPath = join(projectDir, '.aide', 'lock')
+  const lockPath = getProjectHostLockPath(projectDir)
+  const instanceId = ownedLocks.get(lockPath)
+  if (!instanceId) return
+
   if (existsSync(lockPath)) {
     try {
-      unlinkSync(lockPath)
+      const data = JSON.parse(readFileSync(lockPath, 'utf8')) as LockData
+      if (data.instanceId === instanceId) unlinkSync(lockPath)
     } catch {
       // Ignore errors on cleanup
     }
   }
+  ownedLocks.delete(lockPath)
 }
 
 /**

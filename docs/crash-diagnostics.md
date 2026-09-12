@@ -20,8 +20,8 @@ AIDE used to die leaving no evidence at all. The forensic picture was:
 - No Windows Error Reporting entry for `electron.exe` or `AIDE.exe`
 - No Crashpad minidump (`crashReporter` was never started, so Crashpad never ran)
 - No log on disk — the Log Panel lives in renderer memory and dies with the app
-- `.aide/session-debug.log` is truncated at every startup, so the next launch
-  destroys the evidence of the previous crash
+- `.aide/users/<user>/session-debug.log` records terminal-session details, not
+  main-process lifecycle failures
 
 The recorder in `src/main/diagnostics/` closes that gap.
 

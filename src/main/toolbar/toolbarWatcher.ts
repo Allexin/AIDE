@@ -1,9 +1,10 @@
 import { existsSync, watch, type FSWatcher } from 'fs'
 import { join } from 'path'
 import { readToolbarButtons, type ToolbarItem } from '../config/toolbarConfig'
+import { getProjectUserPath } from '../config/projectUserData'
 
 /**
- * Watch aide/toolbar.json and .aide/toolbar.json for changes.
+ * Watch the shared and current-user toolbar configs for changes.
  * On change (debounced 300ms), re-reads merged buttons and calls onChange.
  * Returns a cleanup function.
  */
@@ -24,7 +25,7 @@ export function startToolbarWatcher(
 
   const paths = [
     join(projectPath, 'aide', 'toolbar.json'),
-    join(projectPath, '.aide', 'toolbar.json')
+    getProjectUserPath(projectPath, 'toolbar.json')
   ]
 
   for (const p of paths) {
