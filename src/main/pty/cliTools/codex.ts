@@ -154,6 +154,31 @@ function getCodexLoginStatus(): Promise<string | null> {
   })
 }
 
+// Codex 0.158+ runs every TUI session on a shared app-server daemon that loads
+// auth.json once and keeps it in memory, so rewriting the file does not change
+// the account in use. The daemon has to be stopped before swapping credentials;
+// the next `codex` launch auto-starts it with the new auth.json.
+function stopCodexDaemon(): Promise<void> {
+  return new Promise((resolve) => {
+    execFile('codex', ['app-server', 'daemon', 'stop'], { timeout: 15000 }, (err, stdout, stderr) => {
+      if (err) {
+        cliLog(LOG_CH, `[auth] daemon stop failed: ${(stderr || stdout || String(err)).trim()}`)
+      } else {
+        cliLog(LOG_CH, '[auth] app-server daemon stopped for credential swap')
+      }
+      resolve()
+    })
+  })
+}
+
+function isNoDaemon(): boolean {
+  return getToolConfig(TOOL_ID).noDaemon === true
+}
+
+function noDaemonArg(): string {
+  return isNoDaemon() ? ' --no-daemon' : ''
+}
+
 function isCodexBusyTitle(title: string): boolean {
   const trimmed = title.trimStart()
   if (!trimmed) return false
@@ -183,11 +208,11 @@ export const codexTool: CliTool = {
   // ── Commands ──────────────────────────────────────────────────────────────
 
   newSessionCommand(): string {
-    return 'codex'
+    return `codex${noDaemonArg()}`
   },
 
   resumeCommand(sessionId: string): string {
-    return `codex resume ${sessionId}`
+    return `codex resume${noDaemonArg()} ${sessionId}`
   },
 
   exitCommand(): string {
@@ -326,6 +351,13 @@ export const codexTool: CliTool = {
         description: 'Leave empty to use no proxy (e.g. http://127.0.0.1:1080)',
         type: 'string',
         default: ''
+      },
+      {
+        key: 'noDaemon',
+        label: 'Run without shared daemon',
+        description: 'Launch with --no-daemon: each session runs its own app server instead of the shared background one. Account switching then restarts Codex sessions.',
+        type: 'boolean',
+        default: false
       }
     ]
   },
@@ -359,6 +391,12 @@ export const codexTool: CliTool = {
     return true
   },
 
+  accountSwitchNeedsRestart(): boolean {
+    // The shared daemon is restarted by importCredentials and live TUIs
+    // reconnect to it; a --no-daemon session keeps the old auth in-process.
+    return isNoDaemon()
+  },
+
   async isLoggedIn(): Promise<boolean> {
     if (hasUsableCredentials(loadAuthJson())) return true
     const status = await getCodexLoginStatus()
@@ -384,12 +422,14 @@ export const codexTool: CliTool = {
   async importCredentials(credentials: Record<string, unknown>): Promise<void> {
     const auth = credentials.authJson
     if (!auth || typeof auth !== 'object') return
+    await stopCodexDaemon()
     mkdirSync(CODEX_HOME, { recursive: true })
     writeFileSync(AUTH_JSON, JSON.stringify(auth, null, 2), 'utf-8')
   },
 
   async clearCredentials(): Promise<void> {
     if (!existsSync(AUTH_JSON)) return
+    await stopCodexDaemon()
     try {
       unlinkSync(AUTH_JSON)
     } catch (e) {

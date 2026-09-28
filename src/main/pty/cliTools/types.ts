@@ -132,6 +132,12 @@ export interface CliTool {
    */
   hasAccountSystem(): boolean
 
+  /** Whether running sessions must be restarted to pick up credentials written
+   *  by importCredentials/clearCredentials. Omitted means true. Return false
+   *  when live sessions re-read credentials on their own.
+   */
+  accountSwitchNeedsRestart?(): boolean
+
   /** Return current usage/limit info for display in the status bar.
    *  The implementation decides what to show — the caller treats it opaquely.
    */

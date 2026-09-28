@@ -268,6 +268,11 @@ export const claudeCodeTool: CliTool = {
     return true
   },
 
+  accountSwitchNeedsRestart(): boolean {
+    // Running Claude Code sessions re-read ~/.claude/.credentials.json.
+    return false
+  },
+
   async isLoggedIn(): Promise<boolean> {
     if (!existsSync(CLAUDE_JSON)) return false
     try {

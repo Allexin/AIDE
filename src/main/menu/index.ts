@@ -13,7 +13,7 @@ import { getRunningCount, killAllProcesses } from '../toolbar/processManager'
 import { registerCommand } from './commandRegistry'
 import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
 import { listAccounts, updateAccount as updateStoredAccount, getActiveAccount, setActiveAccount } from '../config/accountStorage'
-import { restartToolSessions } from '../pty/registry'
+import { restartToolSessionsAfterAccountChange } from '../pty/registry'
 import { getCommandLineArgumentsHelp } from '../startupArgs'
 
 // Injected by setupMenu — avoids circular dep with windows/editor.ts
@@ -291,7 +291,7 @@ export function rebuildMenu(): void {
         label: 'Logout',
         click: async (): Promise<void> => {
           await cliTool.clearCredentials!()
-          restartToolSessions(tool.id)
+          restartToolSessionsAfterAccountChange(tool.id)
           broadcastAccountsChanged()
         }
       })
@@ -313,7 +313,7 @@ export function rebuildMenu(): void {
             if (!proceed) return
             await t.importCredentials(stored.credentials)
             setActiveAccount(tool.id, acc.id)
-            restartToolSessions(tool.id)
+            restartToolSessionsAfterAccountChange(tool.id)
             broadcastAccountsChanged()
           }
         })

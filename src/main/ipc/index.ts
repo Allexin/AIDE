@@ -20,7 +20,7 @@ import { openProjectAndTrack } from '../windows/editor'
 import { osDisplayName } from '../platform'
 import { runGitStatus } from '../filetree/gitStatus'
 import { searchProjectFileIndex } from '../filetree/fileIndex'
-import { ptyRegistry, pickerEditorMap } from '../pty/registry'
+import { ptyRegistry, pickerEditorMap, restartToolSessionsAfterAccountChange } from '../pty/registry'
 import { getRegisteredTools, getToolById, getDefaultTool } from '../pty/cliTools/registry'
 import {
   listAccounts,
@@ -1175,6 +1175,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
 
     await tool.importCredentials(stored.credentials)
     setActiveAccount(toolId, accountId)
+    restartToolSessionsAfterAccountChange(toolId)
     broadcastAccountsChanged()
     return true
   })
