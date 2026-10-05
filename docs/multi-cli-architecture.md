@@ -321,6 +321,9 @@ src/main/pty/cliTools/
   qwenCodeScanner.ts    — disk session scanner (Qwen Code)
   openCode.ts           — OpenCode implementation (no account system)
   openCodeScanner.ts    — disk session scanner (OpenCode, SQLite)
+  devin.ts              — Devin implementation
+  devinScanner.ts       — read-only sessions.db access + live history watchers
+  devinHooks.ts         — per-tab merged config + SessionStart/Stop hook wiring
   plainShell.ts         — built-in fallback
 
 src/main/config/

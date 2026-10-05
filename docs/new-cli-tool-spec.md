@@ -80,10 +80,11 @@ src/main/pty/cliTools/
   yourToolScanner.ts    ← optional, if you need a separate parser file
 ```
 
-`claudeCode.ts`, `qwenCode.ts`, and `openCode.ts` are complete reference implementations — read them before starting. They illustrate three distinct patterns:
+`claudeCode.ts`, `qwenCode.ts`, `openCode.ts`, and `devin.ts` are complete reference implementations — read them before starting. They illustrate four distinct patterns:
 - **Claude Code** — OAuth-based auth, cloud API usage tracking, JSONL session files
 - **Qwen Code** — local file-based usage counting, JSONL session files
 - **OpenCode** — no account system (`hasAccountSystem() → false`), SQLite-based session storage
+- **Devin** — read-only SQLite scanning of the global `sessions.db` (sessions, live `message_nodes` history, `prompt_history`), Claude-format lifecycle hooks via a merged `--config` file for deterministic tab binding, workspace trust via `trusted_workspaces.json`
 
 ---
 

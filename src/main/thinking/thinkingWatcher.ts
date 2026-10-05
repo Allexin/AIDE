@@ -48,8 +48,13 @@ export class ThinkingWatcher {
     }
     this.tabs.set(tabId, state)
 
-    // Cursor Agent stores full reasoning in store.db; stream thinking from history entries.
-    if (tool.id === 'cursor-agent' && (tool.getSessionHistory || tool.subscribeToSessionHistory)) {
+    // Tools without appendable JSONL session files (Cursor Agent stores reasoning
+    // in store.db; Devin rewrites the whole ATIF transcript) stream thinking via
+    // history entries instead of line-based parsing.
+    if (
+      (tool.id === 'cursor-agent' || tool.id === 'devin') &&
+      (tool.getSessionHistory || tool.subscribeToSessionHistory)
+    ) {
       void this.bootstrapFromHistory(tabId, projectPath, sessionId)
       state.unsubscribeHistory = tool.subscribeToSessionHistory?.(projectPath, sessionId, (entry) => {
         const s = this.tabs.get(tabId)
