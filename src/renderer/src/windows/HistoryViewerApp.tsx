@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { SessionHistory } from '../components/history/SessionHistory'
+import { TranscriptView } from '../components/history/TranscriptView'
 
 export default function HistoryViewerApp(): React.ReactElement {
   const [toolInfo, setToolInfo] = useState<{ title: string; toolName: string } | null>(null)
@@ -18,6 +18,6 @@ export default function HistoryViewerApp(): React.ReactElement {
       <div style={{ fontSize: 14, fontWeight: 600, color: '#cccccc' }}>{toolInfo?.title || 'Session History'}</div>
       {toolInfo && <div style={{ fontSize: 11, color: '#666' }}>{entries.length} message{entries.length !== 1 ? 's' : ''} · {toolInfo.toolName}</div>}
     </div>
-    <SessionHistory entries={entries} toolName={toolInfo?.toolName ?? ''} loading={toolInfo === null} />
+    <TranscriptView entries={entries} toolName={toolInfo?.toolName ?? ''} loading={toolInfo === null} />
   </div>
 }

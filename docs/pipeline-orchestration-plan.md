@@ -426,7 +426,12 @@ issues and plan refactoring), escalations and their answers.
 Each item is independently useful or independently verifiable, and must be
 complete before the engine is built on it.
 
-### 5.1 `TranscriptView` (replaces raw `SessionHistory`)
+### 5.1 `TranscriptView` (replaces raw `SessionHistory`) — **done**
+
+Implemented in `src/renderer/src/components/history/`; tool views in
+`src/main/pty/cliTools/toolViews.ts`. Normalized kinds as built: `edit`, `patch`
+(Codex `apply_patch`), `write`, `read`, `shell`, `search`, `script` (Codex `exec`
+cells); anything else renders as JSON.
 
 - Markdown rendering of text and thinking blocks via `marked` + `DOMPurify`
   (both already dependencies; same approach as `src/main/remote/index.ts`).

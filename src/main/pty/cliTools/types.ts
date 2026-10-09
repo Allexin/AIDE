@@ -204,9 +204,24 @@ export interface CliTool {
   deregisterTab?(tabId: string): void
 }
 
+/**
+ * CLI-neutral description of a tool call, produced by each tool's scanner so the
+ * transcript renderer never needs to know CLI-specific tool names or argument
+ * shapes. Tool calls a scanner does not recognise carry no view and fall back
+ * to a generic rendering.
+ */
+export type ToolView =
+  | { kind: 'edit'; path: string; edits: Array<{ oldText: string; newText: string }> }
+  | { kind: 'patch'; paths: string[]; patch: string }
+  | { kind: 'write'; path: string; content: string }
+  | { kind: 'read'; path: string; range?: string }
+  | { kind: 'shell'; command: string }
+  | { kind: 'search'; pattern: string; path?: string }
+  | { kind: 'script'; language: string; code: string; summary: string }
+
 export type HistoryBlock =
   | { type: 'text'; text: string }
-  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'tool_use'; id: string; name: string; input: unknown; view?: ToolView }
   | { type: 'tool_result'; tool_use_id: string; content: string | Array<{ type: string; text?: string }> }
   | { type: 'thinking'; thinking: string }
 

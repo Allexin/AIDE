@@ -4,6 +4,7 @@ import { readFile, stat as fsStat, open } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { HistoryBlock, HistoryEntry } from './types'
+import { codexToolView } from './toolViews'
 import { getCachedMeta, setCachedMeta, pruneCache } from './sessionMetaCache'
 
 export interface CodexDiskSession {
@@ -409,14 +410,11 @@ export function parseCodexHistoryLine(line: string): HistoryEntry | null {
   }
 
   if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
+    const name = String(payload.name ?? 'unknown')
+    const input = parseToolInput(payload)
     return {
       role: 'assistant',
-      blocks: [{
-        type: 'tool_use',
-        id: String(payload.call_id ?? ''),
-        name: String(payload.name ?? 'unknown'),
-        input: parseToolInput(payload)
-      }]
+      blocks: [{ type: 'tool_use', id: String(payload.call_id ?? ''), name, input, view: codexToolView(name, input) }]
     }
   }
 

@@ -4,6 +4,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 import { getCachedMeta, setCachedMeta, pruneCache } from './sessionMetaCache'
 import type { HistoryBlock, HistoryEntry } from './types'
+import { claudeToolView } from './toolViews'
 
 export interface DiskSession {
   sessionId: string
@@ -285,12 +286,9 @@ function parseHistoryBlocks(content: unknown): HistoryBlock[] {
     if (b.type === 'text' && typeof b.text === 'string') {
       blocks.push({ type: 'text', text: b.text })
     } else if (b.type === 'tool_use') {
-      blocks.push({
-        type: 'tool_use',
-        id: String(b.id ?? ''),
-        name: String(b.name ?? 'unknown'),
-        input: (b.input as Record<string, unknown>) ?? {}
-      })
+      const name = String(b.name ?? 'unknown')
+      const input = (b.input as Record<string, unknown>) ?? {}
+      blocks.push({ type: 'tool_use', id: String(b.id ?? ''), name, input, view: claudeToolView(name, input) })
     } else if (b.type === 'tool_result') {
       blocks.push({
         type: 'tool_result',

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { SessionHistory } from '../components/history/SessionHistory'
+import { TranscriptView } from '../components/history/TranscriptView'
 
 function formatTime(mtime: number): string {
   if (!mtime) return 'Previous tab'
@@ -62,7 +62,7 @@ export default function StartupPickerApp(): React.ReactElement {
       </div>
       <div style={{ height: '100%', minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', fontFamily: 'Cascadia Code, Consolas, monospace' }}>
         <div style={{ flexShrink: 0, padding: '10px 16px', minHeight: 49, boxSizing: 'border-box', borderBottom: '1px solid #2d2d2d' }}><div style={{ fontWeight: 600, color: '#ccc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{focused?.firstMessage || focused?.title || 'Session history'}</div>{focused && <div style={{ color: '#666', fontSize: 10, marginTop: 2 }}>{history.length} message{history.length !== 1 ? 's' : ''} · {focused.toolName}</div>}</div>
-        {focused ? <SessionHistory entries={history} toolName={focused.toolName} loading={historyLoading} resetKey={focused.key} /> : <Empty text="Select a session to view its full history" />}
+        {focused ? <TranscriptView entries={history} toolName={focused.toolName} loading={historyLoading} resetKey={focused.key} /> : <Empty text="Select a session to view its full history" />}
       </div>
     </div>
     <div style={{ flexShrink: 0, padding: '12px 16px', borderTop: '1px solid #3d3d3d', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>

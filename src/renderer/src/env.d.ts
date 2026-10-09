@@ -262,6 +262,16 @@ interface PickerSession {
   toolId: string
 }
 
+/** Mirrors `ToolView` in src/main/pty/cliTools/types.ts. */
+type ToolView =
+  | { kind: 'edit'; path: string; edits: Array<{ oldText: string; newText: string }> }
+  | { kind: 'patch'; paths: string[]; patch: string }
+  | { kind: 'write'; path: string; content: string }
+  | { kind: 'read'; path: string; range?: string }
+  | { kind: 'shell'; command: string }
+  | { kind: 'search'; pattern: string; path?: string }
+  | { kind: 'script'; language: string; code: string; summary: string }
+
 interface HistoryBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'thinking'
   text?: string
@@ -269,6 +279,7 @@ interface HistoryBlock {
   id?: string
   name?: string
   input?: unknown
+  view?: ToolView
   tool_use_id?: string
   content?: string | Array<{ type: string; text?: string }>
 }

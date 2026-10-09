@@ -1,6 +1,6 @@
 {
   "name": "aide",
-  "version": "0.1.353",
+  "version": "0.1.355",
   "description": "AI-Driven Code Editor",
   "private": true,
   "main": "out/main/index.js",
@@ -19,6 +19,7 @@
     "@electron-toolkit/preload": "^3.0.0",
     "@electron-toolkit/utils": "^3.0.0",
     "@monaco-editor/react": "^4.7.0",
+    "@tanstack/react-virtual": "^3.13.12",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "better-sqlite3": "^11.10.0",
