@@ -20,6 +20,8 @@ export interface RunProcessOptions {
   onStderr?: (chunk: string) => void
   /** Short label for diagnostics, e.g. `claude-code:implement`. */
   label: string
+  /** Windows: pass args to CreateProcess unquoted (needed for `cmd.exe /s /c "…"`). */
+  windowsVerbatimArguments?: boolean
 }
 
 export interface ProcessResult {
@@ -66,7 +68,7 @@ export function killProcessTree(child: ChildProcess): Promise<void> {
 }
 
 export function runProcess(options: RunProcessOptions): ProcessHandle {
-  const { command, args, cwd, env, stdin, timeoutMs, onStdoutLine, onStderr, label } = options
+  const { command, args, cwd, env, stdin, timeoutMs, onStdoutLine, onStderr, label, windowsVerbatimArguments } = options
   let stdoutTail = ''
   let stderrTail = ''
   let lineBuffer = ''
@@ -81,6 +83,7 @@ export function runProcess(options: RunProcessOptions): ProcessHandle {
       env: env ?? process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      windowsVerbatimArguments,
       detached: process.platform !== 'win32'
     })
   } catch (err) {
@@ -163,4 +166,13 @@ export function runProcess(options: RunProcessOptions): ProcessHandle {
       await done
     }
   }
+}
+
+/** Run a shell command line (check nodes): `cmd.exe` on Windows, `sh` elsewhere. */
+export function runShellCommand(options: Omit<RunProcessOptions, 'command' | 'args' | 'windowsVerbatimArguments'> & { commandLine: string }): ProcessHandle {
+  const { commandLine, ...rest } = options
+  if (process.platform === 'win32') {
+    return runProcess({ ...rest, command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', `"${commandLine}"`], windowsVerbatimArguments: true })
+  }
+  return runProcess({ ...rest, command: '/bin/sh', args: ['-c', commandLine] })
 }
