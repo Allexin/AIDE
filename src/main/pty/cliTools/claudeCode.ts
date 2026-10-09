@@ -8,6 +8,7 @@ import type { CliTool, CliSession, SettingsField, UsageInfo, HistoryEntry, HookL
 import { writeTabHookSettings, cleanupTabHookSettings } from './claudeHooks'
 import { scanSessions as scanDiskSessions, watchSessionsDir, getSessionsDir, readSessionPreview, readSessionHistory, parseHistoryLine } from './claudeCodeScanner'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
+import { claudeHeadless } from '../../pipeline/headless/claudeHeadless'
 import { cliLog } from './cliLogger'
 import { findExecutable, listProcesses } from '../../platform'
 import { resolveOwnerPidFromSnapshot } from '../../platform/processTree'
@@ -167,6 +168,7 @@ function syncActiveClaudeCredentials(accountId: string, identifier: string): voi
 export const claudeCodeTool: CliTool = {
   id: 'claude-code',
   name: TOOL_NAME,
+  headless: claudeHeadless,
 
   installUrl: 'https://claude.ai/download',
 

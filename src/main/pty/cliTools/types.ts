@@ -1,4 +1,5 @@
 import type { SettingsField } from '../../../shared/settingsTypes'
+import type { HeadlessCapability } from '../../pipeline/headless/types'
 export type { SettingsField }
 
 export interface CliSession {
@@ -39,6 +40,12 @@ export interface CliTool {
    *  Called synchronously at spawn time; reads from in-memory config only.
    */
   getEnvOverrides?(): Record<string, string>
+
+  /** Non-interactive execution for pipeline nodes (no PTY). Start runs through
+   *  `startHeadless()` in src/main/pipeline/headless so the environment,
+   *  including the proxy from `getEnvOverrides()`, matches PTY sessions.
+   */
+  readonly headless?: HeadlessCapability
 
   /** Return extra CLI args (leading space included) that wire this launch to
    *  AIDE's hook server for deterministic session binding, writing any per-tab

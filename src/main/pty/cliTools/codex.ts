@@ -27,6 +27,7 @@ import {
   watchCodexSessions
 } from './codexScanner'
 import { getCodexUsageInfo } from './codexUsage'
+import { codexHeadless } from '../../pipeline/headless/codexHeadless'
 import { cliLog } from './cliLogger'
 
 const TOOL_ID = 'codex'
@@ -196,6 +197,7 @@ function isCodexBusyTitle(title: string): boolean {
 export const codexTool: CliTool = {
   id: TOOL_ID,
   name: TOOL_NAME,
+  headless: codexHeadless,
 
   installUrl: 'https://github.com/openai/codex',
 
