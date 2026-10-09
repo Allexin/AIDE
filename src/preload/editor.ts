@@ -180,6 +180,16 @@ export interface EditorAPI {
   onPipelineOpenSetup: (cb: () => void) => () => void
   onOrchestratorConnected: (cb: (connection: OrchestratorConnection) => void) => () => void
 
+  // Pipeline runs (overlay)
+  pipelineGetRun: () => Promise<unknown>
+  pipelineControl: (action: 'pause' | 'stop' | 'resume' | 'abandon') => Promise<string | null>
+  pipelineAnswer: (escalationId: string, action: 'continue' | 'retry' | 'reject' | 'stop', text: string) => Promise<string | null>
+  pipelineGetTranscript: (runId: string, node: string, visit: number) => Promise<unknown[]>
+  pipelineGetCheckLog: (runId: string, node: string, visit: number) => Promise<string>
+  pipelineGetReport: (runId: string) => Promise<unknown>
+  onPipelineRunState: (cb: (snapshot: unknown) => void) => () => void
+  onPipelineTranscript: (cb: (event: { runId: string; node: string; visit: number; entry: unknown }) => void) => () => void
+
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
   getPathForFile: (file: File) => string
 
@@ -448,6 +458,23 @@ const editorApi: EditorAPI = {
     const handler = (_: unknown, connection: OrchestratorConnection): void => cb(connection)
     ipcRenderer.on('pipeline:orchestrator-connected', handler)
     return () => ipcRenderer.removeListener('pipeline:orchestrator-connected', handler)
+  },
+
+  pipelineGetRun: () => ipcRenderer.invoke('pipeline:get-run'),
+  pipelineControl: (action) => ipcRenderer.invoke('pipeline:control', action),
+  pipelineAnswer: (escalationId, action, text) => ipcRenderer.invoke('pipeline:answer', escalationId, action, text),
+  pipelineGetTranscript: (runId, node, visit) => ipcRenderer.invoke('pipeline:get-transcript', runId, node, visit),
+  pipelineGetCheckLog: (runId, node, visit) => ipcRenderer.invoke('pipeline:get-check-log', runId, node, visit),
+  pipelineGetReport: (runId) => ipcRenderer.invoke('pipeline:get-report', runId),
+  onPipelineRunState: (cb: (snapshot: unknown) => void): (() => void) => {
+    const handler = (_: unknown, snapshot: unknown): void => cb(snapshot)
+    ipcRenderer.on('pipeline:run-state', handler)
+    return () => ipcRenderer.removeListener('pipeline:run-state', handler)
+  },
+  onPipelineTranscript: (cb: (event: { runId: string; node: string; visit: number; entry: unknown }) => void): (() => void) => {
+    const handler = (_: unknown, event: { runId: string; node: string; visit: number; entry: unknown }): void => cb(event)
+    ipcRenderer.on('pipeline:transcript', handler)
+    return () => ipcRenderer.removeListener('pipeline:transcript', handler)
   },
 
   getPathForFile: (file) => webUtils.getPathForFile(file),

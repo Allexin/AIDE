@@ -100,15 +100,29 @@ Event types: `node_started`, `node_finished`, `check_failed`, `escalation`,
 
 ## 6. Tools
 
-| Tool | Status | Purpose |
-|---|---|---|
-| `pipeline_hello` | available | Handshake; returns rules and event delivery options |
-| `pipeline_list` | planned | Machines with descriptions and parameter schemas |
-| `pipeline_start` | planned | Start a run |
-| `pipeline_status` | planned | Current node, iteration, recent events |
-| `pipeline_wait` | planned | Block until the next significant event |
-| `pipeline_answer` | planned | Answer an escalation |
-| `pipeline_stop` | planned | Pause or stop a run |
-| `pipeline_report` | planned | Final report of a run |
+| Tool | Purpose |
+|---|---|
+| `pipeline_hello` | Handshake; returns rules and event delivery options |
+| `pipeline_list` | Machines with descriptions (when to use them), params, validity |
+| `pipeline_start` | Start a run: `{ machine, params }` → run id and the subscribe command |
+| `pipeline_status` | Current node, visits, pending escalation, recent events |
+| `pipeline_wait` | Block until the next significant event (or a timeout) |
+| `pipeline_answer` | Answer an escalation: `continue`, `retry`, `reject` (gates), `stop` |
+| `pipeline_stop` | `pause` (after the current step), `stop` (now, resumable), `abandon` |
+| `pipeline_resume` | Continue a paused or stopped run |
+| `pipeline_report` | Report of a run: facts, summaries, non-blocking findings, cost |
+| `pipeline_runs` | Recent runs |
+| `pipeline_guide` / `pipeline_schema` | How to author machines; the machine file schema |
+| `pipeline_validate` / `pipeline_smoke` | Check machines statically / on this computer |
+
+## 7. Typical session
+
+1. `pipeline_list` — pick the machine that fits the next task of the plan.
+2. `pipeline_start` with its params; immediately subscribe to the run's events.
+3. On `escalation`: answer it with `pipeline_answer` if the plan decides it,
+   otherwise ask the user. On `run_finished` / `run_failed`: read
+   `pipeline_report`, update the plan, pick the next task.
+4. If the project has no machines yet, read `pipeline_guide` and prepare them
+   with the user first.
 
 `tools/list` always shows what the running AIDE version actually provides.

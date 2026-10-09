@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css'
 import { usePanelStore } from '../../store/usePanelStore'
 import { useSessionStore } from '../../store/useSessionStore'
 import { useFileTreeStore } from '../../store/useFileTreeStore'
+import RunStateBanner from '../pipeline/RunStateBanner'
 
 // VS Dark terminal theme
 const VS_DARK_THEME = {
@@ -525,6 +526,8 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
       }}
       onMouseDown={focusTerminal}
     >
+      <RunStateBanner />
+
       {/* Terminal panel header */}
       <div
         style={{

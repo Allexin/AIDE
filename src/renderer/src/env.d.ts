@@ -124,6 +124,79 @@ interface OrchestrationSetup {
   connected: OrchestratorConnection[]
 }
 
+interface PipelineMachineNode {
+  type: 'agent' | 'check' | 'commit' | 'gate' | 'escalate' | 'end'
+  summary?: string
+  maxVisits?: number
+  onLimit?: string
+  role?: string
+  cli?: string
+  model?: string
+  permissions?: 'read-only' | 'write'
+  session?: string
+  command?: string
+  prep?: string
+  review?: 'algorithmic' | 'agent'
+  question?: string
+  message?: string
+  to?: 'user' | 'orchestrator'
+  result?: 'success' | 'failure'
+}
+
+interface PipelineMachine {
+  id: string
+  name: string
+  description: string
+  start: string
+  defaults?: { cli?: string; model?: string }
+  nodes: Record<string, PipelineMachineNode>
+  edges: Array<[string, string, string]>
+}
+
+interface PipelineNodeVisit {
+  node: string
+  visit: number
+  outcome: 'ok' | 'fail' | 'interrupted' | null
+  startedAt: string
+  finishedAt: string | null
+  sessionId: string | null
+  costUsd: number | null
+  error: string | null
+}
+
+interface PipelineEscalation {
+  id: string
+  node: string
+  kind: 'node' | 'gate' | 'engine'
+  to: 'user' | 'orchestrator'
+  message: string
+  raisedAt: string
+  answer: { action: string; text: string; by: string; at: string } | null
+}
+
+type PipelineRunStatus = 'running' | 'pausing' | 'paused' | 'waiting' | 'stopped' | 'finished' | 'failed'
+
+interface PipelineRunState {
+  runId: string
+  machineId: string
+  status: PipelineRunStatus
+  current: string | null
+  visits: Record<string, number>
+  outputs: Record<string, unknown>
+  history: PipelineNodeVisit[]
+  escalations: PipelineEscalation[]
+  result: 'success' | 'failure' | null
+  startedAt: string
+  finishedAt: string | null
+}
+
+interface PipelineRunSnapshot {
+  runId: string
+  projectPath: string
+  machine: PipelineMachine
+  state: PipelineRunState
+}
+
 interface EditorAPI {
   // Menu
   notifyEditorFileChanged: (hasFile: boolean) => void
@@ -212,6 +285,16 @@ interface EditorAPI {
   pipelineGetSetup: () => Promise<OrchestrationSetup | null>
   onPipelineOpenSetup: (cb: () => void) => () => void
   onOrchestratorConnected: (cb: (connection: OrchestratorConnection) => void) => () => void
+
+  // Pipeline runs (overlay)
+  pipelineGetRun: () => Promise<PipelineRunSnapshot | null>
+  pipelineControl: (action: 'pause' | 'stop' | 'resume' | 'abandon') => Promise<string | null>
+  pipelineAnswer: (escalationId: string, action: 'continue' | 'retry' | 'reject' | 'stop', text: string) => Promise<string | null>
+  pipelineGetTranscript: (runId: string, node: string, visit: number) => Promise<HistoryEntry[]>
+  pipelineGetCheckLog: (runId: string, node: string, visit: number) => Promise<string>
+  pipelineGetReport: (runId: string) => Promise<Record<string, unknown> | null>
+  onPipelineRunState: (cb: (snapshot: PipelineRunSnapshot) => void) => () => void
+  onPipelineTranscript: (cb: (event: { runId: string; node: string; visit: number; entry: HistoryEntry }) => void) => () => void
 
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
   getPathForFile: (file: File) => string

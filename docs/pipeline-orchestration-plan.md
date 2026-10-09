@@ -627,7 +627,16 @@ Merely having a connected orchestrator shows nothing.
   file list for the `excluded` coverage check.
 - `git commit -F <message>` on the index; return `sha`, files, message.
 
-### 5.8 Graph rendering spike
+### 5.8 Graph rendering spike — **replaced**
+
+The first overlay shows the machine as an ordered **flow list** (BFS order from
+`start`, node state, visit counters, per-visit chips, route summaries live in the
+agents' pipeline context). It needs no layout library and stays readable in the
+narrow editor area; a real graph view (`@xyflow/react`) remains an option if
+machines grow beyond what a list conveys.
+
+Original scope:
+
 
 Evaluate `@xyflow/react` with automatic layout (dagre/elk) against the overlay
 size constraints; read-only graph with live state styling.
@@ -647,10 +656,10 @@ without spending tokens. **Decided** (§8).
 | Phase | Content | Done when |
 |---|---|---|
 | **0** | §5.1–5.9 | TranscriptView live in history viewer; headless matrix written; Claude Code + Codex headless adapters run a prompt and return validated JSON; at least two different CLIs connect the MCP shim by following the doc alone (via the wizard) and pass `pipeline_hello`; Monitor spike documented; run-state banner works |
-| **1. Engine** | Machine schema + validator, run store (`runs/<runId>/state.json` + append-only `events.jsonl`), executor for all primitives (including both `commit` review variants), templating, budgets, stop modes, recovery on project open | All engine paths covered by tests with the fake CLI |
-| **2. Overlay** | Graph, live/past transcripts, escalation panel, controls, collapsed strip, final report | A run of a hand-written machine is fully observable and controllable from the UI alone |
-| **3. Orchestrator** | Pipeline MCP tools, tiered event delivery, `pipeline_start` subscription hint | Two different CLIs each complete a task end-to-end as orchestrator and are woken by events |
-| **4. Authoring** | `pipeline_guide`, `pipeline_schema`, `pipeline_validate`, `pipeline_smoke`, preview mode in overlay, starter role templates | An agent produces a valid code machine and a content machine for a real project from a user interview |
+| **1. Engine** ✅ | Machine schema + validator, run store (`runs/<runId>/state.json` + append-only `events.jsonl`), executor for all primitives (including both `commit` review variants), templating, budgets, stop modes, recovery on project open | All engine paths covered by tests with the fake CLI |
+| **2. Overlay** ✅ (awaits manual UI testing; flow list instead of a graph library, see §5.8) | Graph, live/past transcripts, escalation panel, controls, collapsed strip, final report | A run of a hand-written machine is fully observable and controllable from the UI alone |
+| **3. Orchestrator** ✅ (live acceptance: Claude Code and Codex each orchestrated a run to a real commit over MCP, woken via `pipeline_wait` — `src/main/pipeline/orchestrator.live.test.ts`; the background-monitor tier is not yet exercised live) | Pipeline MCP tools, tiered event delivery, `pipeline_start` subscription hint | Two different CLIs each complete a task end-to-end as orchestrator and are woken by events |
+| **4. Authoring** ✅ (`pipeline_guide`, `_schema`, `_validate`, `_smoke`; no overlay preview mode yet) | `pipeline_guide`, `pipeline_schema`, `pipeline_validate`, `pipeline_smoke`, preview mode in overlay, starter role templates | An agent produces a valid code machine and a content machine for a real project from a user interview |
 | **5. Breadth** | Headless adapters for OpenCode / Devin / others where supported; cross-vendor reviewer defaults; parallel runs (only if ever needed — they would require isolating working trees) | — |
 
 ---

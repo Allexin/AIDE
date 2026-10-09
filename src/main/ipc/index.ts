@@ -17,7 +17,7 @@ import {
   type ToolbarItem
 } from '../config/toolbarConfig'
 import { openProjectAndTrack } from '../windows/editor'
-import { getOrchestrationSetup } from '../pipeline'
+import { getOrchestrationSetup, pipelineManager } from '../pipeline'
 import { osDisplayName } from '../platform'
 import { runGitStatus } from '../filetree/gitStatus'
 import { searchProjectFileIndex } from '../filetree/fileIndex'
@@ -88,6 +88,10 @@ function runGitSubcommand(
 }
 
 export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remoteServer?: { forceReleaseTab: (tabId: string) => void; refreshProjects?: () => void }): void {
+  const projectOf = (sender: Electron.WebContents): string | undefined => {
+    const senderWin = BrowserWindow.fromWebContents(sender)
+    return senderWin ? [...openProjects].find(([, win]) => win === senderWin)?.[0] : undefined
+  }
   // Wire up CLI logger so any cliLog() call broadcasts to all renderer windows
   initCliLogger(() => openProjects.values())
 
@@ -432,9 +436,49 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
 
   // ── Pipeline: orchestration setup data for the wizard ─────────────────────────
   ipcMain.handle('pipeline:get-setup', (event) => {
-    const senderWin = BrowserWindow.fromWebContents(event.sender)
-    const projectPath = senderWin ? [...openProjects].find(([, win]) => win === senderWin)?.[0] : undefined
+    const projectPath = projectOf(event.sender)
     return projectPath ? getOrchestrationSetup(projectPath) : null
+  })
+
+  // ── Pipeline: run view and controls (overlay) ─────────────────────────────────
+  ipcMain.handle('pipeline:get-run', (event) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? pipelineManager.snapshot(projectPath) : null
+  })
+  ipcMain.handle('pipeline:control', async (event, action: 'pause' | 'stop' | 'resume' | 'abandon') => {
+    const projectPath = projectOf(event.sender)
+    if (!projectPath) return 'No project.'
+    try {
+      if (action === 'pause') pipelineManager.pause(projectPath)
+      else if (action === 'stop') await pipelineManager.stop(projectPath)
+      else if (action === 'resume') pipelineManager.resume(projectPath)
+      else pipelineManager.abandon(projectPath, 'abandoned by the user')
+      return null
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    }
+  })
+  ipcMain.handle('pipeline:answer', async (event, escalationId: string, action: 'continue' | 'retry' | 'reject' | 'stop', text: string) => {
+    const projectPath = projectOf(event.sender)
+    if (!projectPath) return 'No project.'
+    try {
+      await pipelineManager.answer(projectPath, escalationId, { action, text, by: 'user' })
+      return null
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    }
+  })
+  ipcMain.handle('pipeline:get-transcript', (event, runId: string, node: string, visit: number) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? pipelineManager.transcript(projectPath, runId, node, visit) : []
+  })
+  ipcMain.handle('pipeline:get-check-log', (event, runId: string, node: string, visit: number) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? pipelineManager.checkLog(projectPath, runId, node, visit) : ''
+  })
+  ipcMain.handle('pipeline:get-report', (event, runId: string) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? pipelineManager.report(projectPath, runId) : null
   })
 
   // ── CLI tools: list registered tools ──────────────────────────────────────────

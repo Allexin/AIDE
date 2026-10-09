@@ -12,11 +12,14 @@ import LogPanel from '../components/layout/LogPanel'
 import ThinkingPanel from '../components/thinking/ThinkingPanel'
 import StatusBar from '../components/layout/StatusBar'
 import OrchestrationSetupDialog from '../components/pipeline/OrchestrationSetupDialog'
+import PipelineOverlay, { PipelineStrip } from '../components/pipeline/PipelineOverlay'
+import { connectPipelineStore, usePipelineStore } from '../store/usePipelineStore'
 
 export default function EditorApp(): React.ReactElement {
   const [initialized, setInitialized] = useState(false)
   const [showReasoningPanel, setShowReasoningPanel] = useState(false)
   const [showOrchestrationSetup, setShowOrchestrationSetup] = useState(false)
+  const pipelineOverlayShown = usePipelineStore((s) => s.run !== null && s.run.runId !== s.dismissedRunId && s.expanded)
   const toast = useToastStore((s) => s.message)
   const hideToast = useToastStore((s) => s.hide)
 
@@ -53,6 +56,9 @@ export default function EditorApp(): React.ReactElement {
     }
     init()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Pipeline run state for the overlay and the terminal banner
+  useEffect(() => connectPipelineStore(), [])
 
   // CLI → Set Up Orchestration… menu item
   useEffect(() => window.editorApi.onPipelineOpenSetup(() => setShowOrchestrationSetup(true)), [])
@@ -112,17 +118,24 @@ export default function EditorApp(): React.ReactElement {
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <FileTreeColumn />
 
-        {/* Center area: editor (left) + terminal (right) */}
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          {editorVisible ? (
-            // Editor panel with computed flex width
-            <EditorPanel style={leftStyle} />
-          ) : (
-            // Empty spacer keeps terminal strip pinned to the right when collapsed
-            terminalCollapsed && <div style={{ flex: 1 }} />
-          )}
+        {/* Center area: pipeline strip on top; editor (left) + terminal (right) */}
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, overflow: 'hidden' }}>
+          <PipelineStrip />
+          <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            {editorVisible || pipelineOverlayShown ? (
+              // Left slot: the editor, with the pipeline view laid over it. The wrapper is
+              // always the same element so toggling the overlay never remounts Monaco.
+              <div style={{ ...(editorVisible || terminalCollapsed ? leftStyle : { flex: editorRatio, minWidth: 0, overflow: 'hidden' }), position: 'relative', display: 'flex' }}>
+                {editorVisible && <EditorPanel style={{ flex: 1, minWidth: 0 }} />}
+                {pipelineOverlayShown && <PipelineOverlay />}
+              </div>
+            ) : (
+              // Empty spacer keeps terminal strip pinned to the right when collapsed
+              terminalCollapsed && <div style={{ flex: 1 }} />
+            )}
 
-          <TerminalPanel style={terminalStyle} />
+            <TerminalPanel style={terminalStyle} />
+          </div>
         </div>
       </div>
 
