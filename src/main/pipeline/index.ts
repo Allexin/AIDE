@@ -12,7 +12,7 @@ import { getProjectUserPath } from '../config/projectUserData'
 import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
 import { startHeadless } from './headless'
 import { failedRun } from './headless/common'
-import { runShellCommand } from './processRunner'
+import { killAllProcessTreesSync, runShellCommand } from './processRunner'
 import { commitIndex, headSha, stagedDiff, status, workingDiff } from './git'
 import { smokeTestMachine } from './smoke'
 import type { HistoryEntry } from '../pty/cliTools/types'
@@ -82,7 +82,14 @@ export async function startPipelineServer(): Promise<void> {
   }
 }
 
+/**
+ * On quit: kill running agents and checks synchronously (the process may exit
+ * before async work completes), then drop the discovery files. Interrupted runs
+ * are recovered as paused when the project opens next time.
+ */
 export async function stopPipelineServer(): Promise<void> {
+  pipelineManager.prepareShutdown()
+  killAllProcessTreesSync()
   await pipelineServer.stop()
 }
 

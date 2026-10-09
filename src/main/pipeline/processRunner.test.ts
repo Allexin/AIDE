@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { join } from 'path'
-import { runProcess } from './processRunner'
+import { killAllProcessTreesSync, runProcess } from './processRunner'
 
 const FAKE_CLI = join(__dirname, 'testing', 'fakeCli.cjs')
 
@@ -57,6 +57,17 @@ describe('runProcess', () => {
     expect(result.cancelled).toBe(true)
     for (let i = 0; i < 40 && isAlive(grandchild); i++) await new Promise((r) => setTimeout(r, 50))
     expect(isAlive(grandchild)).toBe(false)
+  })
+
+  it('killAllProcessTreesSync kills live trees immediately', async () => {
+    let grandchild = 0
+    const handle = fake([{ spawnChild: true }, { sleep: 30_000 }], {
+      onLine: (line) => { grandchild = (JSON.parse(line) as { grandchild: number }).grandchild }
+    })
+    for (let i = 0; i < 100 && !grandchild; i++) await new Promise((r) => setTimeout(r, 50))
+    expect(killAllProcessTreesSync()).toBe(1)
+    expect(isAlive(grandchild)).toBe(false)
+    await handle.done
   })
 
   it('reports a spawn error for a missing executable', async () => {

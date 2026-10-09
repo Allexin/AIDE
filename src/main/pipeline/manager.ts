@@ -161,6 +161,11 @@ export class PipelineManager extends EventEmitter {
     return null
   }
 
+  /** Before AIDE kills child processes on quit. */
+  prepareShutdown(): void {
+    for (const run of this.active.values()) run.markInterrupting()
+  }
+
   forget(projectPath: string): void {
     const run = this.active.get(projectPath)
     if (run && (run.state.status === 'running' || run.state.status === 'pausing')) {

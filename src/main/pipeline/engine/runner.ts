@@ -148,6 +148,11 @@ export class PipelineRun {
     }
   }
 
+  /** AIDE is quitting and kills the running process: treat its result as an interruption, not a failure. */
+  markInterrupting(): void {
+    if (this.state.status === 'running' || this.state.status === 'pausing') this.interruptRequested = true
+  }
+
   /** End the run for good (after stop or an escalation answered with stop). */
   abandon(reason: string): void {
     if (this.isFinal()) return

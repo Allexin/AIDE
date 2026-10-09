@@ -1,4 +1,4 @@
-import { spawn, execFile, type ChildProcess } from 'child_process'
+import { spawn, execFile, execFileSync, type ChildProcess } from 'child_process'
 import { logEvent } from '../diagnostics'
 
 /**
@@ -43,6 +43,9 @@ export interface ProcessHandle {
 }
 
 const TAIL_CHARS = 64 * 1024
+
+/** Children started by this module that have not exited yet. */
+const liveChildren = new Set<ChildProcess>()
 
 function appendTail(tail: string, chunk: string): string {
   const next = tail + chunk
@@ -95,6 +98,9 @@ export function runProcess(options: RunProcessOptions): ProcessHandle {
       cancel: () => Promise.resolve()
     }
   }
+
+  liveChildren.add(child)
+  child.once('close', () => liveChildren.delete(child))
 
   const emitLine = (line: string): void => {
     const trimmed = line.endsWith('\r') ? line.slice(0, -1) : line
@@ -175,4 +181,25 @@ export function runShellCommand(options: Omit<RunProcessOptions, 'command' | 'ar
     return runProcess({ ...rest, command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', `"${commandLine}"`], windowsVerbatimArguments: true })
   }
   return runProcess({ ...rest, command: '/bin/sh', args: ['-c', commandLine] })
+}
+
+/**
+ * Synchronously kill every process tree this module started and that is still
+ * running. Called when AIDE quits, so headless agents do not outlive it and keep
+ * writing to the project. Only PIDs spawned here are touched.
+ */
+export function killAllProcessTreesSync(): number {
+  let killed = 0
+  for (const child of liveChildren) {
+    const pid = child.pid
+    if (pid === undefined || child.exitCode !== null || child.signalCode !== null) continue
+    try {
+      if (process.platform === 'win32') execFileSync('taskkill', ['/T', '/F', '/PID', String(pid)], { windowsHide: true, stdio: 'ignore', timeout: 5000 })
+      else process.kill(-pid, 'SIGKILL')
+      killed++
+    } catch { /* already gone */ }
+  }
+  liveChildren.clear()
+  if (killed > 0) logEvent('process-trees-killed-on-quit', { count: killed }, 'warn')
+  return killed
 }
