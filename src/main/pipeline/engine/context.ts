@@ -133,6 +133,25 @@ export function buildTaskPrompt(node: AgentNode, scope: Scope): string {
   return parts.join('\n\n')
 }
 
+/**
+ * Header for a node that continues another node's CLI session: the conversation
+ * already holds the previous step's instructions, so the new step is restated in
+ * the user message and declared to take precedence.
+ */
+export function stepSwitchPrompt(previousNode: string, node: string, summary: string, roleText: string, context: string, contract: string): string {
+  return [
+    `# New step: ${node}`,
+    `You are no longer doing the step "${previousNode}". You are now performing the step "${node}" of the pipeline: ${summary}. Where the instructions of "${previousNode}" conflict with this step, this step wins.`,
+    '## Your role for this step',
+    roleText.trim(),
+    '## Pipeline context',
+    context,
+    '## Output',
+    contract,
+    '## This step'
+  ].join('\n\n')
+}
+
 export function invalidOutputPrompt(errors: string[]): string {
   return [
     'Your previous final answer did not match the required output schema:',

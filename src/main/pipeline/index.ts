@@ -6,6 +6,16 @@ import { pipelineServer } from './server/pipelineServer'
 import { shimLaunch, writeLauncher, type ShimLaunch } from './server/runtimeFiles'
 import { buildPipelineTools, ORCHESTRATOR_RULES } from './mcp/tools'
 import { orchestrators, type OrchestratorConnection } from './orchestrators'
+import { PipelineManager, type RunSnapshot } from './manager'
+import { sharedPipelinesDir } from './engine/library'
+import { getProjectUserPath } from '../config/projectUserData'
+import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
+import { startHeadless } from './headless'
+import { failedRun } from './headless/common'
+import { runShellCommand } from './processRunner'
+import { commitIndex, headSha, stagedDiff, status, workingDiff } from './git'
+import { smokeTestMachine } from './smoke'
+import type { HistoryEntry } from '../pty/cliTools/types'
 
 /**
  * Pipeline bootstrap for the main process: the local pipeline server, the
@@ -16,6 +26,28 @@ import { orchestrators, type OrchestratorConnection } from './orchestrators'
 export const ORCHESTRATION_DOC = '.aide/docs/orchestration-mcp.md'
 
 let launcherPath = ''
+
+export const pipelineManager = new PipelineManager({
+  runsRoot: (projectPath) => getProjectUserPath(projectPath, 'runs'),
+  libraryDirs: (projectPath) => [
+    { dir: sharedPipelinesDir(projectPath), source: 'shared' },
+    { dir: getProjectUserPath(projectPath, 'pipelines'), source: 'personal' }
+  ],
+  headlessClis: () => getRegisteredTools().filter((tool) => tool.headless).map((tool) => tool.id),
+  deps: () => ({
+    startAgent: ({ cli, ...options }) => {
+      const tool = getToolById(cli)
+      return tool ? startHeadless(tool, options) : failedRun('not_installed', `CLI "${cli}" is not registered in AIDE`)
+    },
+    runCheck: ({ commandLine, cwd, timeoutMs, label, onOutput }) =>
+      runShellCommand({ commandLine, cwd, timeoutMs, label, onStdoutLine: (line) => onOutput(line + '\n'), onStderr: onOutput }),
+    git: { workingDiff, stagedDiff, status, headSha, commitIndex }
+  })
+})
+
+function authoringGuide(): string {
+  return readFileSync(join(__dirname, '../../resources/docs/pipeline-authoring.md'), 'utf8')
+}
 
 function runtimeDir(): string {
   return join(app.getPath('userData'), 'runtime')
@@ -34,7 +66,14 @@ export async function startPipelineServer(): Promise<void> {
       serverName: 'aide',
       serverVersion: app.getVersion(),
       instructions: ORCHESTRATOR_RULES.join(' ') + ` Call pipeline_hello first. Reference: ${ORCHESTRATION_DOC}`,
-      tools: () => buildPipelineTools(() => ({ aideVersion: app.getVersion(), launcherPath, docPath: ORCHESTRATION_DOC }))
+      tools: () => buildPipelineTools(() => ({
+        aideVersion: app.getVersion(),
+        launcherPath,
+        docPath: ORCHESTRATION_DOC,
+        manager: pipelineManager,
+        authoringGuide,
+        smoke: (projectPath, machineId, pingAgents) => smokeTestMachine(pipelineManager, projectPath, machineId, pingAgents)
+      }))
     })
     logEvent('pipeline-server-started', { port: pipelineServer.getPort() })
   } catch (err) {
@@ -68,8 +107,23 @@ export function attachPipelineProject(projectPath: string, win: BrowserWindow): 
     if (connection.projectPath === projectPath && !win.isDestroyed()) win.webContents.send('pipeline:orchestrator-connected', connection)
   }
   orchestrators.on('connected', onConnected)
+
+  const send = (channel: string, payload: unknown): void => { if (!win.isDestroyed()) win.webContents.send(channel, payload) }
+  const onState = (path: string, snapshot: RunSnapshot): void => { if (path === projectPath) send('pipeline:run-state', snapshot) }
+  const onTranscript = (path: string, runId: string, node: string, visit: number, entry: HistoryEntry): void => {
+    if (path === projectPath) send('pipeline:transcript', { runId, node, visit, entry })
+  }
+  pipelineManager.on('state', onState)
+  pipelineManager.on('transcript', onTranscript)
+  try { pipelineManager.recover(projectPath) } catch (err) {
+    logEvent('pipeline-recover-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn')
+  }
+
   return () => {
     orchestrators.off('connected', onConnected)
+    pipelineManager.off('state', onState)
+    pipelineManager.off('transcript', onTranscript)
+    pipelineManager.forget(projectPath)
     orchestrators.forgetProject(projectPath)
     pipelineServer.unregisterProject(projectPath)
   }

@@ -8,7 +8,7 @@ import type { PipelineEventType } from '../events'
 import type { AgentNode, CheckNode, CommitNode, Escalation, EscalationAnswer, MachineDefinition, NodeVisit, Outcome, RunState } from './types'
 import { evaluateCondition, resolveRef, templateRefs, type Scope } from './expressions'
 import { resolveSchema, validateAgainstSchema, BUILTIN_SCHEMAS } from './schema'
-import { buildPipelineContext, buildSystemAppend, buildTaskPrompt, invalidOutputPrompt, nodeSummary, outputContract } from './context'
+import { buildPipelineContext, buildSystemAppend, buildTaskPrompt, invalidOutputPrompt, nodeSummary, outputContract, stepSwitchPrompt } from './context'
 import type { RunStore, StoredMachine } from './runStore'
 
 /**
@@ -108,6 +108,8 @@ export class PipelineRun {
   }
 
   get runId(): string { return this.state.runId }
+
+  get definition(): MachineDefinition { return this.machine }
 
   isActive(): boolean {
     return this.state.status === 'running' || this.state.status === 'pausing' || this.state.status === 'paused' || this.state.status === 'waiting' || this.state.status === 'stopped'
@@ -294,7 +296,9 @@ export class PipelineRun {
     const refs = [...(node.inputs ?? []), ...templateRefs(node.task ?? '')]
     const scope = this.scope(await this.runValues(refs))
     const context = buildPipelineContext(this.machine, id, this.state)
-    const systemAppend = buildSystemAppend(this.deps.readRole(this.machineDir, node.role), context, outputContract(schemaName, schema))
+    const roleText = this.deps.readRole(this.machineDir, node.role)
+    const contract = outputContract(schemaName, schema)
+    const systemAppend = buildSystemAppend(roleText, context, contract)
     let prompt = buildTaskPrompt(node, scope)
 
     let resumeSessionId: string | undefined
@@ -302,6 +306,12 @@ export class PipelineRun {
       const target = node.session.slice('continue:'.length)
       resumeSessionId = this.state.sessions[target]
       if (!resumeSessionId) return { kind: 'escalate', message: `Node "${id}" continues the session of "${target}", which has none yet.` }
+      // The resumed conversation still carries the previous step's instructions, and
+      // they outweigh a fresh system append (seen live: commit prep refused to stage
+      // because the implement step had said "do not stage"). Restate the step in the
+      // user message, which the agent reads last.
+      const previous = [...this.state.history].reverse().find((h) => h.sessionId === resumeSessionId && h.finishedAt)
+      if (previous && previous.node !== id) prompt = stepSwitchPrompt(previous.node, id, nodeSummary(id, node), roleText, context, contract) + '\n\n' + prompt
     }
     const interrupted = [...this.state.history].reverse().find((h) => h.node === id && h.outcome === 'interrupted' && h.visit === visit.visit)
     if (interrupted?.sessionId) {

@@ -133,6 +133,10 @@ describe('PipelineRun', () => {
     expect(review.prompt).toContain('+line')
     expect(commitPrep.systemAppend).toContain('You prepare the commit')
     expect(commitPrep.resumeSessionId).toBe('session-1')
+    // A continued session is told explicitly that the step changed (the old step's instructions would win otherwise).
+    expect(commitPrep.prompt).toContain('# New step: commitPrep')
+    expect(commitPrep.prompt).toContain('You are no longer doing the step "implement"')
+    expect(implement.prompt).not.toContain('# New step')
   })
 
   it('loops review → fix → checks until accepted, continuing the implementer session', async () => {

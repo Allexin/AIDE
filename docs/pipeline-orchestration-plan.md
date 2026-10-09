@@ -293,6 +293,14 @@ agents touch — it controls only what the machine itself depends on.
    flow (do not run checks, do not stage, do not commit) come from the pipeline
    context automatically rather than being hand-written into every role file.
 
+**Continued sessions** (`session: "continue:<node>"`): the resumed conversation
+still holds the previous step's instructions, and they outweigh a fresh system
+append — seen in the live end-to-end test, where commit prep refused to stage
+because the implement step had said "do not stage". When a node continues a
+session last used by a *different* node, AIDE therefore restates the new step in
+the user message ("# New step: … this step wins where instructions conflict")
+with its role, pipeline context and output contract.
+
 Delivery (verified, see `docs/headless-cli-matrix.md`): Claude Code
 `--append-system-prompt-file`; for Codex, role, pipeline context and boundaries
 are prepended to the prompt (its `model_instructions_file` replaces rather than
