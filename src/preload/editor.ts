@@ -21,6 +21,22 @@ interface GitStatusResult {
   deleted: string[]
 }
 
+interface OrchestratorConnection {
+  projectPath: string
+  connectionId: string
+  tabId: string | null
+  client: { name: string; version: string } | null
+  connectedAt: string
+}
+
+interface OrchestrationSetup {
+  available: boolean
+  mcp: { command: string; args: string[]; env: Record<string, string> }
+  launcherPath: string
+  docPath: string
+  connected: OrchestratorConnection[]
+}
+
 interface SessionTabInfo {
   tabId: string
   sessionId: string | null
@@ -158,6 +174,11 @@ export interface EditorAPI {
 
   // PTY: create session with prompt
   terminalCreateWithPrompt: (toolId: string, prompt: string) => Promise<SessionTabInfo | null>
+
+  // Pipeline orchestration setup
+  pipelineGetSetup: () => Promise<OrchestrationSetup | null>
+  onPipelineOpenSetup: (cb: () => void) => () => void
+  onOrchestratorConnected: (cb: (connection: OrchestratorConnection) => void) => () => void
 
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
   getPathForFile: (file: File) => string
@@ -416,6 +437,18 @@ const editorApi: EditorAPI = {
   // PTY: create session with prompt
   terminalCreateWithPrompt: (toolId, prompt) =>
     ipcRenderer.invoke('terminal:create-with-prompt', toolId, prompt),
+
+  pipelineGetSetup: () => ipcRenderer.invoke('pipeline:get-setup'),
+  onPipelineOpenSetup: (cb: () => void): (() => void) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('pipeline:open-setup', handler)
+    return () => ipcRenderer.removeListener('pipeline:open-setup', handler)
+  },
+  onOrchestratorConnected: (cb: (connection: OrchestratorConnection) => void): (() => void) => {
+    const handler = (_: unknown, connection: OrchestratorConnection): void => cb(connection)
+    ipcRenderer.on('pipeline:orchestrator-connected', handler)
+    return () => ipcRenderer.removeListener('pipeline:orchestrator-connected', handler)
+  },
 
   getPathForFile: (file) => webUtils.getPathForFile(file),
 

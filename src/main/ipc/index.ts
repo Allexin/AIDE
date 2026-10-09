@@ -17,6 +17,7 @@ import {
   type ToolbarItem
 } from '../config/toolbarConfig'
 import { openProjectAndTrack } from '../windows/editor'
+import { getOrchestrationSetup } from '../pipeline'
 import { osDisplayName } from '../platform'
 import { runGitStatus } from '../filetree/gitStatus'
 import { searchProjectFileIndex } from '../filetree/fileIndex'
@@ -427,6 +428,13 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const tabInfo = await ptyMgr.createNewSessionWithPrompt(prompt, toolId, getActivatedTools())
     senderWin.webContents.send('terminal:new-tab', tabInfo)
     return tabInfo
+  })
+
+  // ── Pipeline: orchestration setup data for the wizard ─────────────────────────
+  ipcMain.handle('pipeline:get-setup', (event) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    const projectPath = senderWin ? [...openProjects].find(([, win]) => win === senderWin)?.[0] : undefined
+    return projectPath ? getOrchestrationSetup(projectPath) : null
   })
 
   // ── CLI tools: list registered tools ──────────────────────────────────────────

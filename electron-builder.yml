@@ -10,6 +10,8 @@ asarUnpack:
   - "**/*.node"
   - "node_modules/node-pty/**"
   - "node_modules/better-sqlite3/**"
+  # The pipeline MCP shim is executed by a plain Node-mode process (agents launch it).
+  - "resources/mcp/**"
 
 win:
   icon: app_icon.ico

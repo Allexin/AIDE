@@ -27,7 +27,7 @@ Electron + React + TypeScript desktop code editor. Windows only.
 - **Zustand** for state management
 - **Monaco Editor** for code editing
 - **xterm.js** + **node-pty** for integrated terminal
-- **No test framework** currently configured
+- **Vitest** for unit tests of pure logic (`npm test`); opt-in live CLI tests via `AIDE_LIVE_CLAUDE=1` / `AIDE_LIVE_CODEX=1`
 
 ## Core Concepts
 

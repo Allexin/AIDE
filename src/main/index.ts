@@ -15,6 +15,7 @@ import { setupMenu, isSwitchingProject, setRemoteServer } from './menu'
 import { RemoteServer } from './remote'
 import { ptyRegistry } from './pty/registry'
 import { startHookServer } from './hooks/hookServer'
+import { startPipelineServer, stopPipelineServer } from './pipeline'
 import { getCommandLineArgumentsHelp, hasCommandLineHelpArg, resolveStartupArgs } from './startupArgs'
 import { flush as flushSessionMetaCache } from './pty/cliTools/sessionMetaCache'
 
@@ -57,6 +58,9 @@ if (hasCommandLineHelpArg(userArgs)) {
       // session assignment; nothing else breaks.
       logEvent('hook-server-start-failed', { message: err?.message ?? String(err) }, 'warn')
     })
+
+  // Before any project opens, so each project's discovery file gets the port.
+  await startPipelineServer()
 
   const remoteServer = new RemoteServer(ptyRegistry, openProjects)
   remoteServer.start()
@@ -104,4 +108,6 @@ app.on('before-quit', () => {
   for (const [projectPath] of openProjects) {
     releaseLock(projectPath)
   }
+  // Removes this instance's discovery files so agents do not find a dead AIDE.
+  void stopPipelineServer()
 })

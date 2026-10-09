@@ -11,10 +11,12 @@ import TerminalPanel from '../components/layout/TerminalPanel'
 import LogPanel from '../components/layout/LogPanel'
 import ThinkingPanel from '../components/thinking/ThinkingPanel'
 import StatusBar from '../components/layout/StatusBar'
+import OrchestrationSetupDialog from '../components/pipeline/OrchestrationSetupDialog'
 
 export default function EditorApp(): React.ReactElement {
   const [initialized, setInitialized] = useState(false)
   const [showReasoningPanel, setShowReasoningPanel] = useState(false)
+  const [showOrchestrationSetup, setShowOrchestrationSetup] = useState(false)
   const toast = useToastStore((s) => s.message)
   const hideToast = useToastStore((s) => s.hide)
 
@@ -51,6 +53,9 @@ export default function EditorApp(): React.ReactElement {
     }
     init()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // CLI → Set Up Orchestration… menu item
+  useEffect(() => window.editorApi.onPipelineOpenSetup(() => setShowOrchestrationSetup(true)), [])
 
   // Forward CLI log events from main process into the LogPanel
   useEffect(() => {
@@ -124,6 +129,8 @@ export default function EditorApp(): React.ReactElement {
       {showReasoningPanel && <ThinkingPanel />}
       <LogPanel />
       <StatusBar />
+
+      {showOrchestrationSetup && <OrchestrationSetupDialog onClose={() => setShowOrchestrationSetup(false)} />}
 
       {/* Toast notification */}
       {toast && (

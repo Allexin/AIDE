@@ -490,6 +490,8 @@ export class PtyManager {
 
   private spawnPty(tabId: string, tool?: CliTool): nodePty.IPty {
     const env = { ...process.env } as Record<string, string>
+    // Lets the pipeline MCP shim, started by the agent in this tab, identify the tab.
+    env.AIDE_TAB_ID = tabId
     if (tool?.getEnvOverrides) {
       Object.assign(env, tool.getEnvOverrides())
     }

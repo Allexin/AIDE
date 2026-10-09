@@ -539,7 +539,25 @@ timeout, cancel = kill the process tree **by the spawned PID only**
 (`taskkill /T /F /PID <pid>` on Windows), `logEvent` diagnostics for spawn
 failures, timeouts and kills.
 
-### 5.4 Local API server + MCP
+### 5.4 Local API server + MCP — **done**
+
+Implemented: `resources/mcp/aide-mcp.cjs` (stdio shim; also `events` / `wait`
+modes), `src/main/pipeline/server/` (pipeline server, discovery files, shell
+launcher `<userData>/runtime/bin/aide-pipeline(.cmd)`), `src/main/pipeline/mcp/`
+(MCP protocol subset + tools), `src/main/pipeline/events.ts` (event bus).
+Deviation from the original scope: **no `@modelcontextprotocol/sdk`** — the shim
+forwards one JSON-RPC message per HTTP request, which the SDK transports do not
+model; the needed subset (`initialize`, `ping`, `tools/list`, `tools/call`,
+notifications) is small and fully tested. Verified live: Claude Code and Codex
+both connect through the shim and complete `pipeline_hello`
+(`src/main/pipeline/server/mcp.live.test.ts`); the shim runs under the AIDE
+executable in Node mode (`ELECTRON_RUN_AS_NODE=1`). Discovery: the shim picks
+the registered project containing the session's working directory, so agent
+configs hold neither ports, tokens nor project paths. PTY tabs get
+`AIDE_TAB_ID`, which the shim forwards so AIDE knows which tab connected.
+
+Original scope:
+
 
 - Extend `HookServer` (or add a sibling with the same guarantees: localhost
   only, random token, permanent `'error'` and `'clientError'` listeners) with
@@ -556,7 +574,16 @@ failures, timeouts and kills.
 - Spike: long-lived event stream under Claude Code Monitor and background
   tasks; measure duration limits and reconnection.
 
-### 5.5 Orchestration MCP doc + wizard
+### 5.5 Orchestration MCP doc + wizard — **done** (UI awaits manual testing)
+
+Implemented: `resources/docs/orchestration-mcp.md` (deployed to
+`.aide/docs/` on project open), **CLI → Set Up Orchestration…** menu item and
+`OrchestrationSetupDialog` (agent choice, notes, ready-made prompt with the exact
+launch spec, waiting state driven by `pipeline_hello`, **Restart tab** that
+resumes the same CLI session in a new tab).
+
+Original scope:
+
 
 - `resources/docs/orchestration-mcp.md`, deployed to `.aide/docs/` like
   `toolbar.md`. Written for agents: connection steps per transport, tool list,
@@ -647,9 +674,9 @@ overlay is shown.
    doc (§1A).
 3. **Test framework for the engine** — `vitest` + a fake headless CLI, scoped to
    the engine (§5.9).
-4. **New dependencies** — `@tanstack/react-virtual`, `@modelcontextprotocol/sdk`,
-   `@xyflow/react` (+ a layout library) are accepted in principle; each is
-   confirmed by its Phase 0 spike before it is relied on.
+4. **New dependencies** — `@tanstack/react-virtual` (added) and `@xyflow/react`
+   (+ a layout library, Phase 2) are accepted; each is confirmed when it is
+   first relied on. `@modelcontextprotocol/sdk` turned out to be unnecessary (§5.4).
 
 No open decisions remain; outstanding uncertainty is in the **[verify]** items,
 resolved by Phase 0.

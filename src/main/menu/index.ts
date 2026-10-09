@@ -380,6 +380,14 @@ export function rebuildMenu(): void {
             if (parent) openCliToolsWindow(parent)
           }
         },
+        {
+          label: 'Set Up Orchestration...',
+          click: (): void => {
+            const focused = BrowserWindow.getFocusedWindow()
+            const target = focused && openProjectsRef && [...openProjectsRef.values()].includes(focused) ? focused : getEditorWindow()
+            target?.webContents.send('pipeline:open-setup')
+          }
+        },
         { type: 'separator' },
         {
           label: 'Manage Accounts...',

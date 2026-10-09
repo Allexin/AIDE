@@ -20,6 +20,7 @@ import { startToolbarWatcher } from '../toolbar/toolbarWatcher'
 import { rebuildMenu, removeEditorWindow } from '../menu'
 import type { StartupTerminalOptions } from '../pty/ptyManager'
 import { getProjectUserPath } from '../config/projectUserData'
+import { attachPipelineProject } from '../pipeline'
 
 export interface OpenProjectOptions {
   terminal?: StartupTerminalOptions
@@ -105,6 +106,7 @@ export function openProjectAndTrack(
 
   const editorWin = createEditorWindow(projectPath)
   openProjects.set(projectPath, editorWin)
+  const detachPipeline = attachPipelineProject(projectPath, editorWin)
   onProjectsChanged?.()
 
   // Create PTY manager for this window
@@ -164,6 +166,7 @@ export function openProjectAndTrack(
   })
 
   editorWin.on('closed', () => {
+    detachPipeline()
     // Save active sessions before disposing (must be before disposeAll clears tabs)
     const sessions = ptyMgr.getActiveSessions()
     const toSave = sessions.map((s) => ({

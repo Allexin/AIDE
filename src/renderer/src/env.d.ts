@@ -108,6 +108,22 @@ interface ToolbarInfo {
   suggestedType: string | null
 }
 
+interface OrchestratorConnection {
+  projectPath: string
+  connectionId: string
+  tabId: string | null
+  client: { name: string; version: string } | null
+  connectedAt: string
+}
+
+interface OrchestrationSetup {
+  available: boolean
+  mcp: { command: string; args: string[]; env: Record<string, string> }
+  launcherPath: string
+  docPath: string
+  connected: OrchestratorConnection[]
+}
+
 interface EditorAPI {
   // Menu
   notifyEditorFileChanged: (hasFile: boolean) => void
@@ -191,6 +207,11 @@ interface EditorAPI {
 
   // PTY: create session with prompt
   terminalCreateWithPrompt: (toolId: string, prompt: string) => Promise<SessionTabInfo | null>
+
+  // Pipeline orchestration setup
+  pipelineGetSetup: () => Promise<OrchestrationSetup | null>
+  onPipelineOpenSetup: (cb: () => void) => () => void
+  onOrchestratorConnected: (cb: (connection: OrchestratorConnection) => void) => () => void
 
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
   getPathForFile: (file: File) => string
