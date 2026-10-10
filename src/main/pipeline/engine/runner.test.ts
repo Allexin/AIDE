@@ -211,6 +211,21 @@ describe('PipelineRun', () => {
     expect(stuck.state().status).toBe('failed')
   })
 
+  it('keeps events compact: no logs in them, escalations clipped with the allowed actions and a pointer to the details', async () => {
+    const longLog = 'E'.repeat(20_000)
+    const h = harness({ agent: happy, check: () => ({ exitCode: 1, output: longLog }) })
+    await h.run.run()
+    const failed = h.events.find((e) => e.type === 'check_failed')!
+    expect(failed.data).toEqual({ node: 'checks', visit: 1, summary: 'check checks failed (visit 1)' })
+    const escalation = h.events.find((e) => e.type === 'escalation')!.data
+    expect(escalation).toMatchObject({ kind: 'limit', node: 'build', actions: ['retry', 'continue', 'stop'], source: { step: 'checks', visit: 3 }, more: 'pipeline_output step "checks" visit 3' })
+    expect(String(escalation.message).length).toBeLessThan(1300)
+    expect(JSON.stringify(h.events).length).toBeLessThan(6000)
+    // The full message stays in the run state for the run view.
+    expect(h.run.pendingEscalation()!.message.length).toBeGreaterThan(2000)
+    expect(h.store.readOutput('run-1', 'checks', 2)).toMatchObject({ exitCode: 1 })
+  })
+
   it('continue leaves an exhausted loop as if it passed', async () => {
     const h = harness({ agent: (req) => req.label.endsWith('contentReview') ? reject : happy(req) })
     await h.run.run()

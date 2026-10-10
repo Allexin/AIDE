@@ -91,10 +91,11 @@ describe('pipeline server + stdio shim', () => {
 
     const connected = new Promise<unknown>((resolveConnected) => orchestrators.once('connected', resolveConnected))
     const hello = await shim.request({ id: 3, method: 'tools/call', params: { name: 'pipeline_hello', arguments: {} } })
-    const result = hello.result as { content: Array<{ text: string }>; structuredContent: Record<string, unknown> }
+    const result = hello.result as { content: Array<{ text: string }>; structuredContent?: unknown }
     expect(result.content[0].text).toContain('orchestrator')
-    expect(result.structuredContent).toMatchObject({ projectPath: project, tabId: 'tab-7', client: { name: 'test-client', version: '1.2.3' } })
-    expect(await connected).toMatchObject({ projectPath: project, tabId: 'tab-7' })
+    // Results are text only — nothing is duplicated into the agent's context.
+    expect(result.structuredContent).toBeUndefined()
+    expect(await connected).toMatchObject({ projectPath: project, tabId: 'tab-7', client: { name: 'test-client', version: '1.2.3' } })
   })
 
   it('reports unknown tools and methods as JSON-RPC errors', async () => {
@@ -135,19 +136,34 @@ describe('pipeline server + stdio shim', () => {
     expect(JSON.parse(stdout)).toMatchObject({ runId: 'run-2', type: 'escalation' })
   })
 
-  it('events streams backlog and live events as NDJSON', async () => {
-    const child = spawn(process.execPath, [SHIM, 'events', '--run', 'run-3'], { cwd: project, env: { ...process.env, AIDE_RUNTIME_DIR: runtimeDir } })
-    pipelineEvents.emit(project, 'run-3', 'node_started', { node: 'a' })
+  async function streamLines(args: string[], emitLive: () => void, count: number): Promise<Array<Record<string, unknown>>> {
+    const child = spawn(process.execPath, [SHIM, 'events', ...args], { cwd: project, env: { ...process.env, AIDE_RUNTIME_DIR: runtimeDir } })
     const lines: Array<Record<string, unknown>> = []
     await new Promise<void>((resolveLines) => {
       createInterface({ input: child.stdout }).on('line', (line) => {
-        if (!line.trim()) return
+        expect(line.trim()).not.toBe('') // heartbeats never reach the agent
         lines.push(JSON.parse(line) as Record<string, unknown>)
-        if (lines.length === 1) setTimeout(() => pipelineEvents.emit(project, 'run-3', 'node_finished', { node: 'a' }), 100)
-        if (lines.length === 2) resolveLines()
+        if (lines.length === 1) setTimeout(emitLive, 100)
+        if (lines.length === count) resolveLines()
       })
     })
     child.kill()
+    return lines
+  }
+
+  it('events streams only the events that need the orchestrator, backlog and live', async () => {
+    pipelineEvents.emit(project, 'run-3', 'node_started', { node: 'a' })
+    pipelineEvents.emit(project, 'run-3', 'escalation', { node: 'a' })
+    const lines = await streamLines(['--run', 'run-3'], () => {
+      pipelineEvents.emit(project, 'run-3', 'node_finished', { node: 'a' })
+      pipelineEvents.emit(project, 'run-3', 'run_finished', { result: 'success' })
+    }, 2)
+    expect(lines.map((l) => l.type)).toEqual(['escalation', 'run_finished'])
+  })
+
+  it('events --all streams every event', async () => {
+    pipelineEvents.emit(project, 'run-4', 'node_started', { node: 'a' })
+    const lines = await streamLines(['--run', 'run-4', '--all'], () => pipelineEvents.emit(project, 'run-4', 'node_finished', { node: 'a' }), 2)
     expect(lines.map((l) => l.type)).toEqual(['node_started', 'node_finished'])
   })
 

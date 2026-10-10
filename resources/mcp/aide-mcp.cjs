@@ -10,7 +10,9 @@
  *
  * Usage (normally via the AIDE executable with ELECTRON_RUN_AS_NODE=1):
  *   aide-mcp.cjs [mcp]                                   stdio MCP server
- *   aide-mcp.cjs events --run <id> [--since <eventId>]   stream run events as NDJSON
+ *   aide-mcp.cjs events --run <id> [--since <eventId>] [--all]
+ *                                                        stream the run's events that need the
+ *                                                        orchestrator as NDJSON (--all: every event)
  *   aide-mcp.cjs wait --run <id> [--since <eventId>] [--timeout <sec>]
  *                                                        print the next event and exit
  *
@@ -157,6 +159,7 @@ function feed(kind, args) {
   if (since) query.set('since', since)
   const timeout = argValue(args, '--timeout')
   if (timeout) query.set('timeout', timeout)
+  if (args.includes('--all')) query.set('all', '1')
   const req = http.request({ host: '127.0.0.1', port: info.port, path: `/${kind}?${query}`, method: 'GET', headers: headers(info) }, (res) => {
     if (res.statusCode !== 200) {
       let text = ''
@@ -165,8 +168,18 @@ function feed(kind, args) {
       return
     }
     res.setEncoding('utf8')
-    res.on('data', (chunk) => process.stdout.write(chunk))
-    res.on('end', () => process.exit(0))
+    // The server's keep-alive heartbeats are blank lines; a monitor would turn each into a notification.
+    let buffer = ''
+    res.on('data', (chunk) => {
+      buffer += chunk
+      const lines = buffer.split('\n')
+      buffer = lines.pop()
+      for (const line of lines) if (line.trim()) process.stdout.write(line + '\n')
+    })
+    res.on('end', () => {
+      if (buffer.trim()) process.stdout.write(buffer + '\n')
+      process.exit(0)
+    })
   })
   req.on('error', (err) => { process.stderr.write(`aide-mcp ${kind}: ${err.message}\n`); process.exit(3) })
   req.end()

@@ -13,6 +13,7 @@ import type { MachineDefinition, RunState } from './types'
  *   events.jsonl      append-only event log
  *   nodes/<node>-<visit>/        run dir handed to the agent CLI (schema, last message)
  *   nodes/<node>-<visit>.jsonl   normalized transcript of that visit
+ *   outputs/<node>-<visit>.json  output of that visit (agent JSON, check exit code + log tail, commit result)
  *   checks/<node>-<visit>.log    output of a check node
  *   report.json
  */
@@ -66,6 +67,18 @@ export class RunStore {
     return readFileSync(path, 'utf8').split('\n').filter(Boolean).flatMap((line) => {
       try { return [JSON.parse(line) as HistoryEntry] } catch { return [] }
     })
+  }
+
+  writeOutput(runId: string, node: string, visit: number, output: unknown): void {
+    const dir = join(this.dir(runId), 'outputs')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, `${node}-${visit}.json`), JSON.stringify(output ?? null, null, 2), 'utf8')
+  }
+
+  readOutput(runId: string, node: string, visit: number): unknown {
+    const path = join(this.dir(runId), 'outputs', `${node}-${visit}.json`)
+    if (!existsSync(path)) return undefined
+    try { return JSON.parse(readFileSync(path, 'utf8')) } catch { return undefined }
   }
 
   appendCheckLog(runId: string, node: string, visit: number, text: string): void {

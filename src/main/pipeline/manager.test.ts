@@ -64,9 +64,14 @@ const happy = (label: string): Partial<HeadlessResult> => {
   return { structured: { status: 'done', summary: 'did X', docsChanged: [] } }
 }
 
-async function call(server: McpServer, projectPath: string, name: string, args: Record<string, unknown> = {}): Promise<{ text: string; structured?: Record<string, unknown>; isError?: boolean }> {
-  const response = await server.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, { projectPath, connectionId: 'c', tabId: null }) as { result: { content: Array<{ text: string }>; structuredContent?: Record<string, unknown>; isError?: boolean } }
-  return { text: response.result.content[0].text, structured: response.result.structuredContent, isError: response.result.isError }
+/** Calls a tool; `data` is the JSON on the last line of the text result, when there is one. */
+async function call(server: McpServer, projectPath: string, name: string, args: Record<string, unknown> = {}): Promise<{ text: string; data?: Record<string, unknown>; isError?: boolean }> {
+  const response = await server.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, { projectPath, connectionId: 'c', tabId: null }) as { result: { content: Array<{ text: string }>; structuredContent?: unknown; isError?: boolean } }
+  expect(response.result.structuredContent).toBeUndefined()
+  const text = response.result.content[0].text
+  let data: Record<string, unknown> | undefined
+  try { data = JSON.parse(text.split('\n').pop() ?? '') as Record<string, unknown> } catch { data = undefined }
+  return { text, data, isError: response.result.isError }
 }
 
 async function until(condition: () => boolean): Promise<void> {
@@ -89,7 +94,7 @@ describe('PipelineManager through the MCP tools', () => {
     const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'aide-pipeline', docPath: 'doc', manager })))
 
     const list = await call(server, dir, 'pipeline_list')
-    expect(list.structured?.machines).toEqual([expect.objectContaining({ id: 'code-feature', valid: true })])
+    expect(list.data?.machines).toEqual([expect.objectContaining({ id: 'code-feature', valid: true })])
 
     const missing = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: {} })
     expect(missing.isError).toBe(true)
@@ -97,16 +102,33 @@ describe('PipelineManager through the MCP tools', () => {
 
     const started = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Add X', acceptance: ['X works'] } })
     expect(started.isError).toBeUndefined()
-    const runId = String(started.structured?.runId)
+    const runId = /Run (\S+) started/.exec(started.text)![1]
     expect(started.text).toContain(`events --run ${runId}`)
 
+    // Step progress does not wake the orchestrator: the first event it gets is the end of the run.
     const waited = await call(server, dir, 'pipeline_wait', { runId, since: 0, timeoutSec: 5 })
-    expect(['commit_done', 'run_finished']).toContain(waited.structured?.type)
+    expect(waited.data).toMatchObject({ type: 'run_finished', data: { result: 'success', summary: expect.stringContaining('pipeline_report') } })
     await until(() => manager.activeRun(dir)?.isFinal() === true)
 
     const report = await call(server, dir, 'pipeline_report', { runId })
-    expect(report.structured).toMatchObject({ result: 'success', nonBlockingFindings: ['nit'], commits: [{ sha: 'abc123' }] })
-    expect((await call(server, dir, 'pipeline_runs')).structured?.runs).toEqual([expect.objectContaining({ runId, status: 'finished' })])
+    expect(report.data).toMatchObject({
+      result: 'success',
+      nonBlockingFindings: ['nit'],
+      commits: [{ sha: 'abc123', subject: 'Add X', files: 1 }],
+      visits: { implement: 1, checks: 1, review: 1, commitPrep: 1, commit: 1 },
+      loops: { build: 1, commit: 1 },
+      summaries: [{ step: 'implement', summary: 'did X' }, { step: 'review', summary: 'fine' }]
+    })
+    expect(report.data).not.toHaveProperty('params')
+    expect(report.text.length).toBeLessThan(800)
+    const detailed = await call(server, dir, 'pipeline_report', { runId, detail: true })
+    expect(detailed.data?.visits).toHaveLength(5)
+    expect(detailed.data).not.toHaveProperty('params')
+
+    const output = await call(server, dir, 'pipeline_output', { step: 'checks', runId })
+    expect(output.text).toBe('checks visit 1 exit code 0:\nok\n')
+    expect((await call(server, dir, 'pipeline_output', { step: 'review', runId })).text).toContain('"verdict":"accept"')
+    expect((await call(server, dir, 'pipeline_runs')).data).toEqual([expect.objectContaining({ runId, status: 'finished' })])
   })
 
   it('refuses a second active run and answers escalations', async () => {
@@ -115,15 +137,15 @@ describe('PipelineManager through the MCP tools', () => {
     const manager = new PipelineManager(environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [] } } : happy(label)))
     const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', docPath: 'd', manager })))
     const started = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] } })
-    const runId = String(started.structured?.runId)
+    const runId = /Run (\S+) started/.exec(started.text)![1]
     const event = await call(server, dir, 'pipeline_wait', { runId, timeoutSec: 5 })
-    expect(event.structured).toMatchObject({ type: 'escalation', data: { node: 'implement', kind: 'step' } })
+    expect(event.data).toMatchObject({ type: 'escalation', data: { node: 'implement', kind: 'step' } })
 
     const second = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Z', acceptance: [] } })
     expect(second.isError).toBe(true)
     expect(second.text).toContain('still waiting')
 
-    const escalationId = String((event.structured?.data as Record<string, unknown>).escalationId)
+    const escalationId = String((event.data?.data as Record<string, unknown>).escalationId)
     const answered = await call(server, dir, 'pipeline_answer', { escalationId, action: 'stop', text: 'agreed, drop it' })
     expect(answered.isError).toBeUndefined()
     await until(() => manager.activeRun(dir)?.isFinal() === true)

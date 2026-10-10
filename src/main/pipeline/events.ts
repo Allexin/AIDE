@@ -26,10 +26,21 @@ export interface PipelineEvent {
   data: Record<string, unknown>
 }
 
-/** Events after which an orchestrator usually has to act. `wait` returns on these. */
+/**
+ * Events after which the orchestrator has to act: a decision is needed, the run
+ * changed hands (paused/stopped, possibly by the user), or it ended. `wait` and
+ * the default event stream deliver only these; progress (steps, loop repeats,
+ * failed checks inside loops, commits) is in the report.
+ */
 export const SIGNIFICANT_EVENTS: ReadonlySet<PipelineEventType> = new Set([
-  'check_failed', 'escalation', 'commit_done', 'run_paused', 'run_stopped', 'run_finished', 'run_failed'
+  'escalation', 'run_paused', 'run_stopped', 'run_finished', 'run_failed'
 ])
+
+/** Shorten text for the orchestrator's context; the full text stays available through pipeline_output. */
+export function clip(text: string, max: number, keep: 'head' | 'tail' = 'head'): string {
+  if (text.length <= max) return text
+  return keep === 'head' ? `${text.slice(0, max)}… [truncated]` : `[truncated] …${text.slice(-max)}`
+}
 
 const MAX_EVENTS_PER_PROJECT = 5000
 

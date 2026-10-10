@@ -73,9 +73,9 @@ project", the project is not open in AIDE.
    files.** AIDE shows the user a warning banner during that time.
 3. Escalations from a run come to you first. Answer them when the answer is
    within the plan; ask the user otherwise.
-4. Read each run's report: facts collected by AIDE (diff, checks, iterations)
-   plus non-blocking findings. Recurring findings are your signal to plan a
-   refactoring task.
+4. Read each run's report: facts collected by AIDE (commits, visits per step,
+   loop iterations, decisions) plus agent summaries and non-blocking findings.
+   Recurring findings are your signal to plan a refactoring task.
 5. Keep the plan and its progress in the project's documents, not only in
    your context — your session may be restarted at any time.
 
@@ -85,24 +85,41 @@ Pick the best option your client supports:
 
 1. **Background command / monitor** (preferred). Run the launcher from the
    `pipeline_hello` result:
-   - `"<launcher>" events --run <runId> --since <lastEventId>` — one JSON event
-     per line for as long as it runs;
+   - `"<launcher>" events --run <runId> --since <lastEventId>` — one JSON line
+     per event that needs you, for as long as it runs;
    - `"<launcher>" wait --run <runId> --since <lastEventId>` — prints the next
-     significant event and exits.
+     such event and exits.
 2. **Blocking MCP call**: `pipeline_wait` with a timeout.
 3. **Polling**: `pipeline_status`.
 
 Always pass the last event id you have seen as `since`; nothing is lost across
 reconnects or session restarts.
 
-Event types: `node_started`, `node_finished` (a step; `node` is its id),
-`check_failed`, `loop_repeated`, `escalation`, `commit_done`, `run_paused`,
-`run_stopped`, `run_finished`, `run_failed`.
+**Only events that need you are delivered** — everything else would just fill
+your context:
 
-Escalation kinds: `step` (a step asks for a decision, e.g. the implementer
-reports `plan_wrong`, or a check failed outside any loop), `gate` (approval),
-`limit` (a loop used up its iterations), `engine` (a step could not run: CLI
-crash, usage limit, unusable output).
+| Event | What to do |
+|---|---|
+| `escalation` | Decide: answer with `pipeline_answer`, or ask the user |
+| `run_paused`, `run_stopped` | The run changed hands (possibly the user paused or stopped it in AIDE); resume when appropriate |
+| `run_finished`, `run_failed` | Read `pipeline_report`, update the plan |
+
+Step progress (`node_started`, `node_finished`, `check_failed`, `loop_repeated`,
+`commit_done`) is not delivered: loops handle failed checks and review findings
+themselves, and the report has the outcome. `events --all` streams it for
+debugging.
+
+Every event has a one-line `summary`. An escalation carries its `kind`, a
+clipped `message`, the allowed `actions`, and — when a step's output explains
+it — `source` with a ready `pipeline_output` call for the details:
+
+- `step` — a step asks for a decision (e.g. the implementer reports
+  `plan_wrong`, or a check failed outside any loop): continue / retry / stop;
+- `gate` — approval: continue / reject / stop;
+- `limit` — a loop used up its iterations: retry (one more) / continue (accept
+  as it is) / stop;
+- `engine` — a step could not run (CLI crash, usage limit, unusable output):
+  retry / stop.
 
 ## 6. Tools
 
@@ -111,12 +128,13 @@ crash, usage limit, unusable output).
 | `pipeline_hello` | Handshake; returns rules and event delivery options |
 | `pipeline_list` | Machines with descriptions (when to use them), params, validity |
 | `pipeline_start` | Start a run: `{ machine, params }` → run id and the subscribe command |
-| `pipeline_status` | Current step, loop iterations, pending escalation, recent events |
-| `pipeline_wait` | Block until the next significant event (or a timeout) |
+| `pipeline_status` | Current step, loop iterations, visits per step, pending escalation, last events |
+| `pipeline_wait` | Block until the next event that needs you (or a timeout) |
 | `pipeline_answer` | Answer an escalation: `continue` (go on; approve a gate; leave an exhausted loop as it is), `retry` (run the step again; one more loop iteration), `reject` (gates), `stop` |
 | `pipeline_stop` | `pause` (after the current step), `stop` (now, resumable), `abandon` |
 | `pipeline_resume` | Continue a paused or stopped run |
-| `pipeline_report` | Report of a run: facts, summaries, non-blocking findings, cost |
+| `pipeline_report` | Compact report: result, commits, visits per step, loops, summaries, findings, decisions, cost; `detail: true` adds every visit |
+| `pipeline_output` | Details on demand: the output of one step visit (agent JSON, check log tail, commit result) |
 | `pipeline_runs` | Recent runs |
 | `pipeline_guide` / `pipeline_schema` | How to author machines; the machine file schema |
 | `pipeline_validate` / `pipeline_smoke` | Check machines statically / on this computer |

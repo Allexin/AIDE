@@ -4,9 +4,9 @@ import type { HeadlessRun, HeadlessRunOptions } from '../headless/types'
 import type { ProcessHandle } from '../processRunner'
 import type { CommitResult, FileChange } from '../git'
 import { checkCommitCoverage } from '../git'
-import type { PipelineEventType } from '../events'
+import { clip, type PipelineEventType } from '../events'
 import type { AgentStep, CheckStep, CommitStep, Escalation, EscalationAnswer, LoopFeedback, MachineDefinition, NodeVisit, Outcome, RunState } from './types'
-import { evaluateCondition, resolveRef, stringifyValue, templateRefs, type Scope } from './expressions'
+import { evaluateCondition, stringifyValue, templateRefs, type Scope } from './expressions'
 import { resolveSchema, validateAgainstSchema, BUILTIN_SCHEMAS } from './schema'
 import { buildPipelineContext, buildSystemAppend, buildTaskPrompt, describeCondition, feedbackSections, invalidOutputPrompt, outputContract, stepSummary, stepSwitchPrompt } from './context'
 import { MachineTree, blockLimit, type DescendContext, type TreeBlock, type TreeLeaf } from './tree'
@@ -60,12 +60,35 @@ export interface RunReport {
   startedAt: string
   finishedAt: string
   startCommit: string | null
+  /** Final iteration of every loop / commit block entered. */
+  loops: Record<string, number>
   visits: Array<{ node: string; visit: number; outcome: string | null; durationMs: number | null; costUsd: number | null; error: string | null }>
   commits: CommitResult[]
   summaries: Array<{ node: string; summary: string }>
   nonBlockingFindings: string[]
   escalations: Escalation[]
   costUsd: number
+}
+
+const ESCALATION_ACTIONS: Record<Escalation['kind'], string[]> = {
+  step: ['continue', 'retry', 'stop'],
+  gate: ['continue', 'reject', 'stop'],
+  limit: ['retry', 'continue', 'stop'],
+  engine: ['retry', 'stop']
+}
+
+/** What the orchestrator gets about an escalation: the decision to make, not the whole log. */
+export function compactEscalation(e: Escalation): Record<string, unknown> {
+  return {
+    escalationId: e.id,
+    node: e.node,
+    kind: e.kind,
+    to: e.to,
+    message: clip(e.message, 1200),
+    actions: ESCALATION_ACTIONS[e.kind],
+    ...(e.source ? { source: e.source, more: `pipeline_output step "${e.source.step}" visit ${e.source.visit}` } : {}),
+    summary: `${e.kind} escalation at ${e.node}: ${clip(e.message.split('\n')[0], 160)}`
+  }
 }
 
 export class PipelineRun {
@@ -157,7 +180,7 @@ export class PipelineRun {
       await this.loop
     } else if (this.state.status === 'paused' || this.state.status === 'waiting') {
       this.setStatus('stopped')
-      this.deps.emit(this.runId, 'run_stopped', { node: this.state.current })
+      this.deps.emit(this.runId, 'run_stopped', { node: this.state.current, summary: 'run stopped; resume with pipeline_resume' })
     }
   }
 
@@ -200,6 +223,7 @@ export class PipelineRun {
       case 'gate': {
         const approved = answer.action !== 'reject'
         this.state.outputs[node] = { approved, answer: answer.text, by: answer.by }
+        this.store.writeOutput(this.runId, node, this.state.visits[node] ?? 1, this.state.outputs[node])
         const visit = [...this.state.history].reverse().find((h) => h.node === node)
         if (visit && !visit.finishedAt) { visit.outcome = approved ? 'ok' : 'fail'; visit.finishedAt = new Date().toISOString() }
         if (!leaf) break
@@ -261,7 +285,7 @@ export class PipelineRun {
       const visit: NodeVisit = { node: id, visit: visits, outcome: null, startedAt: new Date().toISOString(), finishedAt: null, sessionId: null, costUsd: null, error: null }
       this.state.history.push(visit)
       this.save()
-      this.deps.emit(this.runId, 'node_started', { node: id, visit: visits, type: step.type })
+      this.deps.emit(this.runId, 'node_started', { node: id, visit: visits, type: step.type, summary: `${id} started (visit ${visits})` })
 
       let result: NodeResult
       try {
@@ -279,7 +303,7 @@ export class PipelineRun {
         visit.outcome = 'interrupted'
         this.state.visits[id] = visits - 1 // an interrupted visit does not count
         this.setStatus('stopped')
-        this.deps.emit(this.runId, 'run_stopped', { node: id, visit: visits })
+        this.deps.emit(this.runId, 'run_stopped', { node: id, visit: visits, summary: `run stopped during ${id}; resume with pipeline_resume` })
         return
       }
       if (result.kind === 'escalate') {
@@ -292,8 +316,9 @@ export class PipelineRun {
       if (result.sessionId) { visit.sessionId = result.sessionId; this.state.sessions[id] = result.sessionId }
       if (result.costUsd !== undefined) visit.costUsd = result.costUsd ?? null
       this.state.outputs[id] = result.output
-      this.deps.emit(this.runId, 'node_finished', { node: id, visit: visits, outcome: result.outcome })
-      if (step.type === 'check' && result.outcome === 'fail') this.deps.emit(this.runId, 'check_failed', { node: id, visit: visits, output: (result.output as { output?: string }).output ?? '' })
+      this.store.writeOutput(this.runId, id, visits, result.output)
+      this.deps.emit(this.runId, 'node_finished', { node: id, visit: visits, outcome: result.outcome, summary: `${id} finished: ${result.outcome}` })
+      if (step.type === 'check' && result.outcome === 'fail') this.deps.emit(this.runId, 'check_failed', { node: id, visit: visits, summary: `check ${id} failed (visit ${visits})` })
 
       this.afterLeaf(leaf, result.outcome, result.output)
       if (this.state.status !== 'running' && this.state.status !== 'pausing') return
@@ -301,7 +326,7 @@ export class PipelineRun {
       this.save()
       if (this.state.status === 'pausing') {
         this.setStatus('paused')
-        this.deps.emit(this.runId, 'run_paused', { next: this.state.current })
+        this.deps.emit(this.runId, 'run_paused', { next: this.state.current, summary: `run paused before ${this.state.current}; resume with pipeline_resume` })
         return
       }
     }
@@ -315,7 +340,7 @@ export class PipelineRun {
       if (step.escalateIf && evaluateCondition(step.escalateIf, this.scope({}))) {
         const summary = (output as { summary?: unknown } | null)?.summary
         const message = (step.escalateMessage ?? `Step "${id}" asks for a decision (${describeCondition(step.escalateIf)}).`) + (typeof summary === 'string' && summary ? `\n\n${summary}` : '')
-        this.raise({ node: id, kind: 'step', to: step.escalateTo ?? 'orchestrator', message: `${message}\n\nContinue goes on with the next step; retry runs "${id}" again.` })
+        this.raise({ node: id, kind: 'step', to: step.escalateTo ?? 'orchestrator', message: `${message}\n\nContinue goes on with the next step; retry runs "${id}" again.`, source: { step: id, visit: this.state.visits[id] ?? 1 } })
         return
       }
       if (step.repeatIf && evaluateCondition(step.repeatIf, this.scope({}))) {
@@ -327,7 +352,7 @@ export class PipelineRun {
       const tail = (output as { output?: string }).output ?? ''
       const target = this.repeatTarget(leaf, step.repeatLoop)
       if (target) this.repeat(target, { from: id, reason: `the check "${id}" (\`${step.command}\`) failed`, details: tail })
-      else this.raise({ node: id, kind: 'step', to: 'orchestrator', message: `Check "${id}" (\`${step.command}\`) failed outside any loop. Continue ignores the failure; retry runs the check again.\n\n${tail.slice(-2000)}` })
+      else this.raise({ node: id, kind: 'step', to: 'orchestrator', message: `Check "${id}" (\`${step.command}\`) failed outside any loop. Continue ignores the failure; retry runs the check again.\n\n${tail.slice(-2000)}`, source: { step: id, visit: this.state.visits[id] ?? 1 } })
       return
     }
     if (step.type === 'commit' && outcome === 'fail') {
@@ -354,13 +379,14 @@ export class PipelineRun {
       const message = `${block.kind === 'commit' ? 'Commit' : 'Loop'} "${block.id}" did not pass in ${limit} ${unit}${limit === 1 ? '' : 's'}. The last pass was repeated because ${feedback.reason}.`
       if (onLimit === 'fail') { this.finish('failure', message); return }
       const what = block.kind === 'commit' ? 'commit step' : 'loop'
-      this.raise({ node: block.id, kind: 'limit', to: 'orchestrator', message: `${message}\n\n${feedback.details.slice(-3000)}\n\nRetry grants one more ${unit}; continue leaves the ${what} as if it passed.` })
+      const source = this.state.visits[feedback.from] ? { step: feedback.from, visit: this.state.visits[feedback.from] } : undefined
+      this.raise({ node: block.id, kind: 'limit', to: 'orchestrator', message: `${message}\n\n${feedback.details.slice(-3000)}\n\nRetry grants one more ${unit}; continue leaves the ${what} as if it passed.`, source })
       return
     }
     this.state.iterations[block.id] = next
     this.clearNested(block)
     this.state.current = this.tree.restart(block, this.descendContext())
-    this.deps.emit(this.runId, 'loop_repeated', { loop: block.id, iteration: next, from: feedback.from, reason: feedback.reason })
+    this.deps.emit(this.runId, 'loop_repeated', { loop: block.id, iteration: next, from: feedback.from, summary: `${block.id} → ${unit} ${next}: ${clip(feedback.reason, 200)}` })
   }
 
   /** Nested loops start from scratch whenever an outer loop starts an iteration. */
@@ -551,7 +577,7 @@ export class PipelineRun {
 
     const commit = await this.deps.git.commitIndex(cwd, message)
     this.commits.push(commit)
-    this.deps.emit(this.runId, 'commit_done', { node: id, sha: commit.sha, files: commit.files })
+    this.deps.emit(this.runId, 'commit_done', { node: id, sha: commit.sha, summary: `committed ${commit.sha.slice(0, 10)} ${commit.message.split('\n')[0]} (${commit.files.length} files)` })
     return { kind: 'done', outcome: 'ok', output: { ...commit, issues: [] } }
   }
 
@@ -566,7 +592,7 @@ export class PipelineRun {
     const entry: Escalation = { ...escalation, id: randomUUID().slice(0, 8), raisedAt: new Date().toISOString(), answer: null }
     this.state.escalations.push(entry)
     this.setStatus('waiting')
-    this.deps.emit(this.runId, 'escalation', { escalationId: entry.id, node: entry.node, kind: entry.kind, to: entry.to, message: entry.message })
+    this.deps.emit(this.runId, 'escalation', compactEscalation(entry))
   }
 
   /** Engine-level problem at `node`. `refundVisit` gives the failed visit back so a retry keeps the numbering. */
@@ -583,7 +609,12 @@ export class PipelineRun {
     this.setStatus(result === 'success' ? 'finished' : 'failed')
     const report = this.buildReport(reason)
     this.store.writeReport(this.runId, report)
-    this.deps.emit(this.runId, result === 'success' ? 'run_finished' : 'run_failed', { result, reason, commits: report.commits.map((c) => c.sha) })
+    this.deps.emit(this.runId, result === 'success' ? 'run_finished' : 'run_failed', {
+      result,
+      reason: reason ? clip(reason, 600) : null,
+      commits: report.commits.map((c) => c.sha),
+      summary: `run ${result}${reason ? `: ${clip(reason, 200)}` : ''} — read pipeline_report`
+    })
   }
 
   buildReport(reason: string | null = null): RunReport & { reason: string | null } {
@@ -611,6 +642,7 @@ export class PipelineRun {
       startedAt: this.state.startedAt,
       finishedAt: this.state.finishedAt ?? new Date().toISOString(),
       startCommit: this.state.startCommit,
+      loops: this.state.iterations,
       visits: durations,
       commits: this.commits.length ? this.commits : this.state.history.flatMap((h) => {
         const out = this.state.outputs[h.node] as { sha?: string; files?: string[]; message?: string } | undefined
@@ -623,10 +655,11 @@ export class PipelineRun {
     }
   }
 
-  /** Short human/agent-readable status. */
+  /** Short status for the orchestrator; outputs are fetched separately (`pipeline_output`). */
   describe(): Record<string, unknown> {
     const current = this.state.current
     const leaf = this.tree.leaf(current)
+    const pending = this.pendingEscalation()
     return {
       runId: this.runId,
       machine: this.machine.id,
@@ -635,9 +668,8 @@ export class PipelineRun {
       currentSummary: leaf ? stepSummary(leaf.step) : null,
       loops: this.state.iterations,
       visits: this.state.visits,
-      pendingEscalation: this.pendingEscalation(),
-      result: this.state.result,
-      lastOutputs: current ? resolveRef(`outputs.${current}`, this.scope({})) ?? null : null
+      pendingEscalation: pending ? compactEscalation(pending) : null,
+      result: this.state.result
     }
   }
 

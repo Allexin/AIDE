@@ -1,11 +1,17 @@
 import type { ToolDefinition, ToolResult } from './protocol'
 import { orchestrators } from '../orchestrators'
-import { pipelineEvents, SIGNIFICANT_EVENTS, type PipelineEvent } from '../events'
+import { clip, pipelineEvents, SIGNIFICANT_EVENTS, type PipelineEvent } from '../events'
 import type { PipelineManager } from '../manager'
 import { MACHINE_FILE_SCHEMA } from '../engine/machineSchema'
+import { compactReport } from '../engine/reportView'
 
 /**
  * Pipeline MCP tools — the orchestrator's interface to AIDE (plan §4.2).
+ *
+ * Everything returned here lands in the orchestrator's context, so results are
+ * compact: decisions and outcomes, not logs. Details are fetched on demand
+ * (`pipeline_output`, `pipeline_report detail: true`). Results are text only —
+ * data as one line of JSON, never duplicated into `structuredContent`.
  */
 
 export interface ToolEnvironment {
@@ -32,17 +38,22 @@ export const ORCHESTRATOR_RULES = [
 function eventDeliveryText(launcherPath: string): string {
   return [
     'Event delivery, best first:',
-    `1. Background command / monitor: "${launcherPath}" events --run <runId> --since <lastEventId>  — one JSON event per line; or "${launcherPath}" wait --run <runId> --since <lastEventId>  — prints the next significant event and exits.`,
-    '2. Without background commands: call pipeline_wait (blocks until the next significant event or a timeout).',
+    `1. Background command / monitor: "${launcherPath}" events --run <runId> --since <lastEventId>  — one JSON line per event that needs you; or "${launcherPath}" wait --run <runId> --since <lastEventId>  — prints the next such event and exits.`,
+    '2. Without background commands: call pipeline_wait (blocks until the next such event or a timeout).',
     '3. Last resort: poll pipeline_status.',
+    'Events that need you: escalation (a decision; answer with pipeline_answer), run_paused / run_stopped (the run changed hands, possibly by the user), run_finished / run_failed (read pipeline_report). Step progress is not sent; it is in the report.',
     'Always pass the last event id you have seen as `since`, so no event is lost across reconnects.'
   ].join('\n')
 }
 
-const json = (value: unknown): string => JSON.stringify(value, null, 2)
+function ok(text: string): ToolResult {
+  return { text }
+}
 
-function ok(text: string, structured?: Record<string, unknown>): ToolResult {
-  return { text, structured }
+/** Data as compact JSON, optionally after a line of text. */
+function data(value: unknown, lead?: string): ToolResult {
+  const body = JSON.stringify(value)
+  return { text: lead ? `${lead}\n${body}` : body }
 }
 
 function fail(text: string): ToolResult {
@@ -83,7 +94,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
           '',
           `Full reference: ${docPath}`
         ].join('\n')
-        return ok(text, { aideVersion, projectPath: context.projectPath, tabId: context.tabId, client: context.clientInfo, eventLauncher: launcherPath, doc: docPath })
+        return ok(text)
       }
     }
   ]
@@ -102,8 +113,8 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
       handler: (_args, { projectPath }) => {
         const { machines, errors } = manager().listMachines(projectPath)
         const list = machines.map((m) => ({ id: m.id, name: m.name, description: m.description, params: m.params ?? {}, source: m.source, valid: m.validation.errors.length === 0, errors: m.validation.errors }))
-        if (list.length === 0 && errors.length === 0) return ok('No machines yet. Machines live in aide/pipelines/*.json; call pipeline_guide to learn how to write them.', { machines: [] })
-        return ok(json({ machines: list, unreadableFiles: errors }), { machines: list, unreadableFiles: errors })
+        if (list.length === 0 && errors.length === 0) return ok('No machines yet. Machines live in aide/pipelines/*.json; call pipeline_guide to learn how to write them.')
+        return data(errors.length ? { machines: list, unreadableFiles: errors } : { machines: list })
       }
     },
     {
@@ -116,7 +127,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
         if (typeof args.machineId === 'string' && selected.length === 0) return fail(`Unknown machine "${args.machineId}".`)
         const result = { machines: selected.map((m) => ({ id: m.id, file: m.file, errors: m.validation.errors, warnings: m.validation.warnings })), unreadableFiles: errors }
         const allValid = result.machines.every((m) => m.errors.length === 0) && errors.length === 0
-        return ok((allValid ? 'All valid.\n' : 'Problems found.\n') + json(result), result)
+        return data(result, allValid ? 'All valid.' : 'Problems found.')
       }
     },
     {
@@ -133,7 +144,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
             `Subscribe to its events now: "${launcher}" events --run ${runId} --since 0  (or call pipeline_wait with runId "${runId}").`,
             'Leave the working tree to the run while it executes.'
           ].join('\n')
-          return ok(text, { runId, warnings, subscribe: `"${launcher}" events --run ${runId} --since 0` })
+          return ok(text)
         } catch (err) {
           return fail(err instanceof Error ? err.message : String(err))
         }
@@ -141,30 +152,29 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     },
     {
       name: 'pipeline_status',
-      description: 'Status of the active run (or a given run): current step, loop iterations, visits, pending escalation, recent events.',
+      description: 'Status of the active run (or a given run): current step, loop iterations, visits per step, pending escalation, the last few events.',
       inputSchema: OBJECT({ runId: RUN_ID }),
       handler: (args, { projectPath }) => {
         const m = manager()
         const run = m.activeRun(projectPath)
         const runId = typeof args.runId === 'string' ? args.runId : run?.runId
-        if (!runId) return ok('No active run.', { active: false, recentRuns: m.runs(projectPath).slice(0, 5) })
+        if (!runId) return data({ active: false, recentRuns: m.runs(projectPath).slice(0, 5) }, 'No active run.')
         if (run && run.runId === runId) {
-          const recent = pipelineEvents.since(projectPath, runId, 0).slice(-10)
-          const status = { ...run.describe(), recentEvents: recent }
-          return ok(json(status), status)
+          const recent = pipelineEvents.since(projectPath, runId, 0).slice(-5).map((e) => ({ id: e.id, type: e.type, summary: e.data.summary }))
+          return data({ ...run.describe(), recentEvents: recent })
         }
         const state = m.runState(projectPath, runId)
-        return state ? ok(json({ runId, status: state.status, result: state.result }), { runId, status: state.status, result: state.result }) : fail(`Unknown run ${runId}.`)
+        return state ? data({ runId, status: state.status, result: state.result }) : fail(`Unknown run ${runId}.`)
       }
     },
     {
       name: 'pipeline_wait',
-      description: 'Block until the next significant event of a run (escalation, failed check, commit, pause, stop, end) or a timeout. Use when you cannot run background commands.',
+      description: 'Block until the next event of a run that needs you (escalation, pause, stop, end) or a timeout. Use when you cannot run background commands.',
       inputSchema: OBJECT({ runId: { type: 'string' }, since: { type: 'number', description: 'Last event id you have seen.' }, timeoutSec: { type: 'number', description: 'Default 240, max 1800.' } }, ['runId']),
       handler: async (args, { projectPath }) => {
         const timeout = Math.min(Math.max(Number(args.timeoutSec ?? 240) || 240, 1), 1800)
         const event = await waitForEvent(projectPath, String(args.runId), Number(args.since ?? 0) || 0, timeout)
-        return event ? ok(json(event), event as unknown as Record<string, unknown>) : ok('No significant event before the timeout. Call again with the same since.', { type: 'timeout' })
+        return event ? data(event) : ok('No event before the timeout. Call again with the same since.')
       }
     },
     {
@@ -211,11 +221,30 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     },
     {
       name: 'pipeline_report',
-      description: 'Report of a run: facts collected by AIDE (visits, outcomes, commits, cost), agent summaries, non-blocking findings, escalations.',
-      inputSchema: OBJECT({ runId: { type: 'string' } }, ['runId']),
+      description: 'Report of a run: result, commits, visits per step, loop iterations, agent summaries, non-blocking findings, decisions taken, cost. detail: true adds every visit with its outcome, duration and error, and the full escalations.',
+      inputSchema: OBJECT({ runId: { type: 'string' }, detail: { type: 'boolean' } }, ['runId']),
       handler: (args, { projectPath }) => {
         const report = manager().report(projectPath, String(args.runId))
-        return report ? ok(json(report), report as Record<string, unknown>) : fail(`No report for run ${String(args.runId)}.`)
+        if (!report) return fail(`No report for run ${String(args.runId)}.`)
+        if (args.detail !== true) return data(compactReport(report))
+        const { params: _params, ...full } = report
+        return data(full)
+      }
+    },
+    {
+      name: 'pipeline_output',
+      description: 'Output of one step visit when you need details for a decision: an agent\'s JSON answer, a check\'s exit code and log tail, a commit result, a gate answer. Defaults to the step\'s last visit of the active run.',
+      inputSchema: OBJECT({ step: { type: 'string' }, visit: { type: 'number' }, runId: RUN_ID, maxChars: { type: 'number', description: 'Default 4000.' } }, ['step']),
+      handler: (args, { projectPath }) => {
+        const found = manager().output(projectPath, String(args.step), typeof args.visit === 'number' ? args.visit : undefined, typeof args.runId === 'string' ? args.runId : undefined)
+        if (!found) return fail(`No output for step "${String(args.step)}"${typeof args.visit === 'number' ? ` visit ${args.visit}` : ''}.`)
+        const max = Math.min(Math.max(Number(args.maxChars ?? 4000) || 4000, 200), 50_000)
+        const out = found.output as Record<string, unknown> | null
+        // Check logs keep their tail (errors are at the end); JSON keeps its head.
+        const log = out && typeof out === 'object' ? (typeof out.output === 'string' ? out.output : typeof out.log === 'string' ? out.log : null) : null
+        const body = log !== null ? clip(log, max, 'tail') : clip(JSON.stringify(out), max)
+        const exit = out && typeof out === 'object' && 'exitCode' in out ? ` exit code ${String(out.exitCode)}` : ''
+        return ok(`${found.step} visit ${found.visit}${exit}:\n${body}`)
       }
     },
     {
@@ -223,19 +252,18 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
       description: 'Recent runs of this project with their status.',
       inputSchema: OBJECT({}),
       handler: (_args, { projectPath }) => {
-        const runs = manager().runs(projectPath)
-        return ok(json(runs), { runs })
+        return data(manager().runs(projectPath).slice(0, 20))
       }
     },
     {
       name: 'pipeline_schema',
       description: 'JSON Schema of a machine file (aide/pipelines/*.json), for authoring machines.',
       inputSchema: OBJECT({}),
-      handler: () => ok(json(MACHINE_FILE_SCHEMA), MACHINE_FILE_SCHEMA as unknown as Record<string, unknown>)
+      handler: () => data(MACHINE_FILE_SCHEMA)
     },
     {
       name: 'pipeline_guide',
-      description: 'How to author pipeline machines and role files for this project: primitives, routing, contracts, examples. Read before writing machines.',
+      description: 'How to author pipeline machines and role files for this project: the step tree, loops, contracts, examples. Read before writing machines.',
       inputSchema: OBJECT({}),
       handler: () => {
         const guide = env().authoringGuide?.()

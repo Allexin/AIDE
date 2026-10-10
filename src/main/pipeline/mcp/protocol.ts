@@ -16,9 +16,9 @@ export interface ToolContext {
   clientInfo: { name: string; version: string } | null
 }
 
+/** Text only: a tool result lands in the agent's context, so it is never duplicated as structured content. */
 export interface ToolResult {
   text: string
-  structured?: Record<string, unknown>
   isError?: boolean
 }
 
@@ -120,7 +120,6 @@ export class McpServer {
           id: message.id,
           result: {
             content: [{ type: 'text', text: result.text }],
-            ...(result.structured ? { structuredContent: result.structured } : {}),
             ...(result.isError ? { isError: true } : {})
           }
         }

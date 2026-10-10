@@ -384,8 +384,9 @@ the agent itself — §1A):
 | `pipeline_hello` | Handshake after setup; returns orchestrator rules in compact form and the event-delivery options |
 | `pipeline_list` | Machines with descriptions and param schemas |
 | `pipeline_start(machine, params)` | Starts a run, returns `runId` and the exact command to subscribe to events |
-| `pipeline_status(runId)` | Current node, iteration, recent events |
-| `pipeline_report(runId)` | Final report (§4.4) |
+| `pipeline_status(runId)` | Current step, loop iterations, last events |
+| `pipeline_report(runId, detail?)` | Final report (§4.4), compact unless `detail` |
+| `pipeline_output(step, visit?)` | Output of one step visit, on demand |
 | `pipeline_answer(runId, escalationId, answer)` | Resolves an escalation |
 | `pipeline_stop(runId, mode)` | `pause` / `stop` |
 | `pipeline_wait(runId, since, timeoutSec)` | Blocks until the next significant event or timeout (universal fallback) |
@@ -682,6 +683,13 @@ overlay is shown.
 5. **Machine format** — a tree of steps with loops, groups, `if`, `repeat` and a
    commit block, not a graph with edges (§2.3). Returning across phases is an
    explicit outer loop + `repeat`.
+
+6. **What the orchestrator receives** — only what it acts on: events are
+   limited to escalations, pause/stop and the end of a run (step progress stays
+   in the report; `events --all` for debugging); every event has a one-line
+   summary; escalations are clipped and point to `pipeline_output` for
+   details; the report is compact by default (`detail: true` for every visit);
+   tool results are text only, never duplicated as structured content.
 
 No open decisions remain; outstanding uncertainty is in the **[verify]** items,
 resolved by Phase 0.

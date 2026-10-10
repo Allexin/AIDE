@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events'
 import type { HistoryEntry } from '../pty/cliTools/types'
-import { PipelineRun, type EngineDeps } from './engine/runner'
+import { PipelineRun, type EngineDeps, type RunReport } from './engine/runner'
 import { RunStore, newRunId } from './engine/runStore'
 import { loadLibrary, readRole, roleExists, validateParams, type LibraryEntry } from './engine/library'
 import { validateMachine, type ValidationResult } from './engine/validate'
@@ -211,10 +211,27 @@ export class PipelineManager extends EventEmitter {
     return this.store(projectPath).load(runId)?.state ?? null
   }
 
-  report(projectPath: string, runId: string): unknown {
+  report(projectPath: string, runId: string): (RunReport & { reason?: string | null; note?: string }) | null {
     const active = this.active.get(projectPath)
     if (active && active.runId === runId && !active.isFinal()) return { ...active.buildReport(), note: 'The run has not ended; this is an interim report.' }
-    return this.store(projectPath).readReport(runId)
+    return this.store(projectPath).readReport(runId) as RunReport | null
+  }
+
+  /** The output of one step visit (default: its last visit) of the active or a stored run. */
+  output(projectPath: string, step: string, visit?: number, runId?: string): { runId: string; step: string; visit: number; output: unknown } | null {
+    const state = this.runState(projectPath, runId)
+    if (!state) return null
+    const visits = state.history.filter((h) => h.node === step)
+    const chosen = visit ?? visits[visits.length - 1]?.visit
+    if (chosen === undefined) return null
+    const store = this.store(projectPath)
+    let output = store.readOutput(state.runId, step, chosen)
+    if (output === undefined && chosen === visits[visits.length - 1]?.visit) output = state.outputs[step]
+    if (output === undefined) {
+      const log = store.readCheckLog(state.runId, step, chosen)
+      if (log) output = { log }
+    }
+    return output === undefined ? null : { runId: state.runId, step, visit: chosen, output }
   }
 
   transcript(projectPath: string, runId: string, node: string, visit: number): HistoryEntry[] {

@@ -11,7 +11,7 @@ import { pruneStaleRuntimes, removeAllProjectRuntimes, removeProjectRuntime, wri
  * finds it via a per-project discovery file and forwards requests.
  *
  *   POST /mcp     one JSON-RPC message (or batch) → JSON-RPC response, 202 for notifications
- *   GET  /events  NDJSON stream of a run's events (?run=&since=)
+ *   GET  /events  NDJSON stream of a run's significant events (?run=&since=; &all=1 for every event)
  *   GET  /wait    the next significant event of a run as one JSON line (?run=&since=&timeout=)
  *
  * Every request must carry the token and a registered project path. Same
@@ -153,9 +153,11 @@ export class PipelineServer {
   private handleEvents(url: URL, res: http.ServerResponse, projectPath: string): void {
     const runId = url.searchParams.get('run')
     const since = Number(url.searchParams.get('since') ?? 0) || 0
+    // Every line may become a notification in the orchestrator's context: by default only events that need it.
+    const all = url.searchParams.get('all') === '1'
     res.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-cache' })
     this.openStreams.add(res)
-    const write = (event: PipelineEvent): void => { res.write(JSON.stringify(event) + '\n') }
+    const write = (event: PipelineEvent): void => { if (all || SIGNIFICANT_EVENTS.has(event.type)) res.write(JSON.stringify(event) + '\n') }
     for (const event of pipelineEvents.since(projectPath, runId, since)) write(event)
     const unsubscribe = pipelineEvents.subscribe(projectPath, (event) => {
       if (runId === null || event.runId === runId) write(event)

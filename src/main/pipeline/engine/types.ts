@@ -38,6 +38,8 @@ export interface Escalation {
   kind: 'step' | 'gate' | 'limit' | 'engine'
   to: 'user' | 'orchestrator'
   message: string
+  /** The step visit whose output explains the escalation (for `pipeline_output`). */
+  source?: { step: string; visit: number }
   raisedAt: string
   answer: EscalationAnswer | null
 }
