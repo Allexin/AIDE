@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { isRunActive, liveKey, usePipelineStore, type VisitRef } from '../../store/usePipelineStore'
 import { TranscriptView } from '../history/TranscriptView'
+import { blockTitle, walkSteps, type Step } from '../../../../shared/pipelineMachine'
 
 /**
- * Pipeline run view (plan §4.1): the machine's flow with node states, the
+ * Pipeline run view (plan §4.1): the machine's step tree with step states, the
  * transcript or log of any visit, run controls, escalation answers and the
  * final report. Collapsible to a strip; closable only after the run ended.
  */
@@ -15,19 +16,34 @@ const STATUS_COLOR: Record<PipelineRunStatus, string> = {
   running: '#4ec9b0', pausing: '#dcdcaa', paused: '#dcdcaa', waiting: '#f48771', stopped: '#dcdcaa', finished: '#4ec9b0', failed: '#f48771'
 }
 
-function flowOrder(machine: PipelineMachine): string[] {
-  const order: string[] = []
-  const queue = [machine.start]
-  const seen = new Set(queue)
-  while (queue.length) {
-    const id = queue.shift()!
-    order.push(id)
-    const next = machine.edges.filter((e) => e[0] === id).map((e) => e[1])
-    const limit = machine.nodes[id]?.onLimit
-    for (const to of limit ? [...next, limit] : next) if (!seen.has(to) && machine.nodes[to]) { seen.add(to); queue.push(to) }
-  }
-  for (const id of Object.keys(machine.nodes)) if (!seen.has(id)) order.push(id)
-  return order
+type LoopStepDef = Extract<Step, { type: 'loop' | 'commit' }>
+
+/** The step with this id and its enclosing blocks (outermost first). A commit action resolves to its commit step. */
+function locate(steps: Step[], id: string | null): { step: Step; ancestors: Step[] } | null {
+  if (!id) return null
+  let found: { step: Step; ancestors: Step[] } | null = null
+  walkSteps(steps, (step, ancestors) => { if (!found && step.id === id) found = { step, ancestors } })
+  return found
+}
+
+function loopLimit(step: LoopStepDef, state: PipelineRunState): number {
+  return (step.type === 'loop' ? step.maxIterations : step.maxAttempts ?? 3) + (state.bonus?.[step.id] ?? 0)
+}
+
+/** Whether the current step is inside this loop/commit block. */
+function holdsCurrent(step: LoopStepDef, current: string | null): boolean {
+  if (step.type === 'commit') return current === step.id || current === step.prep.id
+  return locate(step.steps, current) !== null
+}
+
+/** "name 2/3" for the innermost loop or commit block around the current step. */
+function currentLoopLabel(machine: PipelineMachine, state: PipelineRunState): string {
+  const found = locate(machine.steps, state.current)
+  if (!found) return ''
+  const chain = found.step.type === 'commit' ? [...found.ancestors, found.step] : found.ancestors
+  const loop = [...chain].reverse().find((s): s is LoopStepDef => s.type === 'loop' || s.type === 'commit')
+  if (!loop) return ''
+  return `${blockTitle(loop)} ${state.iterations?.[loop.id] ?? 1}/${loopLimit(loop, state)}`
 }
 
 function elapsed(fromIso: string, toIso: string | null): string {
@@ -54,13 +70,13 @@ export function PipelineStrip(): React.ReactElement | null {
   if (!run || run.runId === dismissed || expanded) return null
   const { state, machine } = run
   const current = state.current
-  const max = current ? machine.nodes[current]?.maxVisits : undefined
-  const visits = current ? state.visits[current] ?? 0 : 0
+  const loop = currentLoopLabel(machine, state)
   return <div onClick={() => setExpanded(true)} title="Show the pipeline run" className={state.status === 'waiting' ? 'pipeline-attention' : undefined}
     style={{ height: 26, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '0 10px', background: '#252526', borderBottom: '1px solid #3d3d3d', cursor: 'pointer', fontSize: 12, fontFamily: 'Segoe UI, sans-serif', color: '#ccc' }}>
     <span style={{ color: STATUS_COLOR[state.status] }}>●</span>
     <span style={{ fontWeight: 600 }}>{machine.name}</span>
-    {current && <span>{current}{max ? ` ${visits}/${max}` : ''}</span>}
+    {current && <span>{current}</span>}
+    {loop && <span style={{ color: '#888' }}>↺ {loop}</span>}
     <span style={{ color: '#888' }}>{elapsed(state.startedAt, state.finishedAt)}</span>
     <span style={{ color: STATUS_COLOR[state.status] }}>{STATUS_LABEL[state.status]}</span>
     <span style={{ marginLeft: 'auto', color: '#888' }}>▾ Show</span>
@@ -121,44 +137,97 @@ export default function PipelineOverlay(): React.ReactElement | null {
   </div>
 }
 
-function FlowList({ machine, state, shown, onSelect, onFollow, following }: { machine: PipelineMachine; state: PipelineRunState; shown: VisitRef | null; onSelect: (ref: VisitRef) => void; onFollow: () => void; following: boolean }): React.ReactElement {
-  const order = useMemo(() => flowOrder(machine), [machine])
-  return <div style={{ width: 270, flexShrink: 0, borderRight: '1px solid #333', overflowY: 'auto', padding: '6px 0' }}>
+interface FlowProps { state: PipelineRunState; shown: VisitRef | null; onSelect: (ref: VisitRef) => void }
+
+function FlowList({ machine, state, shown, onSelect, onFollow, following }: FlowProps & { machine: PipelineMachine; onFollow: () => void; following: boolean }): React.ReactElement {
+  return <div style={{ width: 290, flexShrink: 0, borderRight: '1px solid #333', overflowY: 'auto', padding: '6px 0' }}>
     <div style={{ display: 'flex', alignItems: 'center', padding: '2px 10px 6px', fontSize: 11, color: '#888', textTransform: 'uppercase', letterSpacing: 1 }}>
       Flow
       {!following && <span onClick={onFollow} style={{ marginLeft: 'auto', textTransform: 'none', letterSpacing: 0, color: '#4ea1f3', cursor: 'pointer' }}>Follow current</span>}
     </div>
-    {order.map((id) => {
-      const node = machine.nodes[id]
-      const visits = state.history.filter((h) => h.node === id)
-      const last = visits[visits.length - 1]
-      const isCurrent = state.current === id && isRunActive(state.status)
-      const icon = isCurrent ? (state.status === 'waiting' ? '!' : state.status === 'running' || state.status === 'pausing' ? '●' : '❚❚')
-        : !last ? '○' : last.outcome === 'ok' ? '✓' : last.outcome === 'fail' ? '✗' : last.outcome === 'interrupted' ? '⏸' : '·'
-      const color = isCurrent ? (state.status === 'waiting' ? '#f48771' : '#4ec9b0') : !last ? '#555' : last.outcome === 'fail' ? '#f48771' : last.outcome === 'ok' ? '#4ec9b0' : '#dcdcaa'
-      const count = state.visits[id] ?? 0
-      return <div key={id} style={{ padding: '3px 10px', background: shown?.node === id ? '#2a2d2e' : 'transparent' }}>
-        <div onClick={() => last && onSelect({ node: id, visit: last.visit })} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: last ? 'pointer' : 'default', fontSize: 12 }}>
-          <span style={{ width: 14, textAlign: 'center', color }} className={isCurrent && state.status === 'running' ? 'pipeline-pulse' : undefined}>{icon}</span>
-          <span style={{ color: isCurrent ? '#fff' : '#ccc', fontWeight: isCurrent ? 600 : 400 }}>{id}</span>
-          <span style={{ color: '#666', fontSize: 11 }}>{node.type}</span>
-          {(node.maxVisits || count > 1) && <span style={{ marginLeft: 'auto', color: '#888', fontSize: 11 }}>{count}{node.maxVisits ? `/${node.maxVisits}` : ''}</span>}
-        </div>
-        {node.summary && <div style={{ marginLeft: 22, fontSize: 11, color: '#777', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={node.summary}>{node.summary}</div>}
-        {visits.length > 1 && <div style={{ marginLeft: 22, display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
-          {visits.map((v) => <span key={v.visit} onClick={() => onSelect({ node: id, visit: v.visit })}
-            style={{ fontSize: 10, padding: '0 5px', borderRadius: 3, cursor: 'pointer', border: '1px solid #444', color: v.outcome === 'fail' ? '#f48771' : v.outcome === 'ok' ? '#4ec9b0' : '#aaa', background: shown?.node === id && shown.visit === v.visit ? '#37373d' : 'transparent' }}>
-            #{v.visit}
-          </span>)}
-        </div>}
+    <StepList steps={machine.steps} state={state} shown={shown} onSelect={onSelect} />
+  </div>
+}
+
+function StepList({ steps, ...props }: FlowProps & { steps: Step[] }): React.ReactElement {
+  return <>{steps.map((step) => <StepRow key={step.id} step={step} {...props} />)}</>
+}
+
+/** A block's children, indented with a guide line. */
+function Nested({ children, color = '#3a3a3a' }: { children: React.ReactNode; color?: string }): React.ReactElement {
+  return <div style={{ marginLeft: 16, borderLeft: `1px solid ${color}` }}>{children}</div>
+}
+
+function StepRow({ step, ...props }: FlowProps & { step: Step }): React.ReactElement {
+  const { state } = props
+  switch (step.type) {
+    case 'group':
+      return <div style={{ marginTop: 6 }}>
+        <div style={{ padding: '3px 10px', fontSize: 11, color: '#9cdcfe', textTransform: 'uppercase', letterSpacing: 1 }} title={step.summary}>{blockTitle(step)}</div>
+        <Nested><StepList steps={step.steps} {...props} /></Nested>
       </div>
-    })}
+    case 'loop':
+    case 'commit': {
+      const iteration = state.iterations?.[step.id]
+      const limit = loopLimit(step, state)
+      const active = iteration !== undefined && isRunActive(state.status) && holdsCurrent(step, state.current)
+      return <div style={{ marginTop: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 10px', fontSize: 12, color: active ? '#dcdcaa' : '#999' }} title={step.summary}>
+          <span style={{ width: 14, textAlign: 'center' }}>{step.type === 'commit' ? '⎇' : '↺'}</span>
+          <span>{step.type === 'commit' ? `commit ${step.id}` : blockTitle(step)}</span>
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: active ? '#dcdcaa' : '#777' }}>
+            {iteration !== undefined ? `${step.type === 'commit' ? 'attempt' : 'iteration'} ${iteration}/${limit}` : `max ${limit}`}
+          </span>
+        </div>
+        <Nested color={active ? '#6a6a3a' : undefined}>
+          {step.type === 'loop' ? <StepList steps={step.steps} {...props} /> : <>
+            <StepRow step={step.prep} {...props} />
+            <LeafRow id={step.id} type="commit" summary={step.review === 'agent' ? 'a reviewer agent checks the staged commit, then AIDE commits' : 'AIDE checks the staged commit and commits'} {...props} />
+          </>}
+        </Nested>
+      </div>
+    }
+    case 'if':
+      return <div>
+        <div style={{ padding: '3px 10px', fontSize: 11, color: '#c586c0' }}>if {step.condition}</div>
+        <Nested><StepList steps={step.then} {...props} /></Nested>
+        {step.else && step.else.length > 0 && <>
+          <div style={{ padding: '3px 10px', fontSize: 11, color: '#c586c0' }}>else</div>
+          <Nested><StepList steps={step.else} {...props} /></Nested>
+        </>}
+      </div>
+    default:
+      return <LeafRow id={step.id} type={step.type} summary={step.summary ?? (step.type === 'check' ? step.command : step.type === 'gate' ? step.question : undefined)} {...props} />
+  }
+}
+
+function LeafRow({ id, type, summary, state, shown, onSelect }: FlowProps & { id: string; type: string; summary?: string }): React.ReactElement {
+  const visits = state.history.filter((h) => h.node === id)
+  const last = visits[visits.length - 1]
+  const isCurrent = state.current === id && isRunActive(state.status)
+  const icon = isCurrent ? (state.status === 'waiting' ? '!' : state.status === 'running' || state.status === 'pausing' ? '●' : '❚❚')
+    : !last ? '○' : last.outcome === 'ok' ? '✓' : last.outcome === 'fail' ? '✗' : last.outcome === 'interrupted' ? '⏸' : '·'
+  const color = isCurrent ? (state.status === 'waiting' ? '#f48771' : '#4ec9b0') : !last ? '#555' : last.outcome === 'fail' ? '#f48771' : last.outcome === 'ok' ? '#4ec9b0' : '#dcdcaa'
+  return <div style={{ padding: '3px 10px', background: shown?.node === id ? '#2a2d2e' : 'transparent' }}>
+    <div onClick={() => last && onSelect({ node: id, visit: last.visit })} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: last ? 'pointer' : 'default', fontSize: 12 }}>
+      <span style={{ width: 14, textAlign: 'center', color }} className={isCurrent && state.status === 'running' ? 'pipeline-pulse' : undefined}>{icon}</span>
+      <span style={{ color: isCurrent ? '#fff' : '#ccc', fontWeight: isCurrent ? 600 : 400 }}>{id}</span>
+      <span style={{ color: '#666', fontSize: 11 }}>{type}</span>
+      {visits.length > 1 && <span style={{ marginLeft: 'auto', color: '#888', fontSize: 11 }}>×{visits.length}</span>}
+    </div>
+    {summary && <div style={{ marginLeft: 22, fontSize: 11, color: '#777', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={summary}>{summary}</div>}
+    {visits.length > 1 && <div style={{ marginLeft: 22, display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
+      {visits.map((v) => <span key={v.visit} onClick={() => onSelect({ node: id, visit: v.visit })}
+        style={{ fontSize: 10, padding: '0 5px', borderRadius: 3, cursor: 'pointer', border: '1px solid #444', color: v.outcome === 'fail' ? '#f48771' : v.outcome === 'ok' ? '#4ec9b0' : '#aaa', background: shown?.node === id && shown.visit === v.visit ? '#37373d' : 'transparent' }}>
+        #{v.visit}
+      </span>)}
+    </div>}
   </div>
 }
 
 function VisitDetail({ run, visit }: { run: PipelineRunSnapshot; visit: VisitRef }): React.ReactElement {
   const { state, machine } = run
-  const node = machine.nodes[visit.node]
+  const node = locate(machine.steps, visit.node)?.step
   const record = state.history.filter((h) => h.node === visit.node && h.visit === visit.visit).slice(-1)[0]
   const running = !record?.finishedAt && state.current === visit.node && isRunActive(state.status)
   const output = state.outputs[visit.node]
@@ -170,7 +239,7 @@ function VisitDetail({ run, visit }: { run: PipelineRunSnapshot; visit: VisitRef
       {running && <span style={{ color: '#4ec9b0' }}>running…</span>}
       {record && <span style={{ color: '#666' }}>{elapsed(record.startedAt, record.finishedAt)}</span>}
       {record?.costUsd ? <span style={{ color: '#666' }}>${record.costUsd.toFixed(3)}</span> : null}
-      {node?.cli && <span style={{ color: '#666' }}>{node.cli}</span>}
+      {node?.type === 'agent' && <span style={{ color: '#666' }}>{node.cli ?? machine.defaults?.cli}</span>}
     </div>
     {record?.error && <div style={{ padding: '6px 12px', fontSize: 12, color: '#f48771', whiteSpace: 'pre-wrap' }}>{record.error}</div>}
     {node?.type === 'agent' || (node?.type === 'commit' && node.review === 'agent')
@@ -233,14 +302,17 @@ function EscalationPanel({ escalation }: { escalation: PipelineEscalation }): Re
   const answer = async (action: 'continue' | 'retry' | 'reject' | 'stop'): Promise<void> => {
     setError(await window.editorApi.pipelineAnswer(escalation.id, action, text))
   }
-  const title = escalation.kind === 'engine' ? 'The run cannot continue' : escalation.kind === 'gate' ? 'Approval needed' : 'Escalation'
+  const title = escalation.kind === 'engine' ? 'The run cannot continue' : escalation.kind === 'gate' ? 'Approval needed' : escalation.kind === 'limit' ? 'Loop limit reached' : 'Decision needed'
   return <div className="pipeline-attention" style={{ flexShrink: 0, borderTop: '2px solid #a33', background: '#2b1d1d', padding: '8px 12px', fontSize: 12 }}>
     <div style={{ fontWeight: 600, color: '#ffb3b3', marginBottom: 4 }}>{title} — {escalation.node} <span style={{ color: '#888', fontWeight: 400 }}>(for the {escalation.to}; whoever answers first)</span></div>
     <div style={{ whiteSpace: 'pre-wrap', color: '#ddd', marginBottom: 6 }}>{escalation.message}</div>
     <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Answer (available to the next steps)" style={{ width: '100%', boxSizing: 'border-box', height: 46, background: '#1e1e1e', color: '#ccc', border: '1px solid #444', borderRadius: 3, padding: 6, fontFamily: 'inherit', fontSize: 12, resize: 'vertical' }} />
     <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
       {escalation.kind === 'engine' && <Button onClick={() => void answer('retry')}>Retry step</Button>}
-      {escalation.kind === 'node' && <Button onClick={() => void answer('continue')}>Continue</Button>}
+      {escalation.kind === 'step' && <Button onClick={() => void answer('continue')}>Continue</Button>}
+      {escalation.kind === 'step' && <Button onClick={() => void answer('retry')}>Retry step</Button>}
+      {escalation.kind === 'limit' && <Button onClick={() => void answer('retry')}>One more iteration</Button>}
+      {escalation.kind === 'limit' && <Button onClick={() => void answer('continue')}>Continue anyway</Button>}
       {escalation.kind === 'gate' && <Button onClick={() => void answer('continue')}>Approve</Button>}
       {escalation.kind === 'gate' && <Button onClick={() => void answer('reject')}>Reject</Button>}
       <Button onClick={() => void answer('stop')}>Stop run</Button>

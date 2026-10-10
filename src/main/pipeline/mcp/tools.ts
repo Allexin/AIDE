@@ -24,7 +24,7 @@ export interface ToolEnvironment {
 
 export const ORCHESTRATOR_RULES = [
   'You are the orchestrator of AIDE pipelines for this project.',
-  'AIDE executes pipeline state machines deterministically: it spawns node agents, runs checks, loops, commits and reports. You decide what to run: pick the next task from the project plan, choose a machine and its parameters, start it, read the report, update the plan, and talk to the user.',
+  'AIDE executes pipeline state machines deterministically: it spawns step agents, runs checks, repeats loops, commits and reports. You decide what to run: pick the next task from the project plan, choose a machine and its parameters, start it, read the report, update the plan, and talk to the user.',
   'While a run is executing, leave the working tree to it: do not edit files yourself.',
   'After starting a run, subscribe to its events instead of polling when your client can run background commands.'
 ]
@@ -108,7 +108,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     },
     {
       name: 'pipeline_validate',
-      description: 'Validate machine files (all, or one by id): schema, references, role files, loops, routes. Fix every error before starting a run.',
+      description: 'Validate machine files (all, or one by id): step tree, ids, references, role files, loop bounds and targets, sessions. Fix every error before starting a run.',
       inputSchema: OBJECT({ machineId: { type: 'string' } }),
       handler: (args, { projectPath }) => {
         const { machines, errors } = manager().listMachines(projectPath)
@@ -141,7 +141,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     },
     {
       name: 'pipeline_status',
-      description: 'Status of the active run (or a given run): current node, visits, pending escalation, recent events.',
+      description: 'Status of the active run (or a given run): current step, loop iterations, visits, pending escalation, recent events.',
       inputSchema: OBJECT({ runId: RUN_ID }),
       handler: (args, { projectPath }) => {
         const m = manager()
@@ -169,8 +169,8 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     },
     {
       name: 'pipeline_answer',
-      description: 'Answer a pending escalation. action: continue (follow the node\'s route; approve a gate), reject (reject a gate), retry (re-run the failed node), stop (end the run).',
-      inputSchema: OBJECT({ escalationId: { type: 'string' }, action: { type: 'string', enum: ['continue', 'retry', 'reject', 'stop'] }, text: { type: 'string', description: 'Your answer; available to later nodes.' }, runId: RUN_ID }, ['escalationId', 'action']),
+      description: 'Answer a pending escalation. action: continue (go on after the step; approve a gate; leave an exhausted loop as if it passed), reject (reject a gate: repeats its loop, or fails the run outside loops), retry (run the step again; for an exhausted loop: one more iteration), stop (end the run).',
+      inputSchema: OBJECT({ escalationId: { type: 'string' }, action: { type: 'string', enum: ['continue', 'retry', 'reject', 'stop'] }, text: { type: 'string', description: 'Your answer; shown to the later agents of the run.' }, runId: RUN_ID }, ['escalationId', 'action']),
       handler: async (args, { projectPath }) => {
         try {
           await manager().answer(projectPath, String(args.escalationId), { action: args.action as 'continue' | 'retry' | 'reject' | 'stop', text: String(args.text ?? ''), by: 'orchestrator' }, typeof args.runId === 'string' ? args.runId : undefined)
@@ -182,7 +182,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     },
     {
       name: 'pipeline_stop',
-      description: 'pause: finish the current node, then hold. stop: interrupt the current node now (resumable). abandon: end a stopped/paused run for good.',
+      description: 'pause: finish the current step, then hold. stop: interrupt the current step now (resumable). abandon: end a stopped/paused run for good.',
       inputSchema: OBJECT({ mode: { type: 'string', enum: ['pause', 'stop', 'abandon'] }, reason: { type: 'string' }, runId: RUN_ID }, ['mode']),
       handler: async (args, { projectPath }) => {
         const runId = typeof args.runId === 'string' ? args.runId : undefined

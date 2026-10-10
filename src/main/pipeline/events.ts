@@ -10,6 +10,7 @@ export type PipelineEventType =
   | 'node_started'
   | 'node_finished'
   | 'check_failed'
+  | 'loop_repeated'
   | 'escalation'
   | 'commit_done'
   | 'run_paused'

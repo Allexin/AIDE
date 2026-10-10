@@ -1,101 +1,12 @@
 /**
- * Pipeline machine definitions and run state (plan §2, §3, §4).
- *
- * A machine is a graph of primitive nodes. Routing is expressed on edges:
- * `[from, to, condition]`, evaluated in order after a node finishes; the first
- * matching edge wins. Conditions:
- *   'ok' | 'fail'                      — the node's outcome
- *   'default'                          — always matches (put it last)
- *   "<ref> == <literal>" / "!="        — e.g. "outputs.review.verdict == 'accept'"
+ * Pipeline machine definitions and run state (plan §2, §3, §4). The definition
+ * types live in `src/shared/pipelineMachine.ts` (the renderer uses them too).
  */
 
-export type JsonSchema = Record<string, unknown>
-
-export type ParamType = 'string' | 'string[]' | 'path' | 'glob[]' | 'number' | 'boolean'
-
-export interface ParamDefinition {
-  type: ParamType
-  description?: string
-  /** Defaults to true. */
-  required?: boolean
-}
-
-interface NodeBase {
-  /** One line telling the agents *before* this node what it does (pipeline context). */
-  summary?: string
-  /** Entering the node more often than this routes to `onLimit` (or escalates). */
-  maxVisits?: number
-  onLimit?: string
-}
-
-export interface AgentNode extends NodeBase {
-  type: 'agent'
-  /** Role file, relative to the machine's directory (e.g. `roles/implementer.md`). */
-  role: string
-  /** CliTool id; falls back to machine defaults. */
-  cli?: string
-  model?: string
-  permissions?: 'read-only' | 'write'
-  /** `new` (default) or `continue:<nodeId>` — resume that node's CLI session. */
-  session?: string
-  /** Task text for this node; may reference `{{params.x}}` / `{{outputs.n.f}}`. */
-  task?: string
-  /** References included in the prompt: `params.x`, `outputs.node.field`, `run.diff`, `run.stagedDiff`, `run.changedFiles`. */
-  inputs?: string[]
-  /** Name of a schema in `schemas` or a built-in (implementerReport, reviewVerdict, commitPrep, commitReview). */
-  output?: string
-  timeoutMin?: number
-}
-
-export interface CheckNode extends NodeBase {
-  type: 'check'
-  command: string
-  timeoutMin?: number
-}
-
-export interface CommitNode extends NodeBase {
-  type: 'commit'
-  /** The agent node whose output carries `commitMessage` and `excluded`. */
-  prep: string
-  review: 'algorithmic' | 'agent'
-  /** Reviewer for `review: 'agent'`. */
-  reviewer?: { role: string; cli?: string; model?: string; timeoutMin?: number }
-}
-
-export interface GateNode extends NodeBase {
-  type: 'gate'
-  question: string
-  to?: 'user' | 'orchestrator'
-}
-
-export interface EscalateNode extends NodeBase {
-  type: 'escalate'
-  to?: 'user' | 'orchestrator'
-  message?: string
-}
-
-export interface EndNode extends NodeBase {
-  type: 'end'
-  result: 'success' | 'failure'
-}
-
-export type MachineNode = AgentNode | CheckNode | CommitNode | GateNode | EscalateNode | EndNode
-
-export type Edge = [from: string, to: string, condition: string]
-
-export interface MachineDefinition {
-  id: string
-  name: string
-  /** Written for the orchestrator: when to use this machine, what it needs, what it produces. */
-  description: string
-  params?: Record<string, ParamDefinition>
-  defaults?: { cli?: string; model?: string; timeoutMin?: number }
-  /** Named output schemas referenced by agent nodes. */
-  schemas?: Record<string, JsonSchema>
-  start: string
-  nodes: Record<string, MachineNode>
-  edges: Edge[]
-}
+export type {
+  AgentStep, CheckStep, CommitStep, GateStep, GroupStep, IfStep, JsonSchema, LoopStep,
+  MachineDefinition, ParamDefinition, ParamType, RepeatStep, Step, StepType
+} from '../../../shared/pipelineMachine'
 
 // ── Run state ─────────────────────────────────────────────────────────────────
 
@@ -117,9 +28,14 @@ export interface NodeVisit {
 
 export interface Escalation {
   id: string
+  /** The step (or, for `limit`, the loop/commit block) that raised it. */
   node: string
-  /** `node`: an escalate/gate node; `engine`: the engine could not proceed. */
-  kind: 'node' | 'gate' | 'engine'
+  /**
+   * `step`: a step asked for a decision (`escalateIf`, or a failed check outside any loop);
+   * `gate`: a gate asks for approval; `limit`: a loop used up its iterations;
+   * `engine`: the engine could not run the step (agent crash, unusable output, …).
+   */
+  kind: 'step' | 'gate' | 'limit' | 'engine'
   to: 'user' | 'orchestrator'
   message: string
   raisedAt: string
@@ -127,11 +43,23 @@ export interface Escalation {
 }
 
 export interface EscalationAnswer {
-  /** continue: follow the node's edges (gate: approve); retry: re-run the failed node; reject: gate rejected; stop: end the run. */
+  /**
+   * continue: go on after the step (gate: approve; limit: leave the loop as if it passed);
+   * retry: run the step again (limit: one more iteration); reject: reject a gate; stop: end the run.
+   */
   action: 'continue' | 'retry' | 'reject' | 'stop'
   text: string
   by: 'user' | 'orchestrator'
   at: string
+}
+
+export interface LoopFeedback {
+  /** The step that asked for another iteration. */
+  from: string
+  /** The iteration this feedback leads into. */
+  iteration: number
+  reason: string
+  details: string
 }
 
 export interface RunState {
@@ -139,9 +67,16 @@ export interface RunState {
   machineId: string
   projectPath: string
   status: RunStatus
-  /** Node to execute next (or currently executing / interrupted). */
+  /** Leaf step to execute next (or currently executing / interrupted). */
   current: string | null
+  /** Executions per leaf step (numbers transcripts and logs). */
   visits: Record<string, number>
+  /** Current iteration per entered loop / commit block. */
+  iterations: Record<string, number>
+  /** Iterations granted beyond the limit by "retry" answers, per loop. */
+  bonus: Record<string, number>
+  /** Why each loop is on its current iteration (shown to the agents inside it). */
+  feedback: Record<string, LoopFeedback>
   outputs: Record<string, unknown>
   history: NodeVisit[]
   escalations: Escalation[]

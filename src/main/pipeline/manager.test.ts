@@ -16,10 +16,10 @@ afterAll(() => rmSync(root, { recursive: true, force: true }))
 
 const GUIDE = resolve(__dirname, '../../../resources/docs/pipeline-authoring.md')
 
-function guideExample(): MachineDefinition {
+function guideExample(section = '5\\. Example: code feature'): MachineDefinition {
   const text = readFileSync(GUIDE, 'utf8')
-  const block = /## 5\. Example: code feature\s+```json\n([\s\S]*?)\n```/.exec(text)
-  if (!block) throw new Error('example not found in the authoring guide')
+  const block = new RegExp(`## ${section}[\\s\\S]*?\`\`\`json\\n([\\s\\S]*?)\\n\`\`\``).exec(text)
+  if (!block) throw new Error(`example "${section}" not found in the authoring guide`)
   return JSON.parse(block[1]) as MachineDefinition
 }
 
@@ -75,8 +75,10 @@ async function until(condition: () => boolean): Promise<void> {
 }
 
 describe('authoring guide', () => {
-  it('its example machine is valid', () => {
-    expect(validateMachine(guideExample(), { headlessClis: ['claude-code', 'codex'], roleExists: () => true }).errors).toEqual([])
+  it('its example machines are valid', () => {
+    const env = { headlessClis: ['claude-code', 'codex'], roleExists: () => true }
+    expect(validateMachine(guideExample(), env)).toEqual({ errors: [], warnings: [] })
+    expect(validateMachine(guideExample('6\\. Example: content, then integration'), env)).toEqual({ errors: [], warnings: [] })
   })
 })
 
@@ -115,14 +117,14 @@ describe('PipelineManager through the MCP tools', () => {
     const started = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] } })
     const runId = String(started.structured?.runId)
     const event = await call(server, dir, 'pipeline_wait', { runId, timeoutSec: 5 })
-    expect(event.structured).toMatchObject({ type: 'escalation', data: { node: 'planWrong' } })
+    expect(event.structured).toMatchObject({ type: 'escalation', data: { node: 'implement', kind: 'step' } })
 
     const second = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Z', acceptance: [] } })
     expect(second.isError).toBe(true)
     expect(second.text).toContain('still waiting')
 
     const escalationId = String((event.structured?.data as Record<string, unknown>).escalationId)
-    const answered = await call(server, dir, 'pipeline_answer', { escalationId, action: 'continue', text: 'agreed, drop it' })
+    const answered = await call(server, dir, 'pipeline_answer', { escalationId, action: 'stop', text: 'agreed, drop it' })
     expect(answered.isError).toBeUndefined()
     await until(() => manager.activeRun(dir)?.isFinal() === true)
     expect(manager.activeRun(dir)?.state.result).toBe('failure')

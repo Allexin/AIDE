@@ -8,10 +8,10 @@ AIDE keeps this file up to date; do not edit it.
 
 ## 1. What you are connecting to
 
-AIDE (the editor this project is open in) executes **pipeline state machines**:
-deterministic flows of headless agents — implement → checks → review → fix →
-commit — defined per task type in `aide/pipelines/*.json`. AIDE runs the loop;
-it makes no judgement calls.
+AIDE (the editor this project is open in) executes **pipeline machines**:
+deterministic trees of steps run by headless agents — e.g. a loop of implement →
+checks → review, then commit — defined per task type in `aide/pipelines/*.json`.
+AIDE runs the steps and repeats the loops; it makes no judgement calls.
 
 The **orchestrator** is the agent that decides what to run: it reads the
 project's plan, picks the next task, chooses a machine and its parameters,
@@ -95,8 +95,14 @@ Pick the best option your client supports:
 Always pass the last event id you have seen as `since`; nothing is lost across
 reconnects or session restarts.
 
-Event types: `node_started`, `node_finished`, `check_failed`, `escalation`,
-`commit_done`, `run_paused`, `run_stopped`, `run_finished`, `run_failed`.
+Event types: `node_started`, `node_finished` (a step; `node` is its id),
+`check_failed`, `loop_repeated`, `escalation`, `commit_done`, `run_paused`,
+`run_stopped`, `run_finished`, `run_failed`.
+
+Escalation kinds: `step` (a step asks for a decision, e.g. the implementer
+reports `plan_wrong`, or a check failed outside any loop), `gate` (approval),
+`limit` (a loop used up its iterations), `engine` (a step could not run: CLI
+crash, usage limit, unusable output).
 
 ## 6. Tools
 
@@ -105,9 +111,9 @@ Event types: `node_started`, `node_finished`, `check_failed`, `escalation`,
 | `pipeline_hello` | Handshake; returns rules and event delivery options |
 | `pipeline_list` | Machines with descriptions (when to use them), params, validity |
 | `pipeline_start` | Start a run: `{ machine, params }` → run id and the subscribe command |
-| `pipeline_status` | Current node, visits, pending escalation, recent events |
+| `pipeline_status` | Current step, loop iterations, pending escalation, recent events |
 | `pipeline_wait` | Block until the next significant event (or a timeout) |
-| `pipeline_answer` | Answer an escalation: `continue`, `retry`, `reject` (gates), `stop` |
+| `pipeline_answer` | Answer an escalation: `continue` (go on; approve a gate; leave an exhausted loop as it is), `retry` (run the step again; one more loop iteration), `reject` (gates), `stop` |
 | `pipeline_stop` | `pause` (after the current step), `stop` (now, resumable), `abandon` |
 | `pipeline_resume` | Continue a paused or stopped run |
 | `pipeline_report` | Report of a run: facts, summaries, non-blocking findings, cost |

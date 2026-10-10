@@ -150,7 +150,7 @@ A machine file contains:
   this machine, what it needs, what it produces.
 - `params` — typed input schema (e.g. `taskSpec: path`, `acceptance: string[]`,
   `scope: glob[]`). The orchestrator must supply them at start.
-- `nodes` and `edges` built only from the fixed primitive set (§2.3).
+- `steps`: a tree built only from the fixed step types (§2.3).
 - `defaults` — per-role CLI/model choice, timeouts, iteration limits.
 
 ### 2.2 Authoring workflow
@@ -165,92 +165,74 @@ A machine file contains:
 5. It calls MCP `pipeline_smoke(machineId)`: AIDE runs every `check` command
    once and pings every configured CLI in headless mode with a trivial prompt,
    confirming the machine is executable on this machine/account.
-6. The user reviews the graph in the overlay's preview mode and commits the
-   files.
+6. The user reviews the machine and commits the files.
 
 The orchestrator may *propose* a new or changed machine during development, but
 it goes through the same validate → smoke → user-approval path. A run always
 **snapshots** the machine definition at start, so editing a file never affects a
 run in progress.
 
-### 2.3 Primitive node types
+### 2.3 Step types — a tree, not a graph
 
-| Type | Behaviour |
-|---|---|
-| `agent` | Spawns a headless CLI with a role, inputs, optional permissions profile, output schema, turn/time budget. `session: "new"` or `"continue:<nodeId>"` (resume that node's CLI session, e.g. implementer receiving review feedback). |
-| `check` | Runs a shell command in the project root; success = exit code 0; stdout/stderr captured as output. |
-| `branch` | Routes on a field of a previous node's output (`outputs.review.verdict == "accept"`). |
-| `gate` | Waits for an explicit decision from the orchestrator or the user. |
-| `commit` | Reviews the prepared commit (staged index + message from a preceding agent) with `review: "algorithmic"` or `review: "agent"`; on success runs `git commit` and outputs the commit result; on failure outputs findings for the preparing agent (§3.3). |
-| `escalate` | Emits an escalation event to `orchestrator` or `user` and pauses the run until answered. |
-| `end` | Terminal node: `success` or `failure`. |
+A machine is a **tree of steps** executed top to bottom, like structured code.
+There are no arbitrary jumps: control moves to the next step, into a block, or
+back to the start of an *enclosing* loop. (The first implementation used a graph
+with `[from, to, condition]` edges; it was replaced because a two-phase machine —
+a content loop followed by an integration loop and a commit — did not read as a
+flat list, and arbitrary edges gave freedom no real pipeline used while costing
+readability everywhere: the run view, the pipeline context, the report.)
 
-Every node may declare `maxVisits`; exceeding it routes to the node's
-`onLimit` edge (normally an `escalate`). This is how loops are bounded.
+| Type | Kind | Behaviour |
+|---|---|---|
+| `agent` | leaf | Spawns a headless CLI with a role, inputs, permissions, output schema, time budget. `session`: `keep` (default — each visit continues the step's own session), `new`, or `continue:<step>`. Optional `repeatIf` (repeat the loop), `escalateIf` (stop for a decision). |
+| `check` | leaf | Runs a shell command in the project root; success = exit code 0. Inside a loop a failure repeats the loop; outside any loop it stops the run for a decision. |
+| `gate` | leaf | Waits for approval from the orchestrator or the user; rejection repeats the loop (outside loops: the run fails). |
+| `repeat` | leaf | Starts an enclosing loop over (`continue` in code); usually inside an `if`. |
+| `commit` | block | Its `prep` agent stages the change and writes the message; AIDE reviews the prepared commit (`algorithmic` or `agent`) and commits. Review problems go back to `prep` as feedback, up to `maxAttempts` (§3.3). |
+| `loop` | block | Runs its steps again until a pass completes without a repeat request; `maxIterations` is required, `onLimit`: `escalate` (default) or `fail`. |
+| `group` | block | A titled sequence — a phase of the pipeline. |
+| `if` | block | Runs `then` or `else` depending on a condition. |
 
-Data flow: each node's output is stored as `outputs.<nodeId>`. Prompts and
-commands use simple templating over `params.*`, `outputs.*` and AIDE-computed
-values (`run.diff` — working tree vs HEAD including untracked files,
-`run.changedFiles`, `run.iteration.<nodeId>`).
+**Repeats and feedback.** A step that asks for another iteration (failed check,
+`repeatIf`, rejected gate, `repeat`, failed commit review) ends the pass; the loop
+starts over and every agent inside it receives that step's reason and output as
+feedback — no `fix` node and no wiring through inputs. `repeatLoop` / `repeat.loop`
+target an enclosing loop; the loops nested in it start from scratch. Returning
+from a later phase to an earlier one therefore means wrapping both phases in an
+outer loop — an explicit, visible construct instead of an arbitrary edge.
+
+Conditions are `<ref> == <literal>` / `!=` over `params.*`, `outputs.<step>.*`
+and `run.iteration`. Each step's output is stored as `outputs.<stepId>`; prompts
+use templating over `params.*`, `outputs.*` and AIDE-computed values (`run.diff`
+— working tree vs HEAD including untracked files, `run.stagedDiff`,
+`run.changedFiles`).
+
+Escalations: `step` (`escalateIf`, or a check failing outside loops — answers
+continue / retry / stop), `gate`, `limit` (a loop ran out of iterations — retry
+grants one more, continue leaves the loop as if it passed), `engine` (the step
+could not run — retry / stop).
 
 ### 2.4 Static validation (`pipeline_validate`, also on load)
 
-- Schema conformance; all referenced role files, CLIs and params exist.
-- Every node is reachable from `start`; every node can reach an `end` or
-  `escalate`.
-- Every cycle contains a node with `maxVisits`.
-- Every `branch` condition references a field guaranteed by the source node's
-  output schema; every branch has a default edge.
-- Every `agent` node has an output schema.
-- Every `commit` node is preceded by an agent node whose output schema includes
-  `commitMessage` and `excluded`, and has a failure edge back to it.
+- Shape: known step types, non-empty step lists, `prep` is an agent step.
+- Step ids are unique and valid; all referenced role files, CLIs and params exist.
+- Every loop has `maxIterations`; a loop nothing can repeat is a warning.
+- `repeatIf` / `repeatLoop` / `repeat` only inside loops, and only to an enclosing loop.
+- Conditions parse; `outputs.<step>.<field>` references exist in the step's
+  output schema; a reference to a step that has not run yet at that point (and
+  shares no loop) is a warning.
+- `continue:<step>` names an earlier agent step of the same CLI.
+- Every `agent` step has an output schema; Codex steps need strict schemas.
+- The commit `prep` outputs `commitMessage` and `excluded`.
 - Only CLIs that implement the headless capability (§5.2) are allowed.
+- The old graph format (`nodes`/`edges`) is rejected with a pointer to the guide.
 
-### 2.5 Example (abridged)
+### 2.5 Example
 
-```json
-{
-  "id": "code-feature",
-  "name": "Code feature",
-  "description": "Implements one plan stage that is pure code with automated checks. Needs a stage spec file and acceptance criteria.",
-  "params": {
-    "taskSpec": { "type": "path" },
-    "acceptance": { "type": "string[]" },
-    "scope": { "type": "glob[]" }
-  },
-  "start": "implement",
-  "nodes": {
-    "implement":  { "type": "agent", "role": "roles/implementer.md", "cli": "claude-code",
-                    "inputs": ["params.taskSpec", "params.acceptance", "params.scope"],
-                    "output": "implementerReport", "maxTurns": 80, "timeoutMin": 45 },
-    "checks":     { "type": "check", "command": "npm run typecheck && npm run build" },
-    "review":     { "type": "agent", "role": "roles/code-reviewer.md", "cli": "codex",
-                    "permissions": "read-only", "session": "new",
-                    "inputs": ["params.taskSpec", "params.acceptance", "run.diff"],
-                    "output": "reviewVerdict", "maxVisits": 3, "onLimit": "stuck" },
-    "fix":        { "type": "agent", "session": "continue:implement",
-                    "inputs": ["outputs.review.blocking", "outputs.checks.stderr"] },
-    "commitPrep": { "type": "agent", "session": "continue:implement",
-                    "role": "roles/commit-prep.md", "output": "commitPrep",
-                    "maxVisits": 3, "onLimit": "stuck" },
-    "commit":     { "type": "commit", "review": "algorithmic" },
-    "stuck":      { "type": "escalate", "to": "orchestrator" },
-    "done":       { "type": "end", "result": "success" }
-  },
-  "edges": [
-    ["implement", "checks", "outputs.implement.status == 'done'"],
-    ["implement", "stuck",  "default"],
-    ["checks", "review", "ok"], ["checks", "fix", "fail"],
-    ["review", "commitPrep", "outputs.review.verdict == 'accept'"],
-    ["review", "fix", "default"],
-    ["fix", "checks", "default"],
-    ["commitPrep", "commit", "default"],
-    ["commit", "done", "ok"], ["commit", "commitPrep", "fail"]
-  ]
-}
-```
-
-The final format is fixed in Phase 1; this example shows the intended shape.
+`resources/docs/pipeline-authoring.md` (the `pipeline_guide` tool) holds the
+validated examples: a code feature (one loop + commit) and content-then-integration
+(two phases in an outer loop with a `repeat` back to the content). Both are
+checked by `manager.test.ts`.
 
 ---
 
@@ -272,21 +254,24 @@ agents touch — it controls only what the machine itself depends on.
    reviewer: `accept | reject` with `blocking[]` and `non_blocking[]`).
 4. **Pipeline context** — generated by AIDE from the machine definition, so every
    agent knows where it stands and does not duplicate work owned by other nodes:
-   - the whole flow as an ordered outline with the current node marked
-     (`→ you are here`), including loops (`review → fix → checks → review, max 3`);
+   - the whole step tree as an indented outline with numbered steps and the
+     current one marked (`← YOU ARE HERE`), including loops with their limit and
+     current iteration, and what each step does to its loop (*a failure repeats
+     "build"*, *repeats "build" if verdict is not "accept"*);
    - **what happens after you**, node by node, with what each one does —
      e.g. *"checks: AIDE runs `npm run typecheck && npm run build` after you —
      do not run them yourself"*, *"review: a separate reviewer agent inspects the
      diff"*, *"commit prep: staging and the commit message come later — do not
      stage"*;
-   - **what happened before you**: iteration number of this visit, the previous
-     node's outcome and findings that triggered the visit (failed check output,
-     blocking review findings).
+   - **what happened before you**: the visit and loop iteration, the previous
+     step's outcome, and answered escalations; from the second iteration of a
+     loop the user message carries its **feedback** — the reason and output of
+     the step that asked for the repeat (failed check output, blocking review
+     findings, a gate answer).
 
    Every node therefore carries a one-line `summary` of what it does (written
-   for the agents that precede it). For `check` nodes it defaults to the
-   command; for `agent` nodes it comes from the role file. `pipeline_validate`
-   requires it.
+   for the other agents). For `check` steps it defaults to the command;
+   `pipeline_validate` requires it for `agent` steps.
 5. **Boundaries stated explicitly** — scope (as guidance), "do not edit tests
    marked as acceptance tests", "if the plan is wrong, return `plan_wrong` with
    the reason instead of working around it". Boundaries that follow from the
@@ -329,7 +314,7 @@ conventions such as bumped version files, the message), so an agent prepares it.
 It is a separate step after code review so that commit preparation is not
 repeated — and carried as dead weight — through code-fix iterations.
 
-**Commit prep** — an `agent` node, normally `continue:implement` (the
+**Commit prep** — the `prep` agent of the `commit` block, normally `continue:implement` (the
 implementer knows best what it changed and why). It stages the files that
 belong to the change, updates `.gitignore` if needed, and returns:
 
@@ -339,21 +324,21 @@ belong to the change, updates `.gitignore` if needed, and returns:
 
 It does not commit.
 
-**`commit` node** — a commit operation with a review layer on top. Two variants:
+**`commit` step** — a commit operation with a review layer on top. Two variants:
 
 | Variant | Review layer |
 |---|---|
 | `review: "algorithmic"` | AIDE checks: index is not empty; `commitMessage` is present; **every** modified or untracked file is either staged or listed in `excluded` (a forgotten file is caught mechanically) |
 | `review: "agent"` | The algorithmic checks first (cheap gate), then a reviewer agent (cheap model is fine) receives the staged diff, the message and the `excluded` list with reasons; it looks for junk in the index, unjustified exclusions, `.gitignore` changes, message quality |
 
-Both variants behave the same at the edges:
+Both variants behave the same way:
 
 - **Success** → AIDE runs `git commit -F <message>` on the index and outputs the
   commit result (`sha`, files, message). Nothing is returned to the implementer.
-- **Failure** → outputs findings; the `fail` edge leads back to commit prep,
-  which fixes staging/message. Bounded by `maxVisits` on commit prep.
+- **Failure** → the findings go back to commit prep as feedback (it continues its
+  own session) and it fixes staging/message. Bounded by `maxAttempts` (default 3).
 
-Each successful `commit` node is a checkpoint in the run.
+Each successful `commit` step is a checkpoint in the run.
 
 ---
 
@@ -364,12 +349,14 @@ Each successful `commit` node is a checkpoint in the run.
 **Pipeline overlay** — appears over the editor area when a run starts; never
 covers the orchestrator terminal or the file tree.
 
-- **Graph** of the machine with node states: pending / running / succeeded /
-  failed / interrupted / escalated. Loop nodes show `Review 2/3`. Elapsed time
-  per node and total; token/cost figures where the CLI reports them.
-- **Transcript pane** — live `TranscriptView` of the active agent node. Clicking
-  any completed node shows its transcript, its structured output (verdict,
-  findings) and, for `check` nodes, the command log.
+- **Step tree** of the machine, indented like the machine file: groups as phase
+  headers, loops and commit blocks with their iteration (`iteration 2/3`,
+  `attempt 1/3`), leaf steps with their state (pending / running / succeeded /
+  failed / interrupted / escalated) and per-visit chips. Elapsed time per step
+  and total; token/cost figures where the CLI reports them.
+- **Transcript pane** — live `TranscriptView` of the active agent step. Clicking
+  any completed step shows its transcript, its structured output (verdict,
+  findings) and, for `check` steps, the command log.
 - **Escalation panel** — pending question with an answer box; the same
   escalation is also delivered to the orchestrator; whoever answers first wins.
 - **Controls** — Pause, Stop now (§4.3).
@@ -629,14 +616,12 @@ Merely having a connected orchestrator shows nothing.
 
 ### 5.8 Graph rendering spike — **replaced**
 
-The first overlay shows the machine as an ordered **flow list** (BFS order from
-`start`, node state, visit counters, per-visit chips, route summaries live in the
-agents' pipeline context). It needs no layout library and stays readable in the
-narrow editor area; a real graph view (`@xyflow/react`) remains an option if
-machines grow beyond what a list conveys.
+The overlay shows the machine as an indented **step tree** (§2.3, §4.1). The
+first version was a flat list in BFS order over a graph; it did not read for
+multi-phase machines, which led to the tree format. With a tree there is nothing
+to lay out, so no graph library is needed.
 
 Original scope:
-
 
 Evaluate `@xyflow/react` with automatic layout (dagre/elk) against the overlay
 size constraints; read-only graph with live state styling.
@@ -691,9 +676,12 @@ overlay is shown.
    doc (§1A).
 3. **Test framework for the engine** — `vitest` + a fake headless CLI, scoped to
    the engine (§5.9).
-4. **New dependencies** — `@tanstack/react-virtual` (added) and `@xyflow/react`
-   (+ a layout library, Phase 2) are accepted; each is confirmed when it is
-   first relied on. `@modelcontextprotocol/sdk` turned out to be unnecessary (§5.4).
+4. **New dependencies** — `@tanstack/react-virtual` (added). `@xyflow/react`
+   is not needed since machines became trees (§5.8); `@modelcontextprotocol/sdk`
+   turned out to be unnecessary (§5.4).
+5. **Machine format** — a tree of steps with loops, groups, `if`, `repeat` and a
+   commit block, not a graph with edges (§2.3). Returning across phases is an
+   explicit outer loop + `repeat`.
 
 No open decisions remain; outstanding uncertainty is in the **[verify]** items,
 resolved by Phase 0.

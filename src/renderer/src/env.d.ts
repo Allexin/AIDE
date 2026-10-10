@@ -124,34 +124,8 @@ interface OrchestrationSetup {
   connected: OrchestratorConnection[]
 }
 
-interface PipelineMachineNode {
-  type: 'agent' | 'check' | 'commit' | 'gate' | 'escalate' | 'end'
-  summary?: string
-  maxVisits?: number
-  onLimit?: string
-  role?: string
-  cli?: string
-  model?: string
-  permissions?: 'read-only' | 'write'
-  session?: string
-  command?: string
-  prep?: string
-  review?: 'algorithmic' | 'agent'
-  question?: string
-  message?: string
-  to?: 'user' | 'orchestrator'
-  result?: 'success' | 'failure'
-}
-
-interface PipelineMachine {
-  id: string
-  name: string
-  description: string
-  start: string
-  defaults?: { cli?: string; model?: string }
-  nodes: Record<string, PipelineMachineNode>
-  edges: Array<[string, string, string]>
-}
+/** The machine definition (a tree of steps); see src/shared/pipelineMachine.ts. */
+type PipelineMachine = import('../../shared/pipelineMachine').MachineDefinition
 
 interface PipelineNodeVisit {
   node: string
@@ -167,7 +141,7 @@ interface PipelineNodeVisit {
 interface PipelineEscalation {
   id: string
   node: string
-  kind: 'node' | 'gate' | 'engine'
+  kind: 'step' | 'gate' | 'limit' | 'engine'
   to: 'user' | 'orchestrator'
   message: string
   raisedAt: string
@@ -182,6 +156,9 @@ interface PipelineRunState {
   status: PipelineRunStatus
   current: string | null
   visits: Record<string, number>
+  /** Current iteration per entered loop / commit block. */
+  iterations: Record<string, number>
+  bonus: Record<string, number>
   outputs: Record<string, unknown>
   history: PipelineNodeVisit[]
   escalations: PipelineEscalation[]

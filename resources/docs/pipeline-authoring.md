@@ -24,41 +24,84 @@ Machines are shared through the repository. Personal variants go to
 
 ## 2. How a machine runs
 
-AIDE starts at `start`, executes the node, then evaluates the node's edges **in
-order**; the first matching edge decides the next node. AIDE makes no judgement
-calls — judgement belongs to agent nodes, routing to edges.
+A machine is a **tree of steps**, executed top to bottom like structured code.
+There are no jumps: control moves to the next step, into a block, or back to the
+start of an enclosing loop. AIDE makes no judgement calls — judgement belongs to
+agent steps, control flow to the tree.
 
-| Node type | What AIDE does | Outcome |
-|---|---|---|
-| `agent` | Runs a headless CLI with the role, the pipeline context, the inputs and an output schema | `ok` with the agent's JSON output (agent failures escalate) |
-| `check` | Runs `command` in the project root | `ok` when exit code is 0, else `fail`; output in `outputs.<id>.output` |
-| `commit` | Reviews the prepared commit, then commits the index | `ok` with `{sha, files, message}`, or `fail` with `{issues}` |
-| `gate` | Asks the user/orchestrator to approve | `ok` approved, `fail` rejected |
-| `escalate` | Hands a problem to the orchestrator/user and waits | follows its edges after the answer |
-| `end` | Ends the run | — |
+Every step has an `id`, unique in the machine (letters, digits, `_`, `-`); it
+names the step's output: `outputs.<id>`.
 
-Edge conditions: `ok`, `fail`, `default` (always; put it last), or
-`<ref> == <literal>` / `!=`, e.g. `"outputs.review.verdict == 'accept'"`.
-Every non-end node needs a route for every outcome: a `default` edge, or both
-`ok` and `fail`.
+| Step | What AIDE does |
+|---|---|
+| `agent` | Runs a headless CLI with the role, the pipeline context, the inputs and an output schema; the JSON answer becomes `outputs.<id>` (agent failures stop the run for a decision) |
+| `check` | Runs `command` in the project root; exit code 0 passes. Output in `outputs.<id>.output` |
+| `gate` | Asks the user or the orchestrator to approve |
+| `repeat` | Starts an enclosing loop over (like `continue`); usually inside an `if` |
+| `commit` | Block: its `prep` agent stages the change and writes the message, AIDE reviews the prepared commit and commits it |
+| `loop` | Block: runs its steps again until a pass completes, at most `maxIterations` times |
+| `group` | Block: a titled sequence — a phase of the pipeline (`name` is shown in the run view) |
+| `if` | Block: runs `then` or `else` depending on `condition` |
 
-**Loops must be bounded**: some node in every loop needs `maxVisits`; when it is
-exceeded the run goes to `onLimit` (usually an `escalate` node).
+### Loops
+
+A loop runs its `steps`. A pass **completes** when its last step completes; then
+the loop is done and the run continues after it. A step inside asks for another
+iteration — the rest of the pass is skipped and the loop starts over:
+
+- a `check` that fails;
+- an `agent` whose `repeatIf` condition is true;
+- a `gate` that is rejected;
+- a `repeat` step.
+
+The step that asked for the repeat becomes the **feedback** of the next
+iteration: every agent inside the loop gets a "Feedback" section with the reason
+and the details (the failed check's output, the reviewer's findings, the gate
+answer). You do not wire this through `inputs`.
+
+`maxIterations` is required. When the last allowed iteration still asks to
+repeat, `onLimit` decides: `escalate` (default — the orchestrator or the user
+grants one more iteration, accepts the result as it is, or stops the run) or
+`fail` (the run fails).
+
+By default a repeat starts the **innermost** loop over. `repeatLoop: "<id>"` (on
+an agent, check or gate) and `repeat` steps can name an **enclosing** loop
+instead; the loops nested inside it start from scratch. A step can only send
+control back to a loop it is inside — to return from a later phase to an earlier
+one, wrap both phases in an outer loop (see §6).
+
+### Conditions
+
+`repeatIf`, `escalateIf` and `if.condition` are `<ref> == <literal>` or
+`<ref> != <literal>`: `"outputs.review.verdict != 'accept'"`,
+`"params.withReview == true"`. Refs: `params.<name>`,
+`outputs.<step>.<field>`, `run.iteration` (iteration of the innermost loop).
+
+### Decisions
+
+- `escalateIf` on an agent stops the run for a decision when true (e.g. the
+  implementer reports `plan_wrong`): `continue` goes on with the next step,
+  `retry` runs the step again, `stop` ends the run. `escalateMessage` and
+  `escalateTo` (`orchestrator` by default, or `user`) shape the request.
+- A `check` that fails **outside** any loop stops the run for a decision too.
+- Answers with text are shown to every later agent of the run.
 
 ## 3. What each agent receives
 
-AIDE composes the prompt; you only write the role file and the node fields.
+AIDE composes the prompt; you only write the role file and the step fields.
 
 - **Role file** (`role`): who the agent is, what it does, what it never does,
   how it reports. Keep it about the role, not about the flow.
-- **Pipeline context** — generated: the whole flow with "you are here", what
-  each later node does, and what happened before. Agents therefore know not to
-  run checks that a check node runs, and not to stage or commit before the
-  commit step. This is why every agent node needs a good one-line `summary`.
-- **Task and inputs**: `task` (may use `{{params.x}}`, `{{outputs.node.field}}`)
+- **Pipeline context** — generated: the whole step tree with "you are here", the
+  loops the agent is in and their iteration, what later steps do, and what
+  happened before. Agents therefore know not to run checks that a check step
+  runs, and not to stage or commit before the commit step. This is why every
+  agent step needs a good one-line `summary`.
+- **Task and inputs**: `task` (may use `{{params.x}}`, `{{outputs.step.field}}`)
   and `inputs` — references rendered as sections: `params.x`,
-  `outputs.<node>.<field>`, `run.diff` (working tree vs HEAD including
+  `outputs.<step>.<field>`, `run.diff` (working tree vs HEAD including
   untracked files), `run.stagedDiff`, `run.changedFiles`.
+- **Feedback** of the loops it is in, from the second iteration on (§2).
 - **Output contract**: the schema named by `output`. Built-ins:
   - `implementerReport`: `status` (`done` | `blocked` | `plan_wrong`), `summary`, `docsChanged`
   - `reviewVerdict`: `verdict` (`accept` | `reject`), `blocking[]`, `non_blocking[]`, `summary`
@@ -68,23 +111,33 @@ AIDE composes the prompt; you only write the role file and the node fields.
   Custom schemas go into `schemas`; for Codex they must be strict
   (`additionalProperties: false`, every property in `required`).
 
-`session: "continue:<node>"` resumes that node's CLI session — use it for the
-fix step and for commit preparation, so the implementer keeps its context.
+**Sessions** (`session`):
+
+- `keep` (default): every visit of the step continues its own previous CLI
+  session. The implementer of iteration 2 remembers what it did and fixes the
+  feedback; a reviewer remembers its earlier findings and checks they are fixed.
+- `new`: a fresh session every visit — for a reviewer that must judge without
+  its earlier opinion.
+- `continue:<step>`: continue an earlier step's session — the commit `prep`
+  continues the implementer, so it knows which files belong to the change.
+
 `permissions: "read-only"` for reviewers.
 
 ## 4. The commit step
 
-Commit preparation is an agent node **after** code review (not mixed into it):
-the implementer (continued session) stages the files that belong to the change,
-updates `.gitignore` if needed, and outputs `commitPrep`. The `commit` node then:
+Commit preparation comes **after** code review (not mixed into it). The `commit`
+block holds the `prep` agent (usually `session: "continue:<implementer>"`): it
+stages the files that belong to the change, updates `.gitignore` if needed, and
+outputs `commitPrep`. AIDE then reviews the prepared commit:
 
-- `review: "algorithmic"` — AIDE checks that something is staged, the message is
-  present, and every changed or untracked file is staged or listed in `excluded`;
+- `review: "algorithmic"` — something is staged, the message is present, and
+  every changed or untracked file is staged or listed in `excluded`;
 - `review: "agent"` — the same checks, then a reviewer agent (`reviewer.role`,
   a cheap model is fine) inspects the staged diff, the message and the exclusions.
 
-On success AIDE commits and the run continues; on failure `outputs.<commit>.issues`
-goes back to the prep node — include it in the prep node's `inputs`.
+On success AIDE commits and the run continues. On failure the problems go back to
+the prep agent as feedback, up to `maxAttempts` (default 3) attempts; then
+`onLimit` applies as for loops.
 
 ## 5. Example: code feature
 
@@ -98,45 +151,119 @@ goes back to the prep node — include it in the prep node's `inputs`.
     "acceptance": { "type": "string[]", "description": "Acceptance criteria" }
   },
   "defaults": { "cli": "claude-code", "timeoutMin": 45 },
-  "start": "implement",
-  "nodes": {
-    "implement": { "type": "agent", "summary": "implements the task", "role": "roles/implementer.md", "output": "implementerReport", "inputs": ["params.taskSpec", "params.acceptance"] },
-    "checks": { "type": "check", "command": "npm run typecheck && npm test" },
-    "review": { "type": "agent", "summary": "a separate reviewer checks the diff against the task and the acceptance criteria", "role": "roles/code-reviewer.md", "cli": "codex", "permissions": "read-only", "output": "reviewVerdict", "inputs": ["params.taskSpec", "params.acceptance", "run.diff"], "maxVisits": 3, "onLimit": "stuck" },
-    "fix": { "type": "agent", "summary": "fixes failed checks or blocking review findings", "role": "roles/implementer.md", "session": "continue:implement", "output": "implementerReport", "inputs": ["outputs.checks.output", "outputs.review.blocking"] },
-    "commitPrep": { "type": "agent", "summary": "stages the change and writes the commit message", "role": "roles/commit-prep.md", "session": "continue:implement", "output": "commitPrep", "inputs": ["outputs.commit.issues"], "maxVisits": 3, "onLimit": "stuck" },
-    "commit": { "type": "commit", "prep": "commitPrep", "review": "algorithmic" },
-    "stuck": { "type": "escalate", "to": "orchestrator", "message": "The loop did not converge; see the last review or commit issues." },
-    "planWrong": { "type": "escalate", "to": "orchestrator", "message": "The implementer reports the task should not be done as specified." },
-    "done": { "type": "end", "result": "success" },
-    "failed": { "type": "end", "result": "failure" }
-  },
-  "edges": [
-    ["implement", "checks", "outputs.implement.status == 'done'"],
-    ["implement", "planWrong", "default"],
-    ["checks", "review", "ok"],
-    ["checks", "fix", "fail"],
-    ["review", "commitPrep", "outputs.review.verdict == 'accept'"],
-    ["review", "fix", "default"],
-    ["fix", "checks", "default"],
-    ["commitPrep", "commit", "default"],
-    ["commit", "done", "ok"],
-    ["commit", "commitPrep", "fail"],
-    ["stuck", "failed", "default"],
-    ["planWrong", "failed", "default"]
+  "steps": [
+    {
+      "type": "loop", "id": "build", "name": "Implement and review", "maxIterations": 3,
+      "steps": [
+        {
+          "type": "agent", "id": "implement",
+          "summary": "implements the task; on later iterations fixes the feedback",
+          "role": "roles/implementer.md", "output": "implementerReport",
+          "inputs": ["params.taskSpec", "params.acceptance"],
+          "escalateIf": "outputs.implement.status != 'done'",
+          "escalateMessage": "The implementer reports the task is blocked or should not be done as specified."
+        },
+        { "type": "check", "id": "checks", "command": "npm run typecheck && npm test" },
+        {
+          "type": "agent", "id": "review",
+          "summary": "a separate reviewer checks the diff against the task and the acceptance criteria",
+          "role": "roles/code-reviewer.md", "cli": "codex", "permissions": "read-only", "output": "reviewVerdict",
+          "inputs": ["params.taskSpec", "params.acceptance", "run.diff"],
+          "repeatIf": "outputs.review.verdict != 'accept'"
+        }
+      ]
+    },
+    {
+      "type": "commit", "id": "commit", "review": "algorithmic",
+      "prep": {
+        "type": "agent", "id": "commitPrep", "summary": "stages the change and writes the commit message",
+        "role": "roles/commit-prep.md", "session": "continue:implement", "output": "commitPrep"
+      }
+    }
   ]
 }
 ```
 
-The `fix` → `checks` → `review` loop is bounded by `review.maxVisits`.
+A failed check or a rejected review starts `build` over; the implementer gets the
+check output or the review findings as feedback. After three iterations without
+a clean pass the orchestrator decides.
 
-## 6. Content tasks
+## 6. Example: content, then integration
 
 Content (levels, assets, texts) follows the same shape with different checks:
 deterministic validators instead of compilers (assets exist, references
 resolve, the engine imports them — e.g. an Unreal commandlet), and a content
 reviewer that checks the result against the brief. Put as much as possible into
-`check` nodes: they are facts, reviewers are opinions.
+`check` steps: they are facts, reviewers are opinions.
+
+Two phases — generate the content, then integrate it in code — are two groups.
+When the integration may find that the **content** is wrong, wrap both phases in
+an outer loop and return to it with a `repeat` step:
+
+```json
+{
+  "id": "location-content",
+  "name": "Location content",
+  "description": "Generates the assets of a game location and integrates them. Needs the location brief. Produces one commit.",
+  "params": { "brief": { "type": "string", "description": "The location brief or a path to it" } },
+  "defaults": { "cli": "claude-code" },
+  "schemas": {
+    "integrationVerdict": {
+      "type": "object", "additionalProperties": false,
+      "required": ["verdict", "blocking", "summary"],
+      "properties": {
+        "verdict": { "type": "string", "enum": ["accept", "reject", "content_wrong"] },
+        "blocking": { "type": "array", "items": { "type": "string" } },
+        "summary": { "type": "string" }
+      }
+    }
+  },
+  "steps": [
+    {
+      "type": "loop", "id": "location", "name": "Content and integration", "maxIterations": 2,
+      "steps": [
+        {
+          "type": "group", "id": "content", "name": "Content",
+          "steps": [{
+            "type": "loop", "id": "contentLoop", "maxIterations": 3,
+            "steps": [
+              { "type": "agent", "id": "generate", "summary": "generates the location assets from the brief", "role": "roles/content-generator.md", "output": "implementerReport", "inputs": ["params.brief"] },
+              { "type": "check", "id": "validateAssets", "command": "npm run validate-assets" },
+              { "type": "agent", "id": "contentReview", "summary": "checks the assets against the brief", "role": "roles/content-reviewer.md", "permissions": "read-only", "output": "reviewVerdict", "inputs": ["params.brief", "run.changedFiles"], "repeatIf": "outputs.contentReview.verdict != 'accept'" }
+            ]
+          }]
+        },
+        {
+          "type": "group", "id": "integration", "name": "Integration",
+          "steps": [
+            {
+              "type": "loop", "id": "build", "maxIterations": 3,
+              "steps": [
+                { "type": "agent", "id": "implement", "summary": "integrates the assets into the game code", "role": "roles/implementer.md", "output": "implementerReport", "inputs": ["params.brief"] },
+                { "type": "check", "id": "checks", "command": "npm run typecheck && npm test" },
+                { "type": "agent", "id": "review", "summary": "reviews the integration; reports content_wrong when the assets themselves must change", "role": "roles/code-reviewer.md", "permissions": "read-only", "output": "integrationVerdict", "inputs": ["params.brief", "run.diff"], "repeatIf": "outputs.review.verdict == 'reject'" }
+              ]
+            },
+            {
+              "type": "if", "id": "contentProblem", "condition": "outputs.review.verdict == 'content_wrong'",
+              "then": [{ "type": "repeat", "id": "backToContent", "loop": "location", "reason": "the integration review found problems in the content" }]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "commit", "id": "commit", "review": "agent", "reviewer": { "role": "roles/commit-reviewer.md", "model": "haiku" },
+      "prep": { "type": "agent", "id": "commitPrep", "summary": "stages the change and writes the commit message", "role": "roles/commit-prep.md", "session": "continue:implement", "output": "commitPrep" }
+    }
+  ]
+}
+```
+
+`review` repeats `build` on `reject`. On `content_wrong` the `build` loop is done
+(no repeat was asked), the `if` sees the verdict and `backToContent` starts
+`location` over: the generator gets the reviewer's findings as feedback, and
+`contentLoop` and `build` start from scratch.
 
 ## 7. Starter role files
 

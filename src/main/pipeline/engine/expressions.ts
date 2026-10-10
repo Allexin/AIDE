@@ -1,12 +1,10 @@
-import type { Outcome } from './types'
-
 /**
- * Edge conditions, references and templates.
+ * Conditions, references and templates.
  *
  * References are dotted paths into the run scope: `params.<name>`,
- * `outputs.<node>.<field>...`, `run.<value>`. Conditions are `ok`, `fail`,
- * `default`, or `<ref> == <literal>` / `<ref> != <literal>` with a quoted
- * string, number, true, false or null literal. Templates replace `{{ref}}`.
+ * `outputs.<step>.<field>...`, `run.<value>`. Conditions (`repeatIf`,
+ * `escalateIf`, `if`) are `<ref> == <literal>` / `<ref> != <literal>` with a
+ * quoted string, number, true, false or null literal. Templates replace `{{ref}}`.
  */
 
 export interface Scope {
@@ -15,23 +13,18 @@ export interface Scope {
   run: Record<string, unknown>
 }
 
-export type ParsedCondition =
-  | { kind: 'default' }
-  | { kind: 'outcome'; outcome: Outcome }
-  | { kind: 'compare'; ref: string; op: '==' | '!='; literal: unknown }
+export interface ParsedCondition { ref: string; op: '==' | '!='; literal: unknown }
 
 const COMPARE = /^\s*([A-Za-z_][\w.]*)\s*(==|!=)\s*(.+?)\s*$/
 
 export function parseCondition(condition: string): ParsedCondition | { error: string } {
-  const text = condition.trim()
-  if (text === 'default') return { kind: 'default' }
-  if (text === 'ok' || text === 'fail') return { kind: 'outcome', outcome: text }
+  const text = String(condition ?? '').trim()
   const match = COMPARE.exec(text)
-  if (!match) return { error: `Unsupported condition "${condition}". Use ok, fail, default, or "<ref> == <literal>".` }
+  if (!match) return { error: `Unsupported condition "${condition}". Use "<ref> == <literal>" or "<ref> != <literal>", e.g. "outputs.review.verdict != 'accept'".` }
   const literal = parseLiteral(match[3])
   if (literal === INVALID) return { error: `Invalid literal in condition "${condition}". Quote strings: 'value'.` }
   if (!/^(params|outputs|run)\./.test(match[1])) return { error: `Condition "${condition}" must reference params., outputs. or run.` }
-  return { kind: 'compare', ref: match[1], op: match[2] as '==' | '!=', literal }
+  return { ref: match[1], op: match[2] as '==' | '!=', literal }
 }
 
 const INVALID = Symbol('invalid')
@@ -55,11 +48,9 @@ export function resolveRef(ref: string, scope: Scope): unknown {
   return value
 }
 
-export function evaluateCondition(condition: string, outcome: Outcome, scope: Scope): boolean {
+export function evaluateCondition(condition: string, scope: Scope): boolean {
   const parsed = parseCondition(condition)
   if ('error' in parsed) return false
-  if (parsed.kind === 'default') return true
-  if (parsed.kind === 'outcome') return parsed.outcome === outcome
   const equal = JSON.stringify(resolveRef(parsed.ref, scope)) === JSON.stringify(parsed.literal)
   return parsed.op === '==' ? equal : !equal
 }

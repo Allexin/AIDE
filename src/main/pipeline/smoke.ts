@@ -5,6 +5,7 @@ import { getToolById } from '../pty/cliTools/registry'
 import { runShellCommand } from './processRunner'
 import { startHeadless } from './headless'
 import type { PipelineManager } from './manager'
+import { walkSteps, type Step } from '../../shared/pipelineMachine'
 
 /**
  * `pipeline_smoke` (plan §2.2 step 5): is this machine executable on this
@@ -24,10 +25,12 @@ export async function smokeTestMachine(manager: PipelineManager, projectPath: st
   if (validation.errors.length) lines.push(`✗ validation: ${validation.errors.length} error(s) — run pipeline_validate.`)
   else lines.push('✓ validation passed')
 
+  const steps: Step[] = []
+  walkSteps(machine.steps, (step) => { steps.push(step) })
   const clis = new Set<string>()
-  for (const node of Object.values(machine.nodes)) {
-    if (node.type === 'agent') clis.add(node.cli ?? machine.defaults?.cli ?? '')
-    if (node.type === 'commit' && node.review === 'agent') clis.add(node.reviewer?.cli ?? machine.defaults?.cli ?? '')
+  for (const step of steps) {
+    if (step.type === 'agent') clis.add(step.cli ?? machine.defaults?.cli ?? '')
+    if (step.type === 'commit' && step.review === 'agent') clis.add(step.reviewer?.cli ?? machine.defaults?.cli ?? '')
   }
   for (const cli of [...clis].filter(Boolean)) {
     const tool = getToolById(cli)
@@ -47,12 +50,13 @@ export async function smokeTestMachine(manager: PipelineManager, projectPath: st
     }
   }
 
-  for (const [id, node] of Object.entries(machine.nodes)) {
-    if (node.type !== 'check') continue
+  for (const step of steps) {
+    if (step.type !== 'check') continue
+    const id = step.id
     let output = ''
-    const exit = await runShellCommand({ commandLine: node.command, cwd: projectPath, timeoutMs: CHECK_TIMEOUT_MS, label: `smoke:${id}`, onStdoutLine: (l) => { output += l + '\n' }, onStderr: (t) => { output += t } }).done
+    const exit = await runShellCommand({ commandLine: step.command, cwd: projectPath, timeoutMs: CHECK_TIMEOUT_MS, label: `smoke:${id}`, onStdoutLine: (l) => { output += l + '\n' }, onStderr: (t) => { output += t } }).done
     const tail = output.trim().split('\n').slice(-5).join('\n')
-    lines.push(exit.exitCode === 0 ? `✓ check "${id}" (${node.command}) passed` : `✗ check "${id}" (${node.command}) exited ${exit.exitCode ?? (exit.timedOut ? 'timeout' : exit.spawnError)}:\n${tail}`)
+    lines.push(exit.exitCode === 0 ? `✓ check "${id}" (${step.command}) passed` : `✗ check "${id}" (${step.command}) exited ${exit.exitCode ?? (exit.timedOut ? 'timeout' : exit.spawnError)}:\n${tail}`)
   }
   return lines.join('\n')
 }
