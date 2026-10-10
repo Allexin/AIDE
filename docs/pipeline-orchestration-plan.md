@@ -48,8 +48,9 @@ Key decisions already taken:
 - **Orchestrator notification** uses whatever the agent supports, in tiers:
   native background tasks / Monitor on a streamed event feed where available,
   a blocking `pipeline_wait` MCP call otherwise — never PTY input injection.
-- **A non-closable overlay** in the AIDE window always shows the running
-  machine, so visibility never depends on the orchestrator remembering it.
+- **A pipeline tab** in the terminal panel (next to the CLI session tabs, not
+  closable while the run is active) always shows the running machine, so
+  visibility never depends on the orchestrator remembering it.
 - **Transcripts are rendered as Markdown** in a virtualized block list
   (`TranscriptView`), shared with the history viewer.
 
@@ -346,8 +347,13 @@ Each successful `commit` step is a checkpoint in the run.
 
 ### 4.1 What the user sees
 
-**Pipeline overlay** — appears over the editor area when a run starts; never
-covers the orchestrator terminal or the file tree.
+**Pipeline tab** — appears in the terminal panel's tab strip when a run starts,
+before the CLI session tabs, and blinks until opened (and whenever a decision is
+pending). It gets the terminal panel's size and focus behaviour, so it is as
+readable as a CLI tab. It is not a session tab: while it is selected the session
+selection is kept (PTY input, history, remote control stay bound to it); any
+session tab switch leaves it. Clicking the run-state banner opens it. (It was
+first an overlay over the editor area, which left it too narrow to read.)
 
 - **Step tree** of the machine, indented like the machine file: groups as phase
   headers, loops and commit blocks with their iteration (`iteration 2/3`,
@@ -360,11 +366,9 @@ covers the orchestrator terminal or the file tree.
 - **Escalation panel** — pending question with an answer box; the same
   escalation is also delivered to the orchestrator; whoever answers first wins.
 - **Controls** — Pause, Stop now (§4.3).
-- **Collapsible, not closable** — collapses to a strip
-  (`Code feature · Review 2/3 · 14 min`) that blinks on escalation (reuses the
-  Log Panel attention pattern). Collapsing it gives the editor back, so the user
-  can keep working. Becomes closable only when the run ends; at that point it
-  shows the final report.
+- **Not closable while the run is active** — the tab label shows the machine,
+  its state and the current loop (`Code feature ↺ build 2/3`). It becomes
+  closable when the run ends; at that point it shows the final report.
 - **Editor** — unrestricted. Files changed by the run follow the existing
   external-change behaviour: a clean buffer reloads, a buffer with unsaved edits
   gets the conflict dialog.
@@ -617,7 +621,7 @@ Merely having a connected orchestrator shows nothing.
 
 ### 5.8 Graph rendering spike — **replaced**
 
-The overlay shows the machine as an indented **step tree** (§2.3, §4.1). The
+The run view shows the machine as an indented **step tree** (§2.3, §4.1). The
 first version was a flat list in BFS order over a graph; it did not read for
 multi-phase machines, which led to the tree format. With a tree there is nothing
 to lay out, so no graph library is needed.
@@ -643,7 +647,7 @@ without spending tokens. **Decided** (§8).
 |---|---|---|
 | **0** | §5.1–5.9 | TranscriptView live in history viewer; headless matrix written; Claude Code + Codex headless adapters run a prompt and return validated JSON; at least two different CLIs connect the MCP shim by following the doc alone (via the wizard) and pass `pipeline_hello`; Monitor spike documented; run-state banner works |
 | **1. Engine** ✅ | Machine schema + validator, run store (`runs/<runId>/state.json` + append-only `events.jsonl`), executor for all primitives (including both `commit` review variants), templating, budgets, stop modes, recovery on project open | All engine paths covered by tests with the fake CLI |
-| **2. Overlay** ✅ (awaits manual UI testing; flow list instead of a graph library, see §5.8) | Graph, live/past transcripts, escalation panel, controls, collapsed strip, final report | A run of a hand-written machine is fully observable and controllable from the UI alone |
+| **2. Run view** ✅ (awaits manual UI testing; a terminal-panel tab with the step tree, see §4.1, §5.8) | Step tree, live/past transcripts, escalation panel, controls, final report | A run of a hand-written machine is fully observable and controllable from the UI alone |
 | **3. Orchestrator** ✅ (live acceptance: Claude Code and Codex each orchestrated a run to a real commit over MCP, woken via `pipeline_wait` — `src/main/pipeline/orchestrator.live.test.ts`; the background-monitor tier is not yet exercised live) | Pipeline MCP tools, tiered event delivery, `pipeline_start` subscription hint | Two different CLIs each complete a task end-to-end as orchestrator and are woken by events |
 | **4. Authoring** ✅ (`pipeline_guide`, `_schema`, `_validate`, `_smoke`; no overlay preview mode yet) | `pipeline_guide`, `pipeline_schema`, `pipeline_validate`, `pipeline_smoke`, preview mode in overlay, starter role templates | An agent produces a valid code machine and a content machine for a real project from a user interview |
 | **5. Breadth** | Headless adapters for OpenCode / Devin / others where supported; cross-vendor reviewer defaults; parallel runs (only if ever needed — they would require isolating working trees) | — |

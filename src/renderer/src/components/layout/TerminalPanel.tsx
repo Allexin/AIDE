@@ -6,6 +6,8 @@ import { usePanelStore } from '../../store/usePanelStore'
 import { useSessionStore } from '../../store/useSessionStore'
 import { useFileTreeStore } from '../../store/useFileTreeStore'
 import RunStateBanner from '../pipeline/RunStateBanner'
+import PipelineView, { PipelineTabButton } from '../pipeline/PipelineView'
+import { hasPipelineTab, usePipelineStore } from '../../store/usePipelineStore'
 
 // VS Dark terminal theme
 const VS_DARK_THEME = {
@@ -309,6 +311,16 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 
   const [deadSessionDialog, setDeadSessionDialog] = useState(false)
 
+  // The pipeline tab sits in the same strip but outside the session store: while it is
+  // selected the session tabs keep their selection (PTY input, history, remote stay bound to it).
+  const pipelineTab = usePipelineStore(hasPipelineTab)
+  const pipelineActive = usePipelineStore((s) => s.viewActive) && pipelineTab
+  const setPipelineActive = usePipelineStore((s) => s.setViewActive)
+  const terminalVisible = !pipelineActive
+
+  // Any session tab switch (click, keyboard, main process) leaves the pipeline tab.
+  useEffect(() => { setPipelineActive(false) }, [activeTabId, setPipelineActive])
+
   const activeTab = tabs.find((tab) => tab.tabId === activeTabId)
 
   // Tool name for the collapsed label — derived reactively from the active tab
@@ -346,9 +358,10 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 
   // H2: Focus xterm when clicking a tab (including the already-active one)
   const handleSelectTab = useCallback((tabId: string) => {
+    setPipelineActive(false)
     setActiveTab(tabId)
     setTimeout(() => fitFunctions.current.get(tabId)?.focus(), 50)
-  }, [setActiveTab])
+  }, [setActiveTab, setPipelineActive])
 
   // H3: Close tab — kill PTY, remove from store
   const handleCloseTab = useCallback((tabId: string) => {
@@ -543,16 +556,17 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
         }}
       >
         {/* Session tab strip — scrolls horizontally on overflow */}
+        {pipelineTab && <PipelineTabButton isActive={pipelineActive} onSelect={() => setPipelineActive(true)} />}
         <TabStrip
           tabs={tabs}
-          activeTabId={activeTabId}
+          activeTabId={pipelineActive ? null : activeTabId}
           remoteLockedTabs={remoteLockedTabs}
           onSelectTab={handleSelectTab}
           onCloseTab={handleCloseTab}
         />
 
         {/* 📱 Take back — shown when active tab is remotely locked */}
-        {activeTabId && remoteLockedTabs.has(activeTabId) && (
+        {terminalVisible && activeTabId && remoteLockedTabs.has(activeTabId) && (
           <button
             title="Take back control from mobile"
             style={{ ...headerBtnStyle, color: '#4fc3f7', fontSize: 13 }}
@@ -567,7 +581,7 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 
         {/* [ history ] open history viewer for current tab */}
         {(() => {
-          if (!activeTab?.sessionId) return null
+          if (!terminalVisible || !activeTab?.sessionId) return null
           return (
             <button
               title="Open session history"
@@ -622,13 +636,14 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
           <TerminalTab
             key={tab.tabId}
             tabId={tab.tabId}
-            isActive={tab.tabId === activeTabId}
+            isActive={terminalVisible && tab.tabId === activeTabId}
             isLocked={remoteLockedTabs.has(tab.tabId)}
             onMount={handleMount}
             onUnmount={handleUnmount}
             onAttention={handleAttention}
           />
         ))}
+        {pipelineActive && <PipelineView />}
         {!initialized && (
           <div
             style={{

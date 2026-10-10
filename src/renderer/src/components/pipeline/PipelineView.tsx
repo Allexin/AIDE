@@ -4,9 +4,10 @@ import { TranscriptView } from '../history/TranscriptView'
 import { blockTitle, walkSteps, type Step } from '../../../../shared/pipelineMachine'
 
 /**
- * Pipeline run view (plan §4.1): the machine's step tree with step states, the
- * transcript or log of any visit, run controls, escalation answers and the
- * final report. Collapsible to a strip; closable only after the run ended.
+ * Pipeline run view (plan §4.1), shown as a tab of the terminal panel next to
+ * the CLI session tabs: the machine's step tree with step states, the transcript
+ * or log of any visit, run controls, escalation answers and the final report.
+ * The tab can be closed only after the run ended.
  */
 
 const STATUS_LABEL: Record<PipelineRunStatus, string> = {
@@ -61,38 +62,40 @@ function useTick(active: boolean): void {
   }, [active])
 }
 
-export function PipelineStrip(): React.ReactElement | null {
+/** The pipeline tab in the terminal panel's tab strip. It is not a session tab: selecting it leaves the session selection alone. */
+export function PipelineTabButton({ isActive, onSelect }: { isActive: boolean; onSelect: () => void }): React.ReactElement | null {
   const run = usePipelineStore((s) => s.run)
-  const dismissed = usePipelineStore((s) => s.dismissedRunId)
-  const expanded = usePipelineStore((s) => s.expanded)
-  const setExpanded = usePipelineStore((s) => s.setExpanded)
-  useTick(run !== null && isRunActive(run.state.status))
-  if (!run || run.runId === dismissed || expanded) return null
-  const { state, machine } = run
-  const current = state.current
-  const loop = currentLoopLabel(machine, state)
-  return <div onClick={() => setExpanded(true)} title="Show the pipeline run" className={state.status === 'waiting' ? 'pipeline-attention' : undefined}
-    style={{ height: 26, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '0 10px', background: '#252526', borderBottom: '1px solid #3d3d3d', cursor: 'pointer', fontSize: 12, fontFamily: 'Segoe UI, sans-serif', color: '#ccc' }}>
-    <span style={{ color: STATUS_COLOR[state.status] }}>●</span>
-    <span style={{ fontWeight: 600 }}>{machine.name}</span>
-    {current && <span>{current}</span>}
-    {loop && <span style={{ color: '#888' }}>↺ {loop}</span>}
-    <span style={{ color: '#888' }}>{elapsed(state.startedAt, state.finishedAt)}</span>
-    <span style={{ color: STATUS_COLOR[state.status] }}>{STATUS_LABEL[state.status]}</span>
-    <span style={{ marginLeft: 'auto', color: '#888' }}>▾ Show</span>
+  const seenRunId = usePipelineStore((s) => s.seenRunId)
+  const dismiss = usePipelineStore((s) => s.dismiss)
+  const [dim, setDim] = useState(false)
+  const status = run?.state.status
+  // Blink like a session tab that needs attention: a decision is pending, or a new run nobody looked at yet.
+  const attention = !isActive && run !== null && (status === 'waiting' || run.runId !== seenRunId)
+  useEffect(() => {
+    if (!attention) { setDim(false); return }
+    const timer = setInterval(() => setDim((d) => !d), 500)
+    return () => clearInterval(timer)
+  }, [attention])
+  if (!run || !status) return null
+  const loop = currentLoopLabel(run.machine, run.state)
+  const color = attention ? (dim ? '#555' : '#f0a500') : isActive ? '#d4d4d4' : '#858585'
+  return <div onClick={onSelect} title={`Pipeline run ${run.runId}\n${STATUS_LABEL[status]}${run.state.current ? ` — ${run.state.current}` : ''}`}
+    style={{ background: isActive ? '#1e1e1e' : '#2d2d2d', color, fontSize: 12, padding: '4px 6px 4px 8px', borderRadius: '3px 3px 0 0', cursor: 'pointer', border: '1px solid #3d3d3d', borderBottom: isActive ? '1px solid #1e1e1e' : 'none', whiteSpace: 'nowrap', lineHeight: 1.5, flexShrink: 0, maxWidth: 260, overflow: 'hidden', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+    <span style={{ color: STATUS_COLOR[status], flexShrink: 0 }} className={status === 'running' ? 'pipeline-pulse' : undefined}>●</span>
+    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{run.machine.name}</span>
+    {loop && isRunActive(status) && <span style={{ color: '#888', flexShrink: 0 }}>↺ {loop}</span>}
+    {!isRunActive(status) && <span onClick={(e) => { e.stopPropagation(); dismiss() }} title="Close the pipeline tab" style={{ fontSize: 14, lineHeight: 1, color: '#858585', cursor: 'pointer', flexShrink: 0, padding: '0 2px' }}>×</span>}
   </div>
 }
 
-export default function PipelineOverlay(): React.ReactElement | null {
+export default function PipelineView(): React.ReactElement | null {
   const run = usePipelineStore((s) => s.run)
-  const dismissed = usePipelineStore((s) => s.dismissedRunId)
-  const expanded = usePipelineStore((s) => s.expanded)
   const selected = usePipelineStore((s) => s.selected)
-  const { setExpanded, select, dismiss } = usePipelineStore.getState()
+  const { select, dismiss } = usePipelineStore.getState()
   const [controlError, setControlError] = useState<string | null>(null)
   useTick(run !== null && isRunActive(run.state.status))
 
-  if (!run || run.runId === dismissed || !expanded) return null
+  if (!run) return null
   const { state, machine } = run
   const active = isRunActive(state.status)
 
@@ -108,7 +111,7 @@ export default function PipelineOverlay(): React.ReactElement | null {
   }
   const pending = state.escalations.find((e) => e.answer === null) ?? null
 
-  return <div style={{ position: 'absolute', inset: 0, zIndex: 20, display: 'flex', flexDirection: 'column', background: '#1e1e1e', fontFamily: 'Segoe UI, sans-serif', color: '#ccc' }}>
+  return <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#1e1e1e', fontFamily: 'Segoe UI, sans-serif', color: '#ccc' }}>
     <div style={{ height: 34, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '0 10px', background: '#252526', borderBottom: '1px solid #3d3d3d', fontSize: 12 }}>
       <span style={{ fontWeight: 600, fontSize: 13 }}>{machine.name}</span>
       <span style={{ color: STATUS_COLOR[state.status] }}>● {STATUS_LABEL[state.status]}</span>
@@ -119,8 +122,7 @@ export default function PipelineOverlay(): React.ReactElement | null {
         {(state.status === 'running' || state.status === 'pausing') && <Button onClick={() => void control('stop')} title="Interrupt the current step now (resumable)">Stop now</Button>}
         {(state.status === 'paused' || state.status === 'stopped') && <Button onClick={() => void control('resume')}>Resume</Button>}
         {(state.status === 'paused' || state.status === 'stopped') && <Button onClick={() => void control('abandon')} title="End this run for good">Abandon</Button>}
-        <Button onClick={() => setExpanded(false)} title="Collapse to a strip">▴ Collapse</Button>
-        {!active && <Button onClick={dismiss}>Close</Button>}
+        {!active && <Button onClick={dismiss} title="Close the pipeline tab">Close</Button>}
       </span>
     </div>
     {controlError && <div style={{ padding: '4px 10px', fontSize: 12, color: '#f48771', background: '#3a1f1f' }}>{controlError}</div>}

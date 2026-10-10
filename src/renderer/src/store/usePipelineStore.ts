@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 /**
- * State of the project's active pipeline run for the overlay and the banner.
+ * State of the project's active pipeline run for the pipeline tab and the banner.
  * The main process pushes snapshots on every run state change and transcript
  * entries as agents stream them.
  */
@@ -10,8 +10,11 @@ export interface VisitRef { node: string; visit: number }
 
 interface PipelineState {
   run: PipelineRunSnapshot | null
-  expanded: boolean
-  /** A finished run the user closed; the overlay stays hidden for it. */
+  /** The pipeline tab is the selected tab of the terminal panel (the session tabs keep their own selection). */
+  viewActive: boolean
+  /** The run whose tab the user has opened; a new run's tab blinks until then. */
+  seenRunId: string | null
+  /** A finished run the user closed; its tab stays hidden. */
   dismissedRunId: string | null
   /** Explicitly selected visit; null follows the current node. */
   selected: VisitRef | null
@@ -19,7 +22,7 @@ interface PipelineState {
   live: Record<string, HistoryEntry[]>
   setRun: (run: PipelineRunSnapshot | null) => void
   appendLive: (runId: string, node: string, visit: number, entry: HistoryEntry) => void
-  setExpanded: (expanded: boolean) => void
+  setViewActive: (active: boolean) => void
   select: (ref: VisitRef | null) => void
   dismiss: () => void
 }
@@ -30,9 +33,15 @@ export function isRunActive(status: PipelineRunStatus): boolean {
   return status !== 'finished' && status !== 'failed'
 }
 
+/** Whether the pipeline tab is shown at all. */
+export function hasPipelineTab(state: { run: PipelineRunSnapshot | null; dismissedRunId: string | null }): boolean {
+  return state.run !== null && state.run.runId !== state.dismissedRunId
+}
+
 export const usePipelineStore = create<PipelineState>((set) => ({
   run: null,
-  expanded: true,
+  viewActive: false,
+  seenRunId: null,
   dismissedRunId: null,
   selected: null,
   live: {},
@@ -40,17 +49,17 @@ export const usePipelineStore = create<PipelineState>((set) => ({
     const newRun = run !== null && run.runId !== state.run?.runId
     return {
       run,
-      // A new run opens expanded and follows the current node.
-      ...(newRun ? { expanded: true, selected: null, live: {} } : {})
+      // A new run follows the current step; its tab appears (blinking) without taking over the terminal.
+      ...(newRun ? { selected: null, live: {} } : {})
     }
   }),
   appendLive: (runId, node, visit, entry) => set((state) => {
     const key = liveKey(runId, node, visit)
     return { live: { ...state.live, [key]: [...(state.live[key] ?? []), entry] } }
   }),
-  setExpanded: (expanded) => set({ expanded }),
+  setViewActive: (viewActive) => set((state) => ({ viewActive, ...(viewActive && state.run ? { seenRunId: state.run.runId } : {}) })),
   select: (selected) => set({ selected }),
-  dismiss: () => set((state) => ({ dismissedRunId: state.run?.runId ?? null }))
+  dismiss: () => set((state) => ({ dismissedRunId: state.run?.runId ?? null, viewActive: false }))
 }))
 
 /** Subscribe to the main process; call once per editor window. Returns an unsubscribe. */
