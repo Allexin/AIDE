@@ -573,7 +573,7 @@ Original scope:
 ### 5.5 Orchestration MCP doc + wizard — **done** (UI awaits manual testing)
 
 Implemented: `resources/docs/orchestration-mcp.md` (deployed to
-`.aide/docs/` on project open), **CLI → Set Up Orchestration…** menu item and
+`.aide/docs/` on project open), **Orchestration** item in the main menu (next to Remote Connect) and
 `OrchestrationSetupDialog` (agent choice, notes, ready-made prompt with the exact
 launch spec, waiting state driven by `pipeline_hello`, **Restart tab** that
 resumes the same CLI session in a new tab).

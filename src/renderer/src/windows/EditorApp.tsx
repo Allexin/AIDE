@@ -60,7 +60,7 @@ export default function EditorApp(): React.ReactElement {
   // Pipeline run state for the overlay and the terminal banner
   useEffect(() => connectPipelineStore(), [])
 
-  // CLI → Set Up Orchestration… menu item
+  // Main menu → Orchestration
   useEffect(() => window.editorApi.onPipelineOpenSetup(() => setShowOrchestrationSetup(true)), [])
 
   // Forward CLI log events from main process into the LogPanel

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useSessionStore } from '../../store/useSessionStore'
 
 /**
- * "Set Up Orchestration…" wizard: opens a terminal tab with a ready-made prompt
+ * Orchestration setup wizard (main menu → Orchestration): opens a terminal tab with a ready-made prompt
  * asking the chosen agent to connect AIDE's MCP server to itself, then waits
  * for the agent's `pipeline_hello` handshake. Opened from the CLI menu.
  */
