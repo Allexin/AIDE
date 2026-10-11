@@ -11,6 +11,7 @@ import { resolveSchema, validateAgainstSchema, BUILTIN_SCHEMAS } from './schema'
 import { buildPipelineContext, buildSystemAppend, buildTaskPrompt, describeCondition, feedbackSections, invalidOutputPrompt, outputContract, stepSummary, stepSwitchPrompt } from './context'
 import { MachineTree, blockLimit, type DescendContext, type TreeBlock, type TreeLeaf } from './tree'
 import type { RunStore, StoredMachine } from './runStore'
+import { compactReport } from './reportView'
 
 /**
  * Deterministic executor of one pipeline run (plan §1, §3, §4).
@@ -612,8 +613,9 @@ export class PipelineRun {
     this.deps.emit(this.runId, result === 'success' ? 'run_finished' : 'run_failed', {
       result,
       reason: reason ? clip(reason, 600) : null,
-      commits: report.commits.map((c) => c.sha),
-      summary: `run ${result}${reason ? `: ${clip(reason, 200)}` : ''} — read pipeline_report`
+      summary: `run ${result}${reason ? `: ${clip(reason, 200)}` : ''}`,
+      // Everything the orchestrator needs to update the plan; pipeline_report is only for more detail.
+      report: compactReport(report)
     })
   }
 

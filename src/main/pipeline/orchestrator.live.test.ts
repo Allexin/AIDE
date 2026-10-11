@@ -25,9 +25,9 @@ const ORCHESTRATOR_PROMPT = [
   'You are the orchestrator of AIDE pipelines in this project. Use only the tools of the "aide" MCP server.',
   '1. Call pipeline_hello.',
   '2. Call pipeline_list and pick the machine for small changes.',
-  `3. Start it with pipeline_start, params: {"taskSpec": "${TINY_TASK}"}.`,
-  '4. Call pipeline_wait with the run id and timeoutSec 120, passing the last event id as since, again and again until you receive run_finished or run_failed. If you receive an escalation, answer it with pipeline_answer action "stop".',
-  '5. Call pipeline_report and reply with one line: RESULT=<success|failure> COMMIT=<sha of the commit or none>.'
+  `3. Start it with pipeline_start, params: {"taskSpec": "${TINY_TASK}"} and wait 240; it returns the run's next event.`,
+  '4. If the event is an escalation, answer it with pipeline_answer action "stop". If it is a timeout, call pipeline_wait with the run id and timeoutSec 240. Repeat until you have run_finished or run_failed.',
+  '5. The end event carries a report. Reply with one line: RESULT=<success|failure> COMMIT=<sha of the commit or none>.'
 ].join('\n')
 
 describe.skipIf(!live)('orchestrator over MCP (live)', () => {

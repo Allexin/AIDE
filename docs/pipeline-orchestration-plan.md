@@ -695,5 +695,13 @@ overlay is shown.
    details; the report is compact by default (`detail: true` for every visit);
    tool results are text only, never duplicated as structured content.
 
+7. **How the orchestrator waits** — blocking inside its turn (`wait` on
+   start/answer/resume, or `pipeline_wait`) is the recommended mode: background
+   tasks cost a read, a re-subscribe and a closing call per event (measured in
+   SpaceHospital, 2026-10-10: 45 of 62 orchestrator calls were such overhead).
+   A wait returns early when the user types in the orchestrator's tab, the
+   end-of-run event carries the compact report, and event ids continue across
+   AIDE restarts with pending escalations re-announced.
+
 No open decisions remain; outstanding uncertainty is in the **[verify]** items,
 resolved by Phase 0.

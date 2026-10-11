@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron'
 import type { PtyManager, SessionTabInfo } from '../pty/ptyManager'
+import { orchestrators } from '../pipeline/orchestrators'
 
 interface WsClient {
   readonly readyState: number
@@ -75,6 +76,7 @@ export class PtyBridge {
   writeToTab(client: WsClient, tabId: string, data: string): void {
     if (this.locks.get(tabId) !== client) return
     this.findManager(tabId)?.write(tabId, data)
+    orchestrators.userInput(tabId, data)
   }
 
   resizeTab(client: WsClient, tabId: string, cols: number, rows: number): void {

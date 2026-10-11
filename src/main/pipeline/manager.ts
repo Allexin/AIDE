@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events'
 import type { HistoryEntry } from '../pty/cliTools/types'
-import { PipelineRun, type EngineDeps, type RunReport } from './engine/runner'
+import { PipelineRun, compactEscalation, type EngineDeps, type RunReport } from './engine/runner'
 import { RunStore, newRunId } from './engine/runStore'
 import { loadLibrary, readRole, roleExists, validateParams, type LibraryEntry } from './engine/library'
 import { validateMachine, type ValidationResult } from './engine/validate'
@@ -147,15 +147,29 @@ export class PipelineManager extends EventEmitter {
       if (!loaded) continue
       const { state, stored, params } = loaded
       if (state.status === 'finished' || state.status === 'failed') return null
-      if (state.status === 'running' || state.status === 'pausing') {
+      const wasExecuting = state.status === 'running' || state.status === 'pausing'
+      if (wasExecuting) {
         // The process that ran it is gone; an in-flight visit counts as interrupted.
         const last = state.history[state.history.length - 1]
         if (last && !last.finishedAt) { last.outcome = 'interrupted'; last.finishedAt = new Date().toISOString(); state.visits[last.node] = Math.max(0, (state.visits[last.node] ?? 1) - 1) }
         state.status = 'paused'
         store.saveState(state)
       }
-      const run = new PipelineRun(stored, params, state, store, this.engineDeps(projectPath, store))
+      const deps = this.engineDeps(projectPath, store)
+      const run = new PipelineRun(stored, params, state, store, deps)
       this.active.set(projectPath, run)
+      // Event ids continue where the previous AIDE instance stopped, so an orchestrator
+      // that resumes waiting with its last `since` gets the next events, not old ids.
+      pipelineEvents.seed(projectPath, store.lastEventId(runId) + 1)
+      // Re-announce what needs the orchestrator: a waiter from before the restart lost its call.
+      const pending = run.pendingEscalation()
+      if (pending) deps.emit(runId, 'escalation', { ...compactEscalation(pending), summary: `AIDE restarted; still waiting for a decision at ${pending.node}` })
+      else if (state.status === 'paused' || state.status === 'stopped') {
+        deps.emit(runId, state.status === 'paused' ? 'run_paused' : 'run_stopped', {
+          next: state.current,
+          summary: `AIDE restarted; the run is ${state.status}${wasExecuting ? ` (interrupted during ${state.current ?? 'a step'})` : ''} — continue with pipeline_resume`
+        })
+      }
       return this.toSnapshot(projectPath, run)
     }
     return null

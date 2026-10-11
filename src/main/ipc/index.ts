@@ -18,6 +18,7 @@ import {
 } from '../config/toolbarConfig'
 import { openProjectAndTrack } from '../windows/editor'
 import { getOrchestrationSetup, pipelineManager } from '../pipeline'
+import { orchestrators } from '../pipeline/orchestrators'
 import { osDisplayName } from '../platform'
 import { runGitStatus } from '../filetree/gitStatus'
 import { searchProjectFileIndex } from '../filetree/fileIndex'
@@ -400,6 +401,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const senderWin = BrowserWindow.fromWebContents(event.sender)
     if (!senderWin) return
     ptyRegistry.get(senderWin)?.write(tabId, data)
+    orchestrators.userInput(tabId, data)
   })
 
   // ── Terminal: resize PTY (fire-and-forget) ────────────────────────────────────

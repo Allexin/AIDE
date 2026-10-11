@@ -63,6 +63,11 @@ class ProjectEvents {
     return this.events.filter((event) => event.id > since && (runId === null || event.runId === runId))
   }
 
+  /** Continue numbering after ids already handed out (by an AIDE instance that has since restarted). */
+  seed(nextId: number): void {
+    if (nextId > this.nextId) this.nextId = nextId
+  }
+
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
@@ -87,6 +92,7 @@ export const pipelineEvents = {
     forProject(projectPath).since(runId, since),
   subscribe: (projectPath: string, listener: Listener): (() => void) =>
     forProject(projectPath).subscribe(listener),
+  seed: (projectPath: string, nextId: number): void => forProject(projectPath).seed(nextId),
   /** Test helper: forget all events of a project. */
   reset: (projectPath: string): void => { projects.delete(projectPath) }
 }

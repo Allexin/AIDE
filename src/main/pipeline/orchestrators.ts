@@ -25,6 +25,16 @@ class OrchestratorRegistry extends EventEmitter {
     return entry
   }
 
+  /**
+   * The user submitted input in a terminal tab. A `pipeline_wait` blocked in that
+   * tab's agent returns early, so the agent sees the message instead of holding it
+   * until the next pipeline event.
+   */
+  userInput(tabId: string, data: string): void {
+    if (!data.includes('\r') || data.startsWith('\x1b[200~')) return // not a submit (or a paste)
+    this.emit('input', tabId)
+  }
+
   forProject(projectPath: string): OrchestratorConnection[] {
     return [...this.connections.values()].filter((c) => c.projectPath === projectPath)
   }

@@ -139,6 +139,16 @@ On success AIDE commits and the run continues. On failure the problems go back t
 the prep agent as feedback, up to `maxAttempts` (default 3) attempts; then
 `onLimit` applies as for loops.
 
+**Let the prep agent do the plan bookkeeping.** If the project keeps a plan with
+task statuses and a list of follow-ups, give the prep agent the reviewers'
+findings (`inputs: ["outputs.review.non_blocking"]`) and have its role mark the
+task done and record the findings, inside the same commit. Otherwise the
+orchestrator does these edits after every run, and each orchestrator call
+re-reads its whole (usually large) context: bookkeeping is the cheapest work in
+the pipeline and the most expensive work for the orchestrator. It also avoids
+edit conflicts between the implementer and the orchestrator on the same plan
+rows.
+
 ## 5. Example: code feature
 
 ```json
@@ -265,7 +275,28 @@ an outer loop and return to it with a `repeat` step:
 `location` over: the generator gets the reviewer's findings as feedback, and
 `contentLoop` and `build` start from scratch.
 
-## 7. Starter role files
+## 7. Patterns that keep runs cheap
+
+The orchestrator pays for every call with its whole context, and every agent
+step pays for its prompt. Design machines so that both do little:
+
+- **The machine does the bookkeeping.** Let the commit `prep` step mark the task
+  done in the project plan and add the run's non-blocking findings to the plan's
+  follow-up list, inside the same commit (say so in its role file and `task`).
+  The orchestrator then only reads the result and starts the next run, and it
+  never collides with plan rows the implementer edited.
+- **Judging models judge, cheaper models write.** Output-heavy authoring
+  (specifications, content, code) suits Codex or a mid-size model; reserve the
+  most capable model for review, where its judgement is what you pay for.
+- **One reviewer per change.** A reviewer that sees the diff and the captures
+  together costs one fresh session, two reviewers cost two. Split only when the
+  roles need different expertise.
+- **Checks before reviewers.** Everything a script can decide (builds, tests,
+  asset validation, screenshots compared to references) belongs in `check` steps:
+  they are cheap, deterministic, and keep reviewers from spending a session on a
+  broken build.
+
+## 8. Starter role files
 
 `roles/implementer.md`
 

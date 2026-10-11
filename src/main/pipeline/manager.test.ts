@@ -10,6 +10,8 @@ import { RunStore } from './engine/runStore'
 import type { MachineDefinition } from './engine/types'
 import type { HeadlessResult } from './headless/types'
 import { parsePorcelain } from './git'
+import { orchestrators } from './orchestrators'
+import { pipelineEvents } from './events'
 
 const root = mkdtempSync(join(tmpdir(), 'aide-manager-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -17,7 +19,7 @@ afterAll(() => rmSync(root, { recursive: true, force: true }))
 const GUIDE = resolve(__dirname, '../../../resources/docs/pipeline-authoring.md')
 
 function guideExample(section = '5\\. Example: code feature'): MachineDefinition {
-  const text = readFileSync(GUIDE, 'utf8')
+  const text = readFileSync(GUIDE, 'utf8').replace(/\r\n/g, '\n')
   const block = new RegExp(`## ${section}[\\s\\S]*?\`\`\`json\\n([\\s\\S]*?)\\n\`\`\``).exec(text)
   if (!block) throw new Error(`example "${section}" not found in the authoring guide`)
   return JSON.parse(block[1]) as MachineDefinition
@@ -74,6 +76,11 @@ async function call(server: McpServer, projectPath: string, name: string, args: 
   return { text, data, isError: response.result.isError }
 }
 
+async function callWith(server: McpServer, projectPath: string, tabId: string, name: string, args: Record<string, unknown>): Promise<string> {
+  const response = await server.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, { projectPath, connectionId: 'c', tabId }) as { result: { content: Array<{ text: string }> } }
+  return response.result.content[0].text
+}
+
 async function until(condition: () => boolean): Promise<void> {
   for (let i = 0; i < 500 && !condition(); i++) await new Promise((r) => setTimeout(r, 10))
   if (!condition()) throw new Error('timed out')
@@ -107,7 +114,8 @@ describe('PipelineManager through the MCP tools', () => {
 
     // Step progress does not wake the orchestrator: the first event it gets is the end of the run.
     const waited = await call(server, dir, 'pipeline_wait', { runId, since: 0, timeoutSec: 5 })
-    expect(waited.data).toMatchObject({ type: 'run_finished', data: { result: 'success', summary: expect.stringContaining('pipeline_report') } })
+    // The end-of-run event carries the compact report: no separate pipeline_report call is needed.
+    expect(waited.data).toMatchObject({ type: 'run_finished', data: { result: 'success', report: { result: 'success', commits: [{ sha: 'abc123', subject: 'Add X' }] } } })
     await until(() => manager.activeRun(dir)?.isFinal() === true)
 
     const report = await call(server, dir, 'pipeline_report', { runId })
@@ -175,6 +183,48 @@ describe('PipelineManager through the MCP tools', () => {
     expect(snapshot?.state.visits.checks).toBe(1)
     expect(snapshot?.state.history.at(-1)?.outcome).toBe('interrupted')
     second.resume(dir)
+    await until(() => second.activeRun(dir)?.isFinal() === true)
+    expect(second.activeRun(dir)?.state.result).toBe('success')
+  })
+
+  it('acts and waits in one call: start and answer return the next event', async () => {
+    const dir = project('p4', guideExample())
+    const manager = new PipelineManager(environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [] } } : happy(label)))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', docPath: 'd', manager })))
+    const started = await callWith(server, dir, 'tab-1', 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] }, wait: 5 })
+    const escalation = JSON.parse(started.split('\n').pop()!) as { type: string; data: { escalationId: string; actions: string[] } }
+    expect(escalation).toMatchObject({ type: 'escalation', data: { node: 'implement', actions: ['continue', 'retry', 'stop'] } })
+    const answered = await callWith(server, dir, 'tab-1', 'pipeline_answer', { escalationId: escalation.data.escalationId, action: 'continue', text: 'go on', wait: 5 })
+    expect(JSON.parse(answered.split('\n').pop()!)).toMatchObject({ type: 'run_finished', data: { report: { result: 'success', decisions: [{ step: 'implement', action: 'continue', text: 'go on' }] } } })
+  })
+
+  it('a wait returns early when the user types in the waiting agent\'s tab', async () => {
+    const dir = project('p5', guideExample())
+    const manager = new PipelineManager(environment(happy))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', docPath: 'd', manager })))
+    const waiting = callWith(server, dir, 'tab-9', 'pipeline_wait', { runId: 'no-such-run', timeoutSec: 30 })
+    await new Promise((r) => setTimeout(r, 50))
+    orchestrators.userInput('tab-other', 'hello\r') // another tab: ignored
+    orchestrators.userInput('tab-9', 'hel')         // not submitted yet: ignored
+    orchestrators.userInput('tab-9', '\r')
+    expect(JSON.parse(await waiting)).toMatchObject({ type: 'user_input' })
+  })
+
+  it('after an AIDE restart, a run waiting on an escalation is re-announced with continuing event ids', async () => {
+    const dir = project('p6', guideExample())
+    const env = environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [] } } : happy(label))
+    const first = new PipelineManager(env)
+    const { runId } = await first.start(dir, 'code-feature', { taskSpec: 'X', acceptance: [] })
+    await until(() => first.activeRun(dir)?.state.status === 'waiting')
+    const lastId = pipelineEvents.since(dir, runId, 0).at(-1)!.id
+    pipelineEvents.reset(dir) // the event bus lives in memory: AIDE restarted
+
+    const second = new PipelineManager(env)
+    expect(second.recover(dir)?.state.status).toBe('waiting')
+    const [again] = pipelineEvents.since(dir, runId, lastId)
+    expect(again).toMatchObject({ type: 'escalation', data: { node: 'implement', summary: expect.stringContaining('AIDE restarted') } })
+    expect(again.id).toBeGreaterThan(lastId)
+    await second.answer(dir, String(again.data.escalationId), { action: 'continue', text: 'proceed', by: 'user' })
     await until(() => second.activeRun(dir)?.isFinal() === true)
     expect(second.activeRun(dir)?.state.result).toBe('success')
   })

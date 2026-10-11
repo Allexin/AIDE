@@ -51,6 +51,17 @@ export class RunStore {
     appendFileSync(join(this.dir(runId), 'events.jsonl'), JSON.stringify(event) + '\n', 'utf8')
   }
 
+  /** Id of the last event logged for a run (0 when none). */
+  lastEventId(runId: string): number {
+    const path = join(this.dir(runId), 'events.jsonl')
+    if (!existsSync(path)) return 0
+    const lines = readFileSync(path, 'utf8').split('\n').filter(Boolean)
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try { return Number((JSON.parse(lines[i]) as { id?: unknown }).id) || 0 } catch { /* torn last line */ }
+    }
+    return 0
+  }
+
   nodeRunDir(runId: string, node: string, visit: number): string {
     const dir = join(this.dir(runId), 'nodes', `${node}-${visit}`)
     mkdirSync(dir, { recursive: true })
