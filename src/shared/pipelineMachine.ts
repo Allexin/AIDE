@@ -45,6 +45,8 @@ export interface AgentStep extends StepBase {
   /** CliTool id; falls back to machine defaults. */
   cli?: string
   model?: string
+  /** Reasoning effort, e.g. "high" (Claude Code: low…max; Codex: low…ultra, per model). Default: the CLI's own default. */
+  effort?: string
   permissions?: 'read-only' | 'write'
   /**
    * `keep` (default): every visit of this step continues its own previous session.
@@ -99,7 +101,7 @@ export interface CommitStep extends StepBase {
   prep: AgentStep
   review: 'algorithmic' | 'agent'
   /** Reviewer for `review: 'agent'`. */
-  reviewer?: { role: string; cli?: string; model?: string; timeoutMin?: number }
+  reviewer?: { role: string; cli?: string; model?: string; effort?: string; timeoutMin?: number }
   /** Prep → review attempts before `onLimit`. Default 3. */
   maxAttempts?: number
   onLimit?: 'escalate' | 'fail'
@@ -136,7 +138,7 @@ export interface MachineDefinition {
   /** Written for the orchestrator: when to use this machine, what it needs, what it produces. */
   description: string
   params?: Record<string, ParamDefinition>
-  defaults?: { cli?: string; model?: string; timeoutMin?: number }
+  defaults?: { cli?: string; model?: string; effort?: string; timeoutMin?: number }
   /** Named output schemas referenced by agent steps. */
   schemas?: Record<string, JsonSchema>
   steps: Step[]

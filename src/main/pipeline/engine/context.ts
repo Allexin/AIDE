@@ -12,6 +12,8 @@ import { MachineTree, blockLimit, blockName, type LeafStep, type TreeNode } from
  */
 
 /** One line about a leaf; for a commit step this describes its commit action. */
+export const DEFAULT_TIMEOUT_MIN = 60
+
 export function stepSummary(step: LeafStep): string {
   if (step.type === 'commit') {
     return `AIDE reviews the prepared commit (${step.review === 'agent' ? 'reviewer agent' : 'automatic checks'}) and commits it; problems go back to "${step.prep?.id}"`
@@ -122,7 +124,13 @@ export function buildPipelineContext(machine: MachineDefinition, current: string
   if (checks.length) lines.push(`- AIDE itself runs these checks later: ${checks.map((c) => `\`${c.command}\``).join(', ')}. Do not run them; if they fail, the failure output comes back to the steps that must fix it.`)
   if (isCommitPrep) lines.push('- You prepare the commit (stage files, write the message); AIDE reviews it and commits. Do not commit yourself.')
   else if (commitLater) lines.push('- Staging and committing happen in a later step. Do not stage or commit.')
-  if (loops.length && leaf.step.type === 'agent') lines.push('- You are inside a loop: if a later step finds problems, the loop starts over and you get that feedback. Keep your work easy to continue.')
+  if (loops.length && leaf.step.type === 'agent') lines.push('- You are inside a loop. It exists so that problems a later step finds come back to be fixed — not to continue unfinished work. Finish your whole task in this visit.')
+
+  if (leaf.step.type === 'agent') {
+    const minutes = leaf.step.timeoutMin ?? machine.defaults?.timeoutMin ?? DEFAULT_TIMEOUT_MIN
+    lines.push(`- Your only limit in this step is time: ${minutes} minutes. There is no token or work budget beyond that, and large tasks are expected here.`)
+    if ((leaf.step.permissions ?? 'write') === 'write') lines.push('- For a large task, plan the increments, then implement all of them now.')
+  }
 
   lines.push('', 'Before you:')
   const visit = state.visits[current] ?? 1

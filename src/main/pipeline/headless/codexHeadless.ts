@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
+import { homedir } from 'os'
 import { runProcess } from '../processRunner'
 import { classifyFailure, failedRun, parseJsonLine, processError, resolveExecutable } from './common'
 import type { HistoryEntry } from '../../pty/cliTools/types'
@@ -18,16 +19,47 @@ import type { HeadlessCapability, HeadlessResult, HeadlessRunOptions, HeadlessRu
  * - Codex rejects stdin above ~1 MiB; larger context must go through files.
  * - Role instructions are prepended to the prompt: `model_instructions_file`
  *   replaces Codex's own base instructions rather than appending to them.
+ * - `--ignore-user-config` keeps the user's MCP servers and profiles out of
+ *   pipeline steps, but it also drops their model and reasoning effort —
+ *   without them a step silently runs on the model's default effort (as low as
+ *   "low"). Both are passed explicitly: the step's own values, else the user's
+ *   config. (Reasoning summaries cannot be restored: `codex exec` reports
+ *   `summary: "none"` whatever the config says, as of 0.162.)
  */
+
+export interface CodexDefaults {
+  model?: string
+  effort?: string
+}
+
+/** Top-level `model` and `model_reasoning_effort` of a Codex config.toml. */
+export function parseCodexDefaults(toml: string): CodexDefaults {
+  const top = toml.split(/^\s*\[/m)[0]
+  const value = (key: string): string | undefined => {
+    const match = new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']*)["']`, 'm').exec(top)
+    return match?.[1] || undefined
+  }
+  return { model: value('model'), effort: value('model_reasoning_effort') }
+}
+
+export function readCodexDefaults(env: NodeJS.ProcessEnv): CodexDefaults {
+  const path = join(env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml')
+  try { return existsSync(path) ? parseCodexDefaults(readFileSync(path, 'utf8')) : {} } catch { return {} }
+}
+
+
 
 export const MAX_PROMPT_CHARS = 900_000
 
-export function buildCodexArgs(options: HeadlessRunOptions, files: { schema: string | null; lastMessage: string }): string[] {
+export function buildCodexArgs(options: HeadlessRunOptions, files: { schema: string | null; lastMessage: string }, defaults: CodexDefaults = {}): string[] {
   const args = ['exec']
   if (options.resumeSessionId) args.push('resume')
   args.push('--json', '--skip-git-repo-check', '--ignore-user-config')
   if (!options.resumeSessionId) args.push('--color', 'never', '--cd', options.cwd)
-  if (options.model) args.push('--model', options.model)
+  const model = options.model ?? defaults.model
+  if (model) args.push('--model', model)
+  const effort = options.effort ?? defaults.effort
+  if (effort) args.push('-c', `model_reasoning_effort='${effort}'`)
   if (options.permissions === 'write') args.push('--dangerously-bypass-approvals-and-sandbox')
   else {
     if (options.resumeSessionId) args.push('-c', "sandbox_mode='read-only'") // `exec resume` has no --sandbox flag
@@ -120,7 +152,7 @@ export const codexHeadless: HeadlessCapability = {
 
     const handle = runProcess({
       command: executable.command,
-      args: [...(executable.args ?? []), ...buildCodexArgs(options, files)],
+      args: [...(executable.args ?? []), ...buildCodexArgs(options, files, readCodexDefaults(options.env))],
       cwd: options.cwd,
       env: options.env,
       stdin: prompt,

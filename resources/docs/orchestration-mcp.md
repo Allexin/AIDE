@@ -93,6 +93,11 @@ project", the project is not open in AIDE.
 6. Keep the plan and its progress in the project's documents, not only in
    your context — your session may be restarted at any time. Prefer machines
    that do the bookkeeping themselves (see `pipeline_guide`).
+7. **Do not give step agents a way out.** Task texts and params such as "if
+   you cannot finish, escalate" are taken within a minute. Real obstacles have
+   `blocked` / `plan_wrong` and escalations. When an implementer reports
+   `blocked` without naming a real obstacle, that is your call to make: retry
+   the step with a concrete instruction to start implementing.
 
 ## 5. Waiting for runs
 

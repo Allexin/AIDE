@@ -21,6 +21,19 @@ export interface ValidationResult {
 }
 
 const PARAM_TYPES = new Set(['string', 'string[]', 'path', 'glob[]', 'number', 'boolean'])
+
+/** Effort levels each headless CLI accepts (Claude Code `--effort`; Codex `model_reasoning_effort`, the exact set depends on the model). */
+const EFFORTS: Record<string, string[]> = {
+  'claude-code': ['low', 'medium', 'high', 'xhigh', 'max'],
+  codex: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+}
+
+function checkEffort(effort: string | undefined, cli: string | undefined, where: string, err: (m: string) => void): void {
+  if (effort === undefined || !cli) return
+  const allowed = EFFORTS[cli]
+  if (!allowed) err(`${where}: "effort" is not supported for CLI "${cli}".`)
+  else if (!allowed.includes(effort)) err(`${where}: effort "${effort}" is not one of ${allowed.join(', ')} for ${cli}.`)
+}
 const ID = /^[A-Za-z_][A-Za-z0-9_-]*$/
 
 export function validateMachine(machine: MachineDefinition, env: ValidationEnvironment): ValidationResult {
@@ -72,6 +85,7 @@ export function validateMachine(machine: MachineDefinition, env: ValidationEnvir
   for (const id of new Set(tree.duplicates)) err(`Step id "${id}" is used more than once.`)
 
   const defaultCli = machine.defaults?.cli
+  if (machine.defaults?.effort !== undefined && defaultCli) checkEffort(machine.defaults.effort, defaultCli, '"defaults"', err)
   const nodeOf = (step: Step): TreeNode | undefined => step.type === 'agent' || step.type === 'check' || step.type === 'gate' || step.type === 'repeat' ? tree.leaves.get(step.id) : tree.blocks.get(step.id)
 
   walkSteps(machine.steps, (step) => {
@@ -137,6 +151,7 @@ export function validateMachine(machine: MachineDefinition, env: ValidationEnvir
           const cli = step.reviewer?.cli ?? defaultCli
           if (!cli) err(`${label}: the reviewer has no "cli" and the machine has no default.`)
           else if (!env.headlessClis.includes(cli)) err(`${label}: CLI "${cli}" does not support headless runs.`)
+          checkEffort(step.reviewer?.effort ?? machine.defaults?.effort, cli, `${label} reviewer`, err)
         }
         break
       }
@@ -155,6 +170,7 @@ function validateAgent(step: AgentStep, tree: MachineTree, node: TreeNode, machi
   if (!cli) err(`${label}: no "cli" and the machine has no default.`)
   else if (!env.headlessClis.includes(cli)) err(`${label}: CLI "${cli}" does not support headless runs.`)
   if (step.permissions && step.permissions !== 'read-only' && step.permissions !== 'write') err(`${label}: "permissions" must be "read-only" or "write".`)
+  checkEffort(step.effort ?? machine.defaults?.effort, cli, label, err)
   if (!step.output) err(`${label}: "output" schema is required.`)
   else {
     const schema = resolveSchema(step.output, machine.schemas)

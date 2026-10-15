@@ -153,7 +153,10 @@ describe('PipelineRun', () => {
     ].join('\n'))
     expect(implement.systemAppend).toContain('AIDE itself runs these checks later: `npm test`')
     expect(implement.systemAppend).toContain('Staging and committing happen in a later step. Do not stage or commit.')
-    expect(implement.systemAppend).toContain('You are inside a loop')
+    expect(implement.systemAppend).toContain('You are inside a loop. It exists so that problems a later step finds come back to be fixed — not to continue unfinished work. Finish your whole task in this visit.')
+    expect(implement.systemAppend).toContain('Your only limit in this step is time: 60 minutes.')
+    expect(implement.systemAppend).toContain('plan the increments, then implement all of them now')
+    expect(implement.systemAppend).not.toContain('easy to continue')
     expect(implement.prompt).toContain('Add feature X')
     // The reviewer comes after the checks, but a repeat runs them again — it is still told not to run them.
     expect(review.systemAppend).toContain('AIDE itself runs these checks later')

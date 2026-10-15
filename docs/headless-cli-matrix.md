@@ -87,6 +87,19 @@ codex exec resume --json --skip-git-repo-check --ignore-user-config [--model M]
 - `--ignore-user-config` skips `~/.codex/config.toml` (models, profiles, MCP
   servers); auth still comes from `CODEX_HOME` (**help**). It is not related to
   the app-server daemon.
+- It also drops `model` and `model_reasoning_effort` (**prod**, SpaceHospital
+  2026-10-15: implementer sessions ran with near-zero reasoning tokens;
+  `gpt-6.1-sol` defaults to effort `low` per `models_cache.json`). The adapter
+  passes both explicitly: the step's `model` / `effort`, else the user's
+  top-level config values; `-c model_reasoning_effort='high'` shows up as
+  `effort: "high"` in the session's `turn_context` (**live**, codex-cli 0.162.1).
+- **Reasoning summaries are not available in `exec`:** `turn_context.summary` is
+  `"none"` with `-c model_reasoning_summary='detailed'|'auto'`, and also without
+  `--ignore-user-config` with the user's `model_reasoning_summary = "detailed"`
+  (**live**, 0.162.1). `model_supports_reasoning_summaries` is reported as an
+  unrecognized setting. So the transcript of a Codex step shows no reasoning.
+- Claude Code: `--effort <low|medium|high|xhigh|max>` (**help**, 2.1.300); the
+  user's settings still apply to headless runs.
 - **Daemon:** `codex exec` has no `--no-daemon` flag, unlike the interactive
   `codex` / `codex resume` (**help**), which suggests exec runs in-process and is
   unaffected by AIDE stopping the shared daemon on account switch. The live

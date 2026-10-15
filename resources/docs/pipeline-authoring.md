@@ -123,6 +123,14 @@ AIDE composes the prompt; you only write the role file and the step fields.
 
 `permissions: "read-only"` for reviewers.
 
+**Model and effort** (`model`, `effort` on a step, or in `defaults`; `effort` and
+`model` also on a commit `reviewer`). Effort levels: Claude Code `low`, `medium`,
+`high`, `xhigh`, `max`; Codex `low` … `ultra` (the exact set depends on the
+model). Without one, Claude Code uses its own default, and Codex uses the
+model and effort of the user's Codex config — not the model's built-in default,
+which can be as low as `low`. Set effort per step deliberately: an implementer
+of large stages usually needs more than a commit preparer.
+
 ## 4. The commit step
 
 Commit preparation comes **after** code review (not mixed into it). The `commit`
@@ -287,7 +295,14 @@ step pays for its prompt. Design machines so that both do little:
   never collides with plan rows the implementer edited.
 - **Judging models judge, cheaper models write.** Output-heavy authoring
   (specifications, content, code) suits Codex or a mid-size model; reserve the
-  most capable model for review, where its judgement is what you pay for.
+  most capable model for review, where its judgement is what you pay for. Tune
+  `effort` per step rather than raising everything.
+- **No way out in the task text.** Never write "if you cannot finish, escalate"
+  into a `task`, a param or a role: agents take such an exit within a minute.
+  Real obstacles already have `blocked` / `plan_wrong` and escalations.
+- **Lean project instructions.** Every agent reads CLAUDE.md / AGENTS.md before
+  its first line of work. Keep them to conventions; move stage history and long
+  logs to separate documents the agents open only when needed.
 - **One reviewer per change.** A reviewer that sees the diff and the captures
   together costs one fresh session, two reviewers cost two. Split only when the
   roles need different expertise.
@@ -307,8 +322,10 @@ the project's conventions (read its CLAUDE.md / AGENTS.md first).
 - Update documentation that the change makes outdated.
 - If the task cannot be done as specified, or should not be, stop and report
   status "plan_wrong" with the reason instead of working around it.
-- If you are blocked (missing information, broken environment), report
-  "blocked" with what you need.
+- Report "blocked" only for an external obstacle you name (missing
+  information, a broken environment). The size of the task is not an obstacle:
+  this step has no budget but its time limit, so plan the increments and
+  implement all of them.
 When you get feedback (failed checks or review findings), fix exactly that.
 ```
 

@@ -74,6 +74,13 @@ describe('validateMachine', () => {
     expect(looped.warnings).toEqual([])
   })
 
+  it('checks effort levels per CLI', () => {
+    expect(validateMachine(machine([agent('a', { effort: 'high' }), agent('b', { cli: 'codex', effort: 'ultra' })]), env).errors).toEqual([])
+    const text = errorsOf(machine([agent('a', { effort: 'ultra' })], { defaults: { cli: 'claude-code', effort: 'turbo' } }))
+    expect(text).toMatch(/"defaults": effort "turbo" is not one of low, medium, high, xhigh, max for claude-code/)
+    expect(text).toMatch(/Step "a": effort "ultra" is not one of/)
+  })
+
   it('requires a strict schema for Codex steps', () => {
     const text = errorsOf(machine([agent('a', { cli: 'codex', output: 'loose' })], { schemas: { loose: { type: 'object', properties: { a: { type: 'string' } } } } }))
     expect(text).toMatch(/not strict enough for Codex/)

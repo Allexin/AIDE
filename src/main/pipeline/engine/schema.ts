@@ -12,8 +12,8 @@ export const BUILTIN_SCHEMAS: Record<string, JsonSchema> = {
     additionalProperties: false,
     required: ['status', 'summary', 'docsChanged'],
     properties: {
-      status: { type: 'string', enum: ['done', 'blocked', 'plan_wrong'], description: 'done: the task is implemented; blocked: cannot proceed; plan_wrong: the task as specified should not be done this way.' },
-      summary: { type: 'string', description: 'What was done, or why it is blocked / why the plan is wrong.' },
+      status: { type: 'string', enum: ['done', 'blocked', 'plan_wrong'], description: 'done: the task is implemented completely. blocked: an external obstacle stops you and you name it (missing information, a broken environment, a dependency that does not exist) — the size of the task or the time it takes is not an obstacle. plan_wrong: the task as specified contradicts itself or should not be done this way.' },
+      summary: { type: 'string', description: 'What was done; for blocked, the obstacle; for plan_wrong, the contradiction.' },
       docsChanged: { type: 'array', items: { type: 'string' }, description: 'Documentation files changed.' }
     }
   },

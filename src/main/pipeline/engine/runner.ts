@@ -8,7 +8,7 @@ import { clip, type PipelineEventType } from '../events'
 import type { AgentStep, CheckStep, CommitStep, Escalation, EscalationAnswer, LoopFeedback, MachineDefinition, NodeVisit, Outcome, RunState } from './types'
 import { evaluateCondition, stringifyValue, templateRefs, type Scope } from './expressions'
 import { resolveSchema, validateAgainstSchema, BUILTIN_SCHEMAS } from './schema'
-import { buildPipelineContext, buildSystemAppend, buildTaskPrompt, describeCondition, feedbackSections, invalidOutputPrompt, outputContract, stepSummary, stepSwitchPrompt } from './context'
+import { DEFAULT_TIMEOUT_MIN, buildPipelineContext, buildSystemAppend, buildTaskPrompt, describeCondition, feedbackSections, invalidOutputPrompt, outputContract, stepSummary, stepSwitchPrompt } from './context'
 import { MachineTree, blockLimit, type DescendContext, type TreeBlock, type TreeLeaf } from './tree'
 import type { RunStore, StoredMachine } from './runStore'
 import { compactReport } from './reportView'
@@ -45,7 +45,6 @@ export interface EngineDeps {
   onTranscript?(runId: string, node: string, visit: number, entry: HistoryEntry): void
 }
 
-const DEFAULT_TIMEOUT_MIN = 60
 const CHECK_OUTPUT_TAIL = 8000
 
 type NodeResult =
@@ -479,6 +478,7 @@ export class PipelineRun {
       permissions: node.permissions ?? 'write',
       outputSchema: schema,
       model: node.model ?? this.machine.defaults?.model,
+      effort: node.effort ?? this.machine.defaults?.effort,
       resumeSessionId: sessionId,
       timeoutMs,
       label: `${cli}:${id}`,
@@ -559,6 +559,7 @@ export class PipelineRun {
         permissions: 'read-only',
         outputSchema: BUILTIN_SCHEMAS.commitReview,
         model: reviewer.model ?? this.machine.defaults?.model,
+        effort: reviewer.effort ?? this.machine.defaults?.effort,
         timeoutMs: (reviewer.timeoutMin ?? DEFAULT_TIMEOUT_MIN) * 60_000,
         label: `${cli}:${id}:review`,
         onEntry: (entry) => {

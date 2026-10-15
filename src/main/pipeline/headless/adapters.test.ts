@@ -4,7 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import type { HistoryEntry } from '../../pty/cliTools/types'
 import { buildClaudeArgs, claudeHeadless } from './claudeHeadless'
-import { buildCodexArgs, codexHeadless, MAX_PROMPT_CHARS, unwrapShellCommand } from './codexHeadless'
+import { buildCodexArgs, codexHeadless, MAX_PROMPT_CHARS, parseCodexDefaults, unwrapShellCommand } from './codexHeadless'
 import type { HeadlessCapability, HeadlessRunOptions } from './types'
 
 const FAKE_CLI = join(__dirname, '..', 'testing', 'fakeCli.cjs')
@@ -46,6 +46,8 @@ describe('claude headless adapter', () => {
     const resumed = buildClaudeArgs({ ...options([]), resumeSessionId: 'sid-9' }, 'ignored', null)
     expect(resumed).toEqual(expect.arrayContaining(['--resume', 'sid-9', '--permission-mode', 'bypassPermissions']))
     expect(resumed).not.toContain('--session-id')
+    expect(buildClaudeArgs({ ...options([]), effort: 'high' }, 'sid', null)).toEqual(expect.arrayContaining(['--effort', 'high']))
+    expect(fresh).not.toContain('--effort')
   })
 
   it('streams entries and returns structured output', async () => {
@@ -98,6 +100,23 @@ describe('codex headless adapter', () => {
     expect(resumed.slice(-2)).toEqual(['thread-1', '-'])
     expect(resumed).toContain('--dangerously-bypass-approvals-and-sandbox')
     expect(resumed).not.toContain('--cd')
+  })
+
+  it('passes model and effort explicitly, since --ignore-user-config drops the user\'s', () => {
+    const files = { schema: null, lastMessage: '/m.txt' }
+    const fromUser = buildCodexArgs(options([]), files, { model: 'gpt-x', effort: 'medium' })
+    expect(fromUser).toEqual(expect.arrayContaining(['--model', 'gpt-x', '-c', "model_reasoning_effort='medium'"]))
+    const fromStep = buildCodexArgs({ ...options([]), model: 'gpt-y', effort: 'high' }, files, { model: 'gpt-x', effort: 'medium' })
+    expect(fromStep).toEqual(expect.arrayContaining(['--model', 'gpt-y', "model_reasoning_effort='high'"]))
+    const bare = buildCodexArgs(options([]), files, {})
+    expect(bare).not.toContain('--model')
+    expect(bare.some((a) => a.startsWith('model_reasoning_effort'))).toBe(false)
+  })
+
+  it('reads the top-level model settings of a Codex config', () => {
+    const toml = 'model = "gpt-6.1-sol"\nmodel_reasoning_effort = \'medium\'\nmodel_reasoning_summary = "detailed"\n\n[profiles.fast]\nmodel_reasoning_effort = "low"\n'
+    expect(parseCodexDefaults(toml)).toEqual({ model: 'gpt-6.1-sol', effort: 'medium' })
+    expect(parseCodexDefaults('[windows]\nsandbox = "elevated"\n')).toEqual({ model: undefined, effort: undefined })
   })
 
   it('adds the elevated Windows sandbox to read-only runs on Windows', () => {

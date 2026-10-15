@@ -703,5 +703,14 @@ overlay is shown.
    end-of-run event carries the compact report, and event ids continue across
    AIDE restarts with pending escalations re-announced.
 
+8. **Effort and early exits** — reasoning effort is a per-step (or machine
+   default) setting, never hard-coded; Codex runs get model and effort
+   explicitly because `--ignore-user-config` drops them (reasoning summaries are
+   not available in `codex exec` at all). The
+   pipeline context states the step's real budget (its time limit) and no longer
+   invites "continue later"; `blocked` means a named external obstacle. Catching
+   a premature `blocked` stays with the orchestrator — no auto-continue rule in
+   the engine.
+
 No open decisions remain; outstanding uncertainty is in the **[verify]** items,
 resolved by Phase 0.

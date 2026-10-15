@@ -22,6 +22,8 @@ export interface HeadlessRunOptions {
    *  (`additionalProperties: false`, every property listed in `required`). */
   outputSchema?: Record<string, unknown>
   model?: string
+  /** Reasoning effort (`--effort` for Claude Code, `model_reasoning_effort` for Codex). */
+  effort?: string
   /** Continue this CLI session instead of starting a new one. */
   resumeSessionId?: string
   timeoutMs?: number

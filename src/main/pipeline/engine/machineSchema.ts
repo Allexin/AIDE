@@ -18,6 +18,7 @@ const AGENT = {
     role: { type: 'string', description: 'Role file relative to the machine file, e.g. "roles/implementer.md".' },
     cli: { type: 'string', description: 'CLI tool id; defaults to defaults.cli.' },
     model: { type: 'string' },
+    effort: { type: 'string', description: 'Reasoning effort: Claude Code low|medium|high|xhigh|max; Codex low|medium|high|xhigh|max|ultra (per model). Default: defaults.effort, else the CLI default (for Codex: the user\'s config).' },
     permissions: { enum: ['read-only', 'write'], description: 'Default write. Reviewers: read-only.' },
     session: { type: 'string', description: '"keep" (default: each visit continues this step\'s own session), "new" (fresh every visit), or "continue:<earlier agent step>".' },
     task: { type: 'string', description: 'Task text; may use {{params.x}} and {{outputs.step.field}}.' },
@@ -60,6 +61,7 @@ export const MACHINE_FILE_SCHEMA = {
       properties: {
         cli: { type: 'string', description: 'CLI tool id for agent steps without their own, e.g. "claude-code" or "codex".' },
         model: { type: 'string' },
+        effort: { type: 'string', description: 'Reasoning effort for agent steps without their own.' },
         timeoutMin: { type: 'number' }
       }
     },
@@ -106,7 +108,7 @@ export const MACHINE_FILE_SCHEMA = {
             type: { const: 'commit' }, id: ID, summary: { type: 'string' },
             prep: { $ref: '#/$defs/agent', description: 'Agent that stages the change and outputs commitMessage + excluded (schema "commitPrep"). Usually session "continue:<implementer>".' },
             review: { enum: ['algorithmic', 'agent'] },
-            reviewer: { type: 'object', required: ['role'], properties: { role: { type: 'string' }, cli: { type: 'string' }, model: { type: 'string' }, timeoutMin: { type: 'number' } } },
+            reviewer: { type: 'object', required: ['role'], properties: { role: { type: 'string' }, cli: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, timeoutMin: { type: 'number' } } },
             maxAttempts: { type: 'integer', minimum: 1, description: 'Prep → review attempts; default 3.' },
             onLimit: { enum: ['escalate', 'fail'], description: 'Default escalate.' }
           }

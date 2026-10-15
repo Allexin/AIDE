@@ -26,6 +26,7 @@ export function buildClaudeArgs(options: HeadlessRunOptions, sessionId: string, 
   if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
   else args.push('--session-id', sessionId)
   if (options.model) args.push('--model', options.model)
+  if (options.effort) args.push('--effort', options.effort)
   if (systemAppendFile) args.push('--append-system-prompt-file', systemAppendFile)
   if (options.outputSchema) args.push('--json-schema', JSON.stringify(options.outputSchema))
   if (options.maxBudgetUsd !== undefined) args.push('--max-budget-usd', String(options.maxBudgetUsd))
