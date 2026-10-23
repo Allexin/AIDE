@@ -4,6 +4,7 @@ import { clip, pipelineEvents, SIGNIFICANT_EVENTS, type PipelineEvent } from '..
 import type { PipelineManager } from '../manager'
 import { MACHINE_FILE_SCHEMA } from '../engine/machineSchema'
 import { compactReport } from '../engine/reportView'
+import { ENGINE_CHANGES, ENGINE_VERSION, outdatedMachine } from '../engine/compat'
 
 /**
  * Pipeline MCP tools — the orchestrator's interface to AIDE (plan §4.2).
@@ -45,6 +46,15 @@ function eventDeliveryText(launcherPath: string): string {
     'Events that need you: escalation (a decision; answer with pipeline_answer), run_paused / run_stopped (the run changed hands, possibly by the user or an AIDE restart; continue with pipeline_resume — reason "usage_limit" means a CLI hit its usage limit: the run resumes by itself at resumeAt when the message said when, keeping the step\'s session), run_finished / run_failed (the event carries the compact report). Step progress is not sent.',
     'Pass the last event id you have seen as `since`; ids continue across AIDE restarts, so nothing is lost.'
   ].join('\n')
+}
+
+/** The engine version history, appended to the guide: what to check when raising a machine's engineVersion. */
+function engineVersionsText(): string {
+  const lines = [`## Engine versions`, '', `This AIDE runs pipeline engine ${ENGINE_VERSION}. Set "engineVersion": ${ENGINE_VERSION} in machines you write or review. Changes per version:`]
+  for (const change of [...ENGINE_CHANGES].reverse()) {
+    lines.push('', `Engine ${change.version}:`, ...change.changes.map((c) => `- ${c}`), ...change.actions.map((a) => `- To do: ${a}`))
+  }
+  return lines.join('\n')
 }
 
 function ok(text: string): ToolResult {
@@ -140,7 +150,11 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
       inputSchema: OBJECT({}),
       handler: (_args, { projectPath }) => {
         const { machines, errors } = manager().listMachines(projectPath)
-        const list = machines.map((m) => ({ id: m.id, name: m.name, description: m.description, params: m.params ?? {}, source: m.source, valid: m.validation.errors.length === 0, errors: m.validation.errors }))
+        const list = machines.map((m) => {
+          const entry = manager().machineEntry(projectPath, m.id)
+          const outdated = entry ? outdatedMachine(entry.machine) : null
+          return { id: m.id, name: m.name, description: m.description, params: m.params ?? {}, source: m.source, valid: m.validation.errors.length === 0, errors: m.validation.errors, ...(outdated ? { outdated: `written for engine ${outdated.declared ?? '(not declared)'}, AIDE runs ${ENGINE_VERSION}` } : {}) }
+        })
         if (list.length === 0 && errors.length === 0) return ok('No machines yet. Machines live in aide/pipelines/*.json; call pipeline_guide to learn how to write them.')
         return data(errors.length ? { machines: list, unreadableFiles: errors } : { machines: list })
       }
@@ -160,11 +174,11 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     },
     {
       name: 'pipeline_start',
-      description: 'Start a run of a machine with params. Only one run per project can be active. With wait, blocks until the run\'s first event that needs you (usually its end) and returns it.',
-      inputSchema: OBJECT({ machine: { type: 'string', description: 'Machine id from pipeline_list.' }, params: { type: 'object', description: 'Values for the machine params.' }, wait: WAIT_ARG }, ['machine']),
+      description: 'Start a run of a machine with params. Only one run per project can be active. A machine written for an older pipeline engine is refused with the list of what changed since; review it with the user (or pass acceptOutdated: true to run it unchanged). With wait, blocks until the run\'s first event that needs you (usually its end) and returns it.',
+      inputSchema: OBJECT({ machine: { type: 'string', description: 'Machine id from pipeline_list.' }, params: { type: 'object', description: 'Values for the machine params.' }, acceptOutdated: { type: 'boolean', description: 'Run a machine written for an older engine without reviewing it.' }, wait: WAIT_ARG }, ['machine']),
       handler: async (args, { projectPath, tabId }) => {
         try {
-          const { runId, warnings } = await manager().start(projectPath, String(args.machine), (args.params as Record<string, unknown>) ?? {})
+          const { runId, warnings } = await manager().start(projectPath, String(args.machine), (args.params as Record<string, unknown>) ?? {}, { acceptOutdated: args.acceptOutdated === true })
           const lines = [`Run ${runId} started.`, ...warnings.map((w) => `Warning: ${w}`)]
           if (args.wait !== undefined) return ok([...lines, waitText(await waitForEvent(projectPath, runId, 0, waitSeconds(args.wait, DEFAULT_WAIT_SEC), tabId))].join('\n'))
           lines.push(`Wait for its events: pipeline_wait with runId "${runId}" (or "${env().launcherPath}" events --run ${runId} --since 0 in the background).`, 'Leave the working tree to the run while it executes.')
@@ -327,7 +341,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
       inputSchema: OBJECT({}),
       handler: () => {
         const guide = env().authoringGuide?.()
-        return guide ? ok(guide) : fail('The authoring guide is not available.')
+        return guide ? ok(`${guide}\n\n${engineVersionsText()}`) : fail('The authoring guide is not available.')
       }
     },
     {

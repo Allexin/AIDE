@@ -4,6 +4,7 @@ import { PipelineRun, compactEscalation, type EngineDeps, type RunReport } from 
 import { RunStore, newRunId } from './engine/runStore'
 import { loadLibrary, readRole, roleExists, validateParams, type LibraryEntry } from './engine/library'
 import { validateMachine, type ValidationResult } from './engine/validate'
+import { outdatedMessage } from './engine/compat'
 import type { EscalationAnswer, MachineDefinition, RunState } from './engine/types'
 import { pipelineEvents, type PipelineEventType } from './events'
 
@@ -115,7 +116,7 @@ export class PipelineManager extends EventEmitter {
   }
 
   /** Start a run. Returns the run id and non-fatal warnings, or throws with a readable message. */
-  async start(projectPath: string, machineId: string, params: Record<string, unknown>): Promise<{ runId: string; warnings: string[] }> {
+  async start(projectPath: string, machineId: string, params: Record<string, unknown>, options: { acceptOutdated?: boolean } = {}): Promise<{ runId: string; warnings: string[] }> {
     const current = this.active.get(projectPath)
     if (current && !current.isFinal()) throw new Error(`Run ${current.runId} is still ${current.state.status}. Finish, stop or abandon it first.`)
     const entry = this.library(projectPath).find((e) => e.machine.id === machineId)
@@ -124,8 +125,12 @@ export class PipelineManager extends EventEmitter {
     if (validation.errors.length) throw new Error(`Machine "${machineId}" is invalid:\n- ${validation.errors.join('\n- ')}`)
     const paramErrors = validateParams(entry.machine.params, params)
     if (paramErrors.length) throw new Error(`Invalid params:\n- ${paramErrors.join('\n- ')}`)
+    const outdated = outdatedMessage(entry.machine)
+    if (outdated && !options.acceptOutdated) throw new Error(outdated)
 
-    const warnings = [...validation.warnings]
+    // The outdated warning was the reason for acceptOutdated; repeating it adds nothing.
+    const warnings = validation.warnings.filter((w) => !outdated || !w.startsWith('Written for engine'))
+    if (outdated) warnings.push(`Started although "${machineId}" was written for an older pipeline engine (acceptOutdated).`)
     const deps = this.env.deps(projectPath)
     const dirty = await deps.git.status(projectPath).catch(() => [])
     if (dirty.length) warnings.push(`The working tree has ${dirty.length} uncommitted change(s); they will mix into this run's diff and commits.`)

@@ -729,6 +729,15 @@ overlay is shown.
    increments") is not generated: AIDE cannot know a step's purpose, and
    guessing it (from permissions, then from the output schema) misled
    reviewers. It lives in the role files; the starter roles carry it.
+11. **Engine versions** — a machine declares `engineVersion`, the pipeline
+   engine it was written or last reviewed for. Changes that can make existing
+   machines or roles behave differently raise `ENGINE_VERSION`
+   (`engine/compat.ts`) with a list of changes and actions. `pipeline_start`
+   refuses an older machine with that list (`acceptOutdated: true` overrides),
+   `pipeline_list` marks it, `pipeline_validate` warns, `pipeline_guide` ends
+   with the history. A machine without the field counts as older than
+   engine 1. Refusing rather than warning: a warning arrives with a run that
+   is already going wrong.
 
 No open decisions remain; outstanding uncertainty is in the **[verify]** items,
 resolved by Phase 0.

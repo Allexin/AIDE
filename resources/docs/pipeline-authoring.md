@@ -13,14 +13,22 @@ write machine files and role files; AIDE executes them. Returned by the
    which CLIs should implement and which should review.
 3. Write one machine per task type: `aide/pipelines/<id>.json`, and its role
    files under `aide/pipelines/roles/`.
-4. `pipeline_validate` until there are no errors (`pipeline_schema` has the file
-   schema).
+4. Set `engineVersion` to the engine version of the running AIDE (the end of
+   this guide names it). `pipeline_validate` until there are no errors
+   (`pipeline_schema` has the file schema).
 5. `pipeline_smoke` with the machine id: check commands run once, CLIs are
    found (add `pingAgents: true` to confirm each CLI answers headless).
 6. Show the user the machine; they commit the files.
 
 Machines are shared through the repository. Personal variants go to
 `.aide/users/<user>/pipelines/` and win on duplicate id.
+
+**After an AIDE update.** When AIDE changes how machines or role files behave,
+its engine version goes up. `pipeline_list` marks machines written for an older
+engine as `outdated`, and `pipeline_start` refuses them with the list of changes
+since their version and what to do. Review the machine and its roles against
+that list (the end of this guide has the full history), then raise
+`engineVersion`. `acceptOutdated: true` on `pipeline_start` runs one unchanged.
 
 ## 2. How a machine runs
 
@@ -198,6 +206,7 @@ rows.
   "id": "code-feature",
   "name": "Code feature",
   "description": "Implements one plan stage that is pure code. Needs the stage spec and acceptance criteria. Produces one reviewed commit.",
+  "engineVersion": 3,
   "params": {
     "taskSpec": { "type": "string", "description": "What to implement, or a path to the spec section" },
     "acceptance": { "type": "string[]", "description": "Acceptance criteria" }
@@ -257,6 +266,7 @@ an outer loop and return to it with a `repeat` step:
   "id": "location-content",
   "name": "Location content",
   "description": "Generates the assets of a game location and integrates them. Needs the location brief. Produces one commit.",
+  "engineVersion": 3,
   "params": { "brief": { "type": "string", "description": "The location brief or a path to it" } },
   "defaults": { "cli": "claude-code" },
   "schemas": {

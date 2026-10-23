@@ -56,6 +56,7 @@ export const MACHINE_FILE_SCHEMA = {
         }
       }
     },
+    engineVersion: { type: 'integer', description: 'The AIDE pipeline engine version this machine and its role files were written or last reviewed for (pipeline_guide names the current one). Starting a machine for an older engine is refused until it is reviewed and this is raised.' },
     defaults: {
       type: 'object',
       properties: {

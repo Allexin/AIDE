@@ -3,13 +3,14 @@ import { validateMachine } from './validate'
 import { evaluateCondition, parseCondition, renderTemplate } from './expressions'
 import { strictSchemaProblems, validateAgainstSchema, BUILTIN_SCHEMAS } from './schema'
 import type { MachineDefinition, Step } from './types'
+import { ENGINE_VERSION } from './compat'
 
 const env = { headlessClis: ['claude-code', 'codex'], roleExists: (p: string) => !p.includes('missing') }
 
 const agent = (id: string, extra: Record<string, unknown> = {}): Step => ({ type: 'agent', id, summary: 's', role: 'roles/a.md', output: 'implementerReport', ...extra } as Step)
 
 function machine(steps: Step[], overrides: Partial<MachineDefinition> = {}): MachineDefinition {
-  return { id: 'm', name: 'M', description: 'd', defaults: { cli: 'claude-code' }, steps, ...overrides }
+  return { id: 'm', name: 'M', description: 'd', engineVersion: ENGINE_VERSION, defaults: { cli: 'claude-code' }, steps, ...overrides }
 }
 
 const errorsOf = (m: MachineDefinition): string => validateMachine(m, env).errors.join('\n')

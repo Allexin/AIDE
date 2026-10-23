@@ -137,6 +137,12 @@ export interface MachineDefinition {
   name: string
   /** Written for the orchestrator: when to use this machine, what it needs, what it produces. */
   description: string
+  /**
+   * The AIDE pipeline engine version this machine (and its role files) was
+   * written or last reviewed for. Starting an older one is refused until it is
+   * reviewed, because engine changes can alter how it behaves.
+   */
+  engineVersion?: number
   params?: Record<string, ParamDefinition>
   defaults?: { cli?: string; model?: string; effort?: string; timeoutMin?: number }
   /** Named output schemas referenced by agent steps. */

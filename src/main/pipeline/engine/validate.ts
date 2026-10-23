@@ -2,6 +2,7 @@ import { STEP_TYPES, walkSteps, type AgentStep, type MachineDefinition, type Ste
 import { parseCondition, templateRefs } from './expressions'
 import { resolveSchema, strictSchemaProblems } from './schema'
 import { MachineTree, type TreeNode } from './tree'
+import { ENGINE_VERSION, outdatedMachine } from './compat'
 
 /**
  * Static validation of a machine definition (plan §2.4). Run on load, by
@@ -49,6 +50,9 @@ export function validateMachine(machine: MachineDefinition, env: ValidationEnvir
     if (typeof machine[field] !== 'string' || !machine[field].trim()) err(`"${field}" is required.`)
   }
   if (!Array.isArray(machine.steps) || machine.steps.length === 0) return { errors: [...errors, '"steps" must be a non-empty array.'], warnings }
+  if (machine.engineVersion !== undefined && (!Number.isInteger(machine.engineVersion) || machine.engineVersion < 1)) err('"engineVersion" must be a positive integer.')
+  else if ((machine.engineVersion ?? 0) > ENGINE_VERSION) err(`"engineVersion" ${machine.engineVersion} is newer than this AIDE (engine ${ENGINE_VERSION}); update AIDE.`)
+  else if (outdatedMachine(machine)) warnings.push(`Written for engine ${machine.engineVersion ?? '(not declared)'}; this AIDE runs engine ${ENGINE_VERSION}. pipeline_start lists what changed; review the machine and its roles, then set "engineVersion": ${ENGINE_VERSION}.`)
 
   for (const [name, param] of Object.entries(machine.params ?? {})) {
     if (!PARAM_TYPES.has(param?.type)) err(`Param "${name}": unknown type "${param?.type}".`)

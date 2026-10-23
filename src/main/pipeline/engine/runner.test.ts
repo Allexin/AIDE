@@ -18,6 +18,7 @@ const MACHINE: MachineDefinition = {
   id: 'content-and-code',
   name: 'Content and code',
   description: 'Generates content, then integrates it.',
+  engineVersion: 3,
   params: { taskSpec: { type: 'string' } },
   defaults: { cli: 'claude-code' },
   steps: [

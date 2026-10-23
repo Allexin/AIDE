@@ -12,6 +12,7 @@ import type { HeadlessResult } from './headless/types'
 import { parsePorcelain } from './git'
 import { orchestrators } from './orchestrators'
 import { pipelineEvents } from './events'
+import { ENGINE_VERSION } from './engine/compat'
 
 const root = mkdtempSync(join(tmpdir(), 'aide-manager-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -95,6 +96,25 @@ describe('authoring guide', () => {
 })
 
 describe('PipelineManager through the MCP tools', () => {
+  it('refuses to start a machine written for an older engine, with what changed; acceptOutdated runs it', async () => {
+    const { engineVersion: _current, ...old } = guideExample()
+    const dir = project('p0', { ...old, engineVersion: 2 })
+    const manager = new PipelineManager(environment(happy))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', docPath: 'd', manager })))
+    const list = await call(server, dir, 'pipeline_list', {})
+    expect(list.text).toContain(`"outdated":"written for engine 2, AIDE runs ${ENGINE_VERSION}"`)
+    const refused = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] } })
+    expect(refused.isError).toBe(true)
+    expect(refused.text).toContain('was written for AIDE pipeline engine 2')
+    expect(refused.text).toContain('Engine 3:')
+    expect(refused.text).not.toContain('Engine 2:')
+    expect(refused.text).toContain(`set "engineVersion": ${ENGINE_VERSION}`)
+    expect(manager.activeRun(dir)).toBeNull()
+    const started = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] }, acceptOutdated: true })
+    expect(started.text).toMatch(/Run \S+ started/)
+    expect(started.text).toContain('acceptOutdated')
+  })
+
   it('lists, starts, waits for and reports a run', async () => {
     const dir = project('p1', guideExample())
     const manager = new PipelineManager(environment(happy))

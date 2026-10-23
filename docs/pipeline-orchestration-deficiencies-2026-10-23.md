@@ -267,6 +267,7 @@ changed tool schemas.
 | Item | Status | What changed |
 |---|---|---|
 | A1 | done | Check commands take `{{params.x}}` / `{{outputs.step.field}}`, shell-quoted (cmd.exe on Windows refuses values with `"`, `%` or line breaks); a list param becomes several arguments. The validator allows only `params.*` / `outputs.*` there. |
+| Engine version | done | Machines now declare `"engineVersion"`. Space Hospital machines have none, so `pipeline_start` refuses them with the list of changes until they are reviewed and set to `"engineVersion": 3` (or started with `acceptOutdated: true`). The A2 and A11 role edits below are part of that review. |
 | A2 | done | AIDE no longer writes behaviour into the pipeline context at all — only facts (structure, time limit, run state). "Finish the whole task in this visit", "plan the increments, then implement all of them" and the `pipelineIssues` hint are gone from it. **Space Hospital must add them to its role files** (implementer: the first two; every role: the `pipelineIssues` line) before running the new release — see the starter roles in `pipeline-authoring.md` §8. |
 | A3 | done | The overview counts granted iterations, same as "Before you". |
 | A4 | done | "You need not run them … Run one yourself only when your task or a decision explicitly asks for it." No `mayRunChecks`. |
