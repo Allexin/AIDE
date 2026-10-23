@@ -373,6 +373,11 @@ first an overlay over the editor area, which left it too narrow to read.)
   external-change behaviour: a clean buffer reloads, a buffer with unsaved edits
   gets the conflict dialog.
 - Pipeline events are also appended to a `pipeline` Log Panel channel.
+- **Current accounts and limits** — a footer row per CLI the machine uses: the
+  account AIDE has loaded now and its usage limits, rendered by the same
+  component as the status bar (`components/cli/AccountUsage.tsx`). For the user
+  to plan work; not sent to the orchestrator, and not a record of which account
+  an earlier step ran with (CLIs pick up account switches differently).
 
 Transcripts are written by AIDE itself from the headless event stream to
 `.aide/users/<user>/runs/<runId>/nodes/<nodeId>.jsonl` in the normalized format,

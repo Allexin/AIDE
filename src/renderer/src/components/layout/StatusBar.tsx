@@ -1,8 +1,9 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useFileTreeStore } from '../../store/useFileTreeStore'
 import { useEditorStore } from '../../store/useEditorStore'
 import { useSessionStore } from '../../store/useSessionStore'
 import UpdateDialog from './UpdateDialog'
+import { AccountLabel, UsageLabel, useAccountUsage } from '../cli/AccountUsage'
 
 // Maps Monaco language IDs to display names for the language sensor.
 const LANG_DISPLAY: Record<string, string> = {
@@ -75,134 +76,12 @@ export default function StatusBar(): React.ReactElement {
     }
   }
 
-  // ── CLI account sensor (left) ───────────────────────────────────────────────
-  const [accountLabel, setAccountLabel] = useState<string | null>(null)
-  const [accountSaved, setAccountSaved] = useState(true)
-  const activeToolIdRef = useRef<string | null>(null)
-  const requestGeneration = useRef(0)
-
-  // ── Usage limits sensor (left, next to account) ────────────────────────────
-  const [usageInfo, setUsageInfo] = useState<{ summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number; hasLimit?: boolean } | null>(null)
-  const lastUsageFetch = useRef(0)
-  const [usageAge, setUsageAge] = useState('')
-
-  // Reactive toolId from the active tab
+  // ── CLI account and usage limits sensors (left) ─────────────────────────────
   const activeToolId = useSessionStore((s) => {
     const tab = s.tabs.find((t) => t.tabId === s.activeTabId)
     return tab?.toolId ?? null
   })
-
-  const fetchAccountAndUsage = useCallback((toolId: string | null) => {
-    const generation = ++requestGeneration.current
-    activeToolIdRef.current = toolId
-    if (!toolId) {
-      // No integration — clear display
-      setAccountLabel(null)
-      setAccountSaved(true)
-      setUsageInfo(null)
-      return
-    }
-
-    // Fetch account info
-    window.editorApi.getAccountCurrentInfo(toolId).then((info) => {
-      if (generation !== requestGeneration.current || activeToolIdRef.current !== toolId) return
-      if (info) {
-        setAccountLabel(info.label)
-        setAccountSaved(info.saved)
-      } else {
-        setAccountLabel(null)
-      }
-    })
-
-    // Fetch usage
-    lastUsageFetch.current = Date.now()
-    window.editorApi.getUsageInfo(toolId).then((info) => {
-      if (generation !== requestGeneration.current || activeToolIdRef.current !== toolId) return
-      setUsageInfo(info)
-    })
-  }, [])
-
-  // React to active tab changes — update account/usage when tab switches
-  useEffect(() => {
-    fetchAccountAndUsage(activeToolId)
-  }, [activeToolId, fetchAccountAndUsage])
-
-  // Listen to account changes and tab events (refresh data)
-  useEffect(() => {
-    const unsubs = [
-      window.editorApi.onAccountsChanged(() => {
-        if (activeToolIdRef.current) fetchAccountAndUsage(activeToolIdRef.current)
-      }),
-      window.editorApi.onTerminalSwitchTab(() => {
-        // Tab switch is already handled reactively via activeToolId
-        // This ensures refresh on push events from main process
-        if (activeToolIdRef.current) fetchAccountAndUsage(activeToolIdRef.current)
-      }),
-      window.editorApi.onTerminalNewTab(() => {
-        if (activeToolIdRef.current) fetchAccountAndUsage(activeToolIdRef.current)
-      })
-    ]
-    return () => unsubs.forEach((u) => u())
-  }, [fetchAccountAndUsage])
-
-  // Update age label every second based on fetchedAt from the data itself
-  useEffect(() => {
-    const id = setInterval(() => {
-      if (!usageInfo?.fetchedAt) return
-      const sec = Math.floor((Date.now() - usageInfo.fetchedAt) / 1000)
-      if (sec < 5) { setUsageAge(''); return }
-      if (sec < 60) { setUsageAge(`${sec}s ago`); return }
-      const min = Math.floor(sec / 60)
-      if (min < 60) { setUsageAge(`${min}m ago`); return }
-      const hr = Math.floor(min / 60)
-      setUsageAge(`${hr}h${min % 60}m ago`)
-    }, 1000)
-    return () => clearInterval(id)
-  }, [usageInfo?.fetchedAt])
-
-  useEffect(() => {
-    // Adaptive polling: 5 min focused, 20 min unfocused
-    let timerId: ReturnType<typeof setInterval>
-
-    const startInterval = (): void => {
-      clearInterval(timerId)
-      const ms = document.hasFocus() ? 300_000 : 1_200_000
-      timerId = setInterval(() => {
-        const toolId = activeToolIdRef.current
-        if (toolId) {
-          lastUsageFetch.current = Date.now()
-          window.editorApi.getUsageInfo(toolId).then((info) => {
-            if (activeToolIdRef.current !== toolId) return
-            setUsageInfo(info)
-          })
-        }
-      }, ms)
-    }
-
-    startInterval()
-
-    const onFocus = (): void => {
-      const toolId = activeToolIdRef.current
-      if (Date.now() - lastUsageFetch.current > 300_000 && toolId) {
-        lastUsageFetch.current = Date.now()
-        window.editorApi.getUsageInfo(toolId).then((info) => {
-          if (activeToolIdRef.current !== toolId) return
-          setUsageInfo(info)
-        })
-      }
-      startInterval()
-    }
-    const onBlur = (): void => startInterval()
-
-    window.addEventListener('focus', onFocus)
-    window.addEventListener('blur', onBlur)
-
-    return () => {
-      clearInterval(timerId)
-      window.removeEventListener('focus', onFocus)
-      window.removeEventListener('blur', onBlur)
-    }
-  }, [])
+  const accountUsage = useAccountUsage(activeToolId)
 
   // ── File language sensor (right) ────────────────────────────────────────────
   const langDisplay = currentLanguage ? (LANG_DISPLAY[currentLanguage] ?? currentLanguage) : null
@@ -235,32 +114,8 @@ export default function StatusBar(): React.ReactElement {
             {fileStatus}
           </span>
         )}
-        {accountLabel && (
-          <span
-            style={{
-              ...sensorStyle,
-              color: accountSaved ? 'rgba(255,255,255,0.9)' : '#cca700'
-            }}
-            title={accountSaved ? 'CLI account' : 'CLI account not saved in AIDE'}
-          >
-            {accountLabel}
-          </span>
-        )}
-        {usageInfo && (
-          <span
-            style={{
-              ...sensorStyle,
-              color: usageInfo.hasLimit === false
-                ? 'rgba(255,255,255,0.9)'
-                : usageInfo.level === 'critical' ? '#f44747'
-                  : usageInfo.level === 'warn' ? '#cca700'
-                  : 'rgba(255,255,255,0.9)'
-            }}
-            title={usageInfo.tooltip}
-          >
-            {usageInfo.summary}{usageAge && <span style={{ opacity: 0.6, marginLeft: 4 }}>({usageAge})</span>}
-          </span>
-        )}
+        <AccountLabel info={accountUsage} style={sensorStyle} />
+        <UsageLabel info={accountUsage} style={sensorStyle} />
       </div>
 
       {/* Right sensors */}

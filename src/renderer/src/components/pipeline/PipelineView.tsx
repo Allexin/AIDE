@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { isRunActive, liveKey, usePipelineStore, type VisitRef } from '../../store/usePipelineStore'
 import { TranscriptView } from '../history/TranscriptView'
 import { blockTitle, walkSteps, type Step } from '../../../../shared/pipelineMachine'
+import { AccountLabel, UsageLabel, useAccountUsage } from '../cli/AccountUsage'
 
 /**
  * Pipeline run view (plan §4.1), shown as a tab of the terminal panel next to
@@ -136,7 +137,51 @@ export default function PipelineView(): React.ReactElement | null {
     </div>
 
     {pending && <EscalationPanel escalation={pending} />}
+    <CliAccounts machine={machine} />
   </div>
+}
+
+/** CLI tool ids the machine runs: agent steps and commit reviewers, falling back to the machine default. */
+function machineClis(machine: PipelineMachine): string[] {
+  const ids = new Set<string>()
+  const fallback = machine.defaults?.cli
+  walkSteps(machine.steps, (step) => {
+    const cli = step.type === 'agent' ? step.cli ?? fallback : step.type === 'commit' && step.review === 'agent' ? step.reviewer?.cli ?? fallback : undefined
+    if (cli) ids.add(cli)
+  })
+  return [...ids]
+}
+
+const LABEL_STYLE: React.CSSProperties = { fontSize: 11, whiteSpace: 'nowrap', userSelect: 'none' }
+
+/**
+ * The current account and limits of every CLI the machine uses, exactly as the
+ * status bar shows them — for the user to plan work. "Current": what AIDE has
+ * loaded now, not necessarily what an earlier step ran with.
+ */
+function CliAccounts({ machine }: { machine: PipelineMachine }): React.ReactElement | null {
+  const ids = machineClis(machine)
+  const [names, setNames] = useState<Record<string, string>>({})
+  useEffect(() => {
+    let alive = true
+    void window.editorApi.getCliTools().then((tools) => { if (alive) setNames(Object.fromEntries(tools.map((t) => [t.id, t.name]))) })
+    return () => { alive = false }
+  }, [])
+  if (ids.length === 0) return null
+  return <div style={{ flexShrink: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 20px', padding: '5px 10px', background: '#252526', borderTop: '1px solid #3d3d3d' }}>
+    <span style={{ ...LABEL_STYLE, color: '#888', textTransform: 'uppercase', letterSpacing: 1 }}>Current accounts and limits</span>
+    {ids.map((id) => <CliAccountRow key={id} toolId={id} name={names[id] ?? id} />)}
+  </div>
+}
+
+function CliAccountRow({ toolId, name }: { toolId: string; name: string }): React.ReactElement {
+  const info = useAccountUsage(toolId)
+  return <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <span style={{ ...LABEL_STYLE, color: '#ccc', fontWeight: 600 }}>{name}</span>
+    <AccountLabel info={info} style={LABEL_STYLE} />
+    <UsageLabel info={info} style={LABEL_STYLE} />
+    {!info.accountLabel && !info.usage && <span style={{ ...LABEL_STYLE, color: '#666' }}>—</span>}
+  </span>
 }
 
 interface FlowProps { state: PipelineRunState; shown: VisitRef | null; onSelect: (ref: VisitRef) => void }
