@@ -52,7 +52,7 @@ const MACHINE: MachineDefinition = {
 }
 
 interface Script {
-  agent: (request: AgentRequest, call: number) => Partial<HeadlessResult> & { structured?: unknown }
+  agent: (request: AgentRequest, call: number) => (Partial<HeadlessResult> & { structured?: unknown }) | 'hang'
   check?: (call: number) => { exitCode: number; output: string } | 'hang'
   status?: () => FileChange[]
 }
@@ -61,6 +61,7 @@ function harness(script: Script, machine: MachineDefinition = MACHINE, params: R
   const requests: AgentRequest[] = []
   const events: Array<{ type: string; data: Record<string, unknown> }> = []
   const commits: string[] = []
+  const commands: string[] = []
   let agentCalls = 0
   let checkCalls = 0
   let sessionCounter = 0
@@ -71,11 +72,17 @@ function harness(script: Script, machine: MachineDefinition = MACHINE, params: R
       const scripted = script.agent(request, call)
       const sessionId = request.resumeSessionId ?? `session-${++sessionCounter}`
       request.onSessionId?.(sessionId)
+      if (scripted === 'hang') {
+        let cancel: () => void = () => {}
+        const result = new Promise<HeadlessResult>((resolve) => { cancel = () => resolve({ ok: false, sessionId, structured: null, finalText: null, costUsd: null, warnings: [], error: { code: 'cancelled', message: 'cancelled' } }) })
+        return { result, cancel: async () => cancel() }
+      }
       const result: HeadlessResult = { ok: true, sessionId, structured: null, finalText: null, costUsd: 0.01, warnings: [], error: null, ...scripted }
       return { result: Promise.resolve(result), cancel: async () => {} }
     },
     runCheck: (options) => {
       const call = checkCalls++
+      commands.push(options.commandLine)
       const scripted = script.check?.(call) ?? { exitCode: 0, output: 'all good' }
       if (scripted === 'hang') {
         let resolveDone: (value: { exitCode: null; signal: null; timedOut: boolean; cancelled: boolean; spawnError: null; stdoutTail: string; stderrTail: string }) => void = () => {}
@@ -98,14 +105,14 @@ function harness(script: Script, machine: MachineDefinition = MACHINE, params: R
   const store = new RunStore(join(root, `runs-${Math.random().toString(36).slice(2)}`))
   const run = PipelineRun.create({ machine, machineDir: root }, params, 'run-1', root, store, deps)
   const labels = (): string[] => requests.map((r) => r.label.replace('claude-code:', ''))
-  return { run, requests, events, commits, store, labels, state: (): RunState => run.state }
+  return { run, requests, events, commits, commands, store, labels, state: (): RunState => run.state }
 }
 
-const done = { structured: { status: 'done', summary: 'implemented', docsChanged: [] } }
-const planWrong = { structured: { status: 'plan_wrong', summary: 'the spec contradicts itself', docsChanged: [] } }
-const accept = { structured: { verdict: 'accept', blocking: [], non_blocking: ['rename foo'], summary: 'ok' } }
-const reject = { structured: { verdict: 'reject', blocking: ['missing null check'], non_blocking: [], summary: 'no' } }
-const prep = { structured: { commitMessage: 'Add feature X', excluded: [] } }
+const done = { structured: { status: 'done', summary: 'implemented', docsChanged: [], pipelineIssues: [] } }
+const planWrong = { structured: { status: 'plan_wrong', summary: 'the spec contradicts itself', docsChanged: [], pipelineIssues: [] } }
+const accept = { structured: { verdict: 'accept', blocking: [], non_blocking: ['rename foo'], summary: 'ok', pipelineIssues: [] } }
+const reject = { structured: { verdict: 'reject', blocking: ['missing null check'], non_blocking: [], summary: 'no', pipelineIssues: [] } }
+const prep = { structured: { commitMessage: 'Add feature X', excluded: [], pipelineIssues: [] } }
 
 /** Accepts every review and prepares a plain commit. */
 function happy(req: AgentRequest): Partial<HeadlessResult> {
@@ -160,6 +167,9 @@ describe('PipelineRun', () => {
     expect(implement.prompt).toContain('Add feature X')
     // The reviewer comes after the checks, but a repeat runs them again — it is still told not to run them.
     expect(review.systemAppend).toContain('AIDE itself runs these checks later')
+    expect(review.systemAppend).not.toContain('implement all of them')
+    expect(implement.systemAppend).toContain('Run one yourself only when your task or a decision explicitly asks for it.')
+    expect(implement.systemAppend).toContain('say so in "pipelineIssues"')
     expect(review.permissions).toBe('read-only')
     expect(review.prompt).toContain('+line')
     expect(commitPrep.systemAppend).toContain('You prepare the commit')
@@ -192,6 +202,98 @@ describe('PipelineRun', () => {
     expect(h.requests[3].prompt).toContain('the check "checks" (`npm test`) failed')
     expect(h.requests[3].prompt).toContain('TypeError at a.ts:3')
     expect(h.events.map((e) => e.type)).toContain('check_failed')
+    expect(h.requests[3].prompt).toMatch(/Full log: .*checks-1\.log/)
+  })
+
+  it('feeds back the failure lines of the whole log, not only its tail', async () => {
+    const log = ['running 120 tests', 'test map::tests::load ... FAILED', ...Array.from({ length: 2000 }, (_, i) => `test ok_${i} ... ok`), 'failures:', '    map::tests::load', 'test result: FAILED. 119 passed; 1 failed'].join('\n')
+    const h = harness({ agent: happy, check: (call) => call === 0 ? { exitCode: 101, output: log } : { exitCode: 0, output: 'ok' } })
+    await h.run.run()
+    const feedback = h.requests[3].prompt
+    expect(feedback).toContain('Exit code 101.')
+    expect(feedback).toContain('Failure lines from the log:\ntest map::tests::load ... FAILED\nfailures:\ntest result: FAILED. 119 passed; 1 failed')
+  })
+
+  it('tells later steps the current results of the pass and marks feedback the pass has answered as superseded', async () => {
+    let reviews = 0
+    const h = harness({ agent: (req) => req.label.endsWith(':review') ? (++reviews === 1 ? accept : accept) : happy(req), check: (call) => call === 0 ? { exitCode: 1, output: 'TypeError' } : { exitCode: 0, output: 'ok' } })
+    await h.run.run()
+    expect(h.state().result).toBe('success')
+    const review = h.requests.find((r) => r.label.endsWith(':review'))!
+    expect(review.systemAppend).toContain('- Results so far in this pass: implement: done, checks passed.')
+    expect(review.prompt).toContain('## Feedback: this is iteration 2 of loop "build"')
+    expect(review.prompt).toContain('Superseded: "checks" has run again in this pass (outcome: passed).')
+    // The implementer of the same pass gets the feedback as current.
+    expect(h.requests[3].prompt).not.toContain('Superseded')
+  })
+
+  it('check commands use params, shell-quoted', async () => {
+    const steps: Step[] = [
+      { type: 'check', id: 'captures', command: 'cargo xtask captures --stage {{params.stageId}} --cases {{params.cases}}' },
+      { type: 'agent', id: 'finish', summary: 'finishes', role: 'r.md', output: 'implementerReport' }
+    ]
+    const machine: MachineDefinition = { ...MACHINE, id: 'templated', params: { stageId: { type: 'string' }, cases: { type: 'string[]' } }, steps }
+    expect(validateMachine(machine, { headlessClis: ['claude-code'], roleExists: () => true }).errors).toEqual([])
+    const h = harness({ agent: () => done }, machine, { stageId: 'S5.5', cases: ['ui/build menu', 'rig'] })
+    await h.run.run()
+    const quoted = process.platform === 'win32' ? '"ui/build menu"' : "'ui/build menu'"
+    expect(h.commands).toEqual([`cargo xtask captures --stage S5.5 --cases ${quoted} rig`])
+    expect(h.store.readOutput('run-1', 'captures', 1)).toMatchObject({ command: h.commands[0] })
+  })
+
+  it('run.iteration in an if is the iteration of the innermost loop around the if', async () => {
+    const steps: Step[] = [{
+      type: 'loop', id: 'outer', maxIterations: 3,
+      steps: [
+        { type: 'agent', id: 'make', summary: 'makes', role: 'r.md', output: 'implementerReport' },
+        { type: 'loop', id: 'ciLoop', maxIterations: 3, steps: [
+          { type: 'if', id: 'notFirst', condition: 'run.iteration != 1', then: [{ type: 'agent', id: 'fix', summary: 'fixes', role: 'r.md', output: 'implementerReport' }] },
+          { type: 'check', id: 'ci', command: 'ci' }
+        ] },
+        { type: 'agent', id: 'judge', summary: 'judges', role: 'r.md', output: 'reviewVerdict', repeatIf: "outputs.judge.verdict != 'accept'" }
+      ]
+    }]
+    const machine: MachineDefinition = { ...MACHINE, id: 'nestedIf', steps }
+    expect(validateMachine(machine, { headlessClis: ['claude-code'], roleExists: () => true }).errors).toEqual([])
+    let judged = 0
+    const h = harness({
+      agent: (req) => req.label.endsWith(':judge') ? (++judged === 1 ? reject : accept) : done,
+      check: (call) => call === 1 ? { exitCode: 1, output: 'fail' } : { exitCode: 0, output: 'ok' }
+    }, machine)
+    await h.run.run()
+    expect(h.state().result).toBe('success')
+    // outer 1: make, ci ok, judge rejects. outer 2: make, ci (first pass: no fix) fails, fix, ci ok, judge.
+    expect(h.state().history.map((v) => v.node)).toEqual(['make', 'ci', 'judge', 'make', 'ci', 'fix', 'ci', 'judge'])
+  })
+
+  it('reloads an edited machine between steps, keeping the position; refuses when the run state no longer fits', async () => {
+    const h = harness({ agent: (req) => {
+      if (req.label.endsWith(':implement')) h.run.pause()
+      return happy(req)
+    } })
+    await h.run.run()
+    expect(h.state()).toMatchObject({ status: 'paused', current: 'checks' })
+    const edited = JSON.parse(JSON.stringify(MACHINE)) as MachineDefinition
+    const build = (edited.steps[1] as { steps: Step[] }).steps[0] as { steps: Array<{ command?: string }> }
+    build.steps[1].command = 'npm test -- --bail'
+    expect(h.run.reload({ machine: edited, machineDir: root })).toEqual([])
+    const broken = { ...MACHINE, steps: [MACHINE.steps[0]] }
+    expect(h.run.reload({ machine: broken, machineDir: root }).join('\n')).toMatch(/"checks" is part of the run's state but is no longer in the machine/)
+    await h.run.run()
+    expect(h.state().result).toBe('success')
+    expect(h.commands).toEqual(['npm test -- --bail'])
+  })
+
+  it('a run stopped while an escalation is open asks for the answer again on resume', async () => {
+    const h = harness({ agent: (req) => req.label.endsWith(':implement') ? planWrong : happy(req) })
+    await h.run.run()
+    const escalation = h.run.pendingEscalation()!
+    await h.run.stop()
+    expect(h.state().status).toBe('stopped')
+    await h.run.run()
+    expect(h.state().status).toBe('waiting')
+    expect(h.labels().filter((l) => l === 'implement')).toHaveLength(1)
+    expect(h.events.filter((e) => e.type === 'escalation').at(-1)!.data.escalationId).toBe(escalation.id)
   })
 
   it('escalates when a loop runs out of iterations; retry grants one more, stop ends the run', async () => {
@@ -207,6 +309,9 @@ describe('PipelineRun', () => {
     await waitFor(() => h.run.isFinal())
     expect(h.state().result).toBe('success')
     expect(h.state().iterations.build).toBe(4)
+    const fourth = h.requests.filter((r) => r.label.endsWith(':implement'))[3]
+    expect(fourth.systemAppend).toContain('loop build (repeats until a pass completes, at most 4 iterations) — now on iteration 4')
+    expect(fourth.systemAppend).toContain('iteration 4 of at most 4')
 
     const stuck = harness({ agent: (req) => req.label.endsWith(':review') ? reject : happy(req) })
     await stuck.run.run()
@@ -258,20 +363,79 @@ describe('PipelineRun', () => {
     expect(stopped.state().result).toBe('failure')
   })
 
-  it('raises an engine escalation on agent failure and retries on answer', async () => {
+  it('raises an engine escalation on agent failure; retry continues the failed session without resending the task', async () => {
     let first = true
     const h = harness({ agent: (req) => {
-      if (req.label.endsWith(':implement') && first) { first = false; return { ok: false, error: { code: 'limit', message: 'usage limit reached' } } }
+      if (req.label.endsWith(':implement') && first) { first = false; return { ok: false, error: { code: 'failed', message: 'stream disconnected' } } }
       return happy(req)
     } })
     await h.run.run()
     const escalation = h.run.pendingEscalation()!
     expect(escalation).toMatchObject({ node: 'implement', kind: 'engine' })
-    expect(escalation.message).toContain('usage limit')
+    expect(escalation.message).toContain('stream disconnected')
     expect(h.state().visits.implement).toBe(0)
-    await h.run.answer(escalation.id, { action: 'retry', text: 'limits reset', by: 'user' })
+    await h.run.answer(escalation.id, { action: 'retry', text: 'transient', by: 'user' })
     await waitFor(() => h.state().status === 'finished')
     expect(h.state().visits.implement).toBe(1)
+    const [failed, retried] = h.requests.filter((r) => r.label.endsWith(':implement'))
+    expect(retried.resumeSessionId).toBe(failed.resumeSessionId ?? 'session-3')
+    expect(retried.prompt).toContain('ended with an error (claude-code failed (failed): stream disconnected)')
+    expect(retried.prompt).toContain('do not redo it')
+    expect(retried.prompt).not.toContain('Add feature X')
+  })
+
+  it('holds the run on a CLI usage limit, keeps the session, and resumes in it', async () => {
+    let first = true
+    const h = harness({ agent: (req) => {
+      if (req.label.endsWith(':implement') && first) { first = false; return { ok: false, error: { code: 'limit', message: "You've hit your usage limit. Try again in 2 hours." } } }
+      return happy(req)
+    } })
+    await h.run.run()
+    expect(h.state().status).toBe('stopped')
+    expect(h.run.pendingEscalation()).toBeNull()
+    const stopped = h.events.find((e) => e.type === 'run_stopped')!.data
+    expect(stopped).toMatchObject({ node: 'implement', reason: 'usage_limit' })
+    const resumeAt = Date.parse(String(stopped.resumeAt))
+    expect(resumeAt - Date.now()).toBeGreaterThan(115 * 60_000)
+    expect(h.state().visits.implement).toBe(0)
+    await h.run.run()
+    expect(h.state().result).toBe('success')
+    expect(h.state().limitResumeAt).toBeNull()
+    const implement = h.requests.filter((r) => r.label.endsWith(':implement'))
+    expect(implement[1].resumeSessionId).toBe('session-3')
+    expect(implement[1].prompt).toContain('was interrupted')
+  })
+
+  it('amending a running agent step restarts it in its session with the new instruction; later steps see it', async () => {
+    let hang = true
+    const h = harness({ agent: (req) => req.label.endsWith(':implement') && hang ? 'hang' : happy(req) })
+    const loop = h.run.run()
+    await waitFor(() => h.state().current === 'implement' && h.requests.length === 3)
+    hang = false
+    expect(await h.run.amend('Buildings can be built in the air.', 'orchestrator')).toBe('restarted')
+    await loop
+    await waitFor(() => h.run.isFinal())
+    expect(h.state().result).toBe('success')
+    expect(h.events.map((e) => e.type)).not.toContain('run_stopped')
+    const [first, second] = h.requests.filter((r) => r.label.endsWith(':implement'))
+    expect(second.resumeSessionId).toBe('session-3')
+    expect(second.prompt).toContain('New instructions from the orchestrator')
+    expect(second.prompt).toContain('- Buildings can be built in the air.')
+    expect(first.prompt).toContain('Add feature X')
+    expect(h.requests.find((r) => r.label.endsWith(':review'))!.systemAppend).toContain('Instruction from the orchestrator (given during "implement"): Buildings can be built in the air.')
+    const report = h.store.readReport('run-1') as { amendments: Array<{ text: string }> }
+    expect(report.amendments.map((a) => a.text)).toEqual(['Buildings can be built in the air.'])
+  })
+
+  it('collects pipeline issues from every visit into the report', async () => {
+    let reviews = 0
+    const h = harness({ agent: (req) => req.label.endsWith(':review')
+      ? (++reviews === 1 ? { structured: { ...reject.structured, pipelineIssues: ['The context says implement while my role says never modify files.'] } } : accept)
+      : happy(req) })
+    await h.run.run()
+    const report = h.store.readReport('run-1') as { pipelineIssues: Array<{ step: string; visit: number; issue: string }> }
+    expect(report.pipelineIssues).toEqual([{ step: 'review', visit: 1, issue: 'The context says implement while my role says never modify files.' }])
+    expect(h.events.find((e) => e.type === 'run_finished')!.data.report).toMatchObject({ pipelineIssues: [{ step: 'review' }] })
   })
 
   it('asks once more for a schema-valid answer before escalating', async () => {
@@ -317,7 +481,7 @@ describe('PipelineRun', () => {
     let preps = 0
     const h = harness({
       agent: (req) => req.label.endsWith(':commitPrep')
-        ? (++preps === 1 ? { structured: { commitMessage: 'msg', excluded: [] } } : { structured: { commitMessage: 'msg', excluded: [{ path: 'debug.log', reason: 'local log' }] } })
+        ? (++preps === 1 ? { structured: { commitMessage: 'msg', excluded: [], pipelineIssues: [] } } : { structured: { commitMessage: 'msg', excluded: [{ path: 'debug.log', reason: 'local log' }], pipelineIssues: [] } })
         : happy(req),
       status: () => parsePorcelain('M  src/a.ts\0?? debug.log\0')
     })
@@ -397,7 +561,7 @@ describe('PipelineRun', () => {
     expect(no.state().history.map((v) => v.node)).toEqual(['quick', 'finish'])
   })
 
-  it('gates: approval goes on; rejection repeats the loop with the answer, or fails the run outside loops', async () => {
+  it('gates: approval goes on; rejection repeats the loop with the answer, or holds the run outside loops', async () => {
     const steps: Step[] = [
       { type: 'loop', id: 'draft', maxIterations: 3, steps: [{ type: 'agent', id: 'write', summary: 'writes', role: 'r.md', output: 'implementerReport' }, { type: 'gate', id: 'approveDraft', question: 'Is the draft good?', to: 'user' }] },
       { type: 'gate', id: 'ship', question: 'Ship it?' }
@@ -411,7 +575,13 @@ describe('PipelineRun', () => {
     await h.run.answer(h.run.pendingEscalation()!.id, { action: 'continue', text: '', by: 'user' })
     await waitFor(() => h.run.pendingEscalation()?.node === 'ship')
     await h.run.answer(h.run.pendingEscalation()!.id, { action: 'reject', text: 'not now', by: 'orchestrator' })
-    expect(h.state().result).toBe('failure')
+    expect(h.state().result).toBeNull()
+    expect(h.state()).toMatchObject({ status: 'stopped', current: 'ship' })
+    expect(h.events.at(-1)!.type).toBe('run_stopped')
+    await h.run.run()
+    expect(h.run.pendingEscalation()?.node).toBe('ship')
+    await h.run.answer(h.run.pendingEscalation()!.id, { action: 'continue', text: 'now', by: 'orchestrator' })
+    expect(h.state().result).toBe('success')
     expect(h.state().history.filter((v) => v.node === 'approveDraft').map((v) => v.outcome)).toEqual(['fail', 'ok'])
   })
 })

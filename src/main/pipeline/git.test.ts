@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { checkCommitCoverage, commitIndex, git, headSha, parsePorcelain, stagedDiff, status, workingDiff } from './git'
+import { checkCommitCoverage, commitIndex, git, headSha, parseNumstatPaths, parsePorcelain, stagedDiff, status, workingDiff } from './git'
 
 describe('parsePorcelain', () => {
   it('parses staged, unstaged, untracked and renamed entries', () => {
@@ -15,6 +15,12 @@ describe('parsePorcelain', () => {
       { path: 'renamed.ts', kind: 'renamed', staged: true, unstaged: false },
       { path: 'gone.ts', kind: 'deleted', staged: false, unstaged: true }
     ])
+  })
+})
+
+describe('parseNumstatPaths', () => {
+  it('reads plain, binary and renamed entries', () => {
+    expect(parseNumstatPaths(['1\t2\ta.ts', '-\t-\timg.png', '3\t0\t', 'old.ts', 'new.ts', ''].join('\0'))).toEqual(['a.ts', 'img.png', 'old.ts', 'new.ts'])
   })
 })
 
@@ -77,5 +83,25 @@ describe('git helpers on a real repository', () => {
     expect(result.files).toEqual(['a.txt'])
     const left = await status(repo)
     expect(left).toEqual([{ path: 'new.txt', kind: 'untracked', staged: false, unstaged: true }])
+  })
+
+  it('leaves out files whose only change is line endings', async () => {
+    await git(repo, ['config', 'core.autocrlf', 'false'])
+    writeFileSync(join(repo, 'a.txt'), 'one\r\ntwo\r\n')
+    expect((await git(repo, ['status', '--porcelain'])).stdout).toContain(' M a.txt')
+    expect(await status(repo)).toEqual([{ path: 'new.txt', kind: 'untracked', staged: false, unstaged: true }])
+    writeFileSync(join(repo, 'a.txt'), 'one\ntwo\n')
+  })
+
+  it('shows a file moved without git mv as a rename, without touching the index', async () => {
+    writeFileSync(join(repo, 'long.txt'), Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n') + '\n')
+    await git(repo, ['add', 'long.txt'])
+    await git(repo, ['commit', '-q', '-m', 'long'])
+    renameSync(join(repo, 'long.txt'), join(repo, 'moved.txt'))
+    const diff = await workingDiff(repo)
+    expect(diff).toContain('rename from long.txt')
+    expect(diff).toContain('rename to moved.txt')
+    expect(diff).toContain('+fresh') // other untracked files are still there
+    expect((await git(repo, ['diff', '--cached', '--name-only'])).stdout).toBe('')
   })
 })

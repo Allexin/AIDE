@@ -5,13 +5,14 @@ import type { ProcessHandle } from '../processRunner'
 import type { CommitResult, FileChange } from '../git'
 import { checkCommitCoverage } from '../git'
 import { clip, type PipelineEventType } from '../events'
-import type { AgentStep, CheckStep, CommitStep, Escalation, EscalationAnswer, LoopFeedback, MachineDefinition, NodeVisit, Outcome, RunState } from './types'
-import { evaluateCondition, stringifyValue, templateRefs, type Scope } from './expressions'
+import type { AgentStep, Amendment, CheckStep, CommitStep, Escalation, EscalationAnswer, LoopFeedback, MachineDefinition, NodeVisit, Outcome, RunState } from './types'
+import { evaluateCondition, renderCommand, stringifyValue, templateRefs, type Scope } from './expressions'
 import { resolveSchema, validateAgainstSchema, BUILTIN_SCHEMAS } from './schema'
 import { DEFAULT_TIMEOUT_MIN, buildPipelineContext, buildSystemAppend, buildTaskPrompt, describeCondition, feedbackSections, invalidOutputPrompt, outputContract, stepSummary, stepSwitchPrompt } from './context'
-import { MachineTree, blockLimit, type DescendContext, type TreeBlock, type TreeLeaf } from './tree'
+import { MachineTree, blockLimit, type DescendContext, type TreeBlock, type TreeLeaf, type TreeNode } from './tree'
 import type { RunStore, StoredMachine } from './runStore'
 import { compactReport } from './reportView'
+import { checkFailureLines, limitResetTime } from './failures'
 
 /**
  * Deterministic executor of one pipeline run (plan §1, §3, §4).
@@ -51,6 +52,8 @@ type NodeResult =
   | { kind: 'done'; outcome: Outcome; output: unknown; sessionId?: string | null; costUsd?: number | null }
   | { kind: 'escalate'; message: string }
   | { kind: 'interrupted' }
+  /** The CLI hit its usage limit: the run holds and resumes later, keeping the session. */
+  | { kind: 'limited'; message: string }
 
 export interface RunReport {
   runId: string
@@ -66,6 +69,9 @@ export interface RunReport {
   commits: CommitResult[]
   summaries: Array<{ node: string; summary: string }>
   nonBlockingFindings: string[]
+  /** Problems with the pipeline itself that agents reported (`pipelineIssues`), every visit. */
+  pipelineIssues: Array<{ step: string; visit: number; issue: string }>
+  amendments: Amendment[]
   escalations: Escalation[]
   costUsd: number
 }
@@ -92,12 +98,15 @@ export function compactEscalation(e: Escalation): Record<string, unknown> {
 }
 
 export class PipelineRun {
-  private readonly machine: MachineDefinition
-  private readonly machineDir: string
-  private readonly tree: MachineTree
+  private machine: MachineDefinition
+  private machineDir: string
+  private tree: MachineTree
   private active: { cancel(): Promise<void> } | null = null
   private loop: Promise<void> | null = null
   private interruptRequested = false
+  /** The current interruption is an amendment: the step restarts at once, without a run_stopped event. */
+  private amending = false
+  private limitTimer: ReturnType<typeof setTimeout> | null = null
   private readonly commits: CommitResult[] = []
 
   constructor(
@@ -113,6 +122,8 @@ export class PipelineRun {
     state.iterations ??= {}
     state.bonus ??= {}
     state.feedback ??= {}
+    state.iterationStart ??= {}
+    state.amendments ??= []
   }
 
   static create(stored: StoredMachine, params: Record<string, unknown>, runId: string, projectPath: string, store: RunStore, deps: EngineDeps): PipelineRun {
@@ -127,6 +138,9 @@ export class PipelineRun {
       iterations: {},
       bonus: {},
       feedback: {},
+      iterationStart: {},
+      amendments: [],
+      limitResumeAt: null,
       outputs: {},
       history: [],
       escalations: [],
@@ -159,6 +173,15 @@ export class PipelineRun {
   async run(): Promise<void> {
     if (this.loop) return this.loop
     if (this.isFinal() || this.state.status === 'waiting') return
+    const pending = this.pendingEscalation()
+    if (pending) {
+      // Stopped while an escalation was open: it still needs its answer.
+      this.setStatus('waiting')
+      this.deps.emit(this.runId, 'escalation', { ...compactEscalation(pending), summary: `still waiting for a decision at ${pending.node}` })
+      return
+    }
+    this.clearLimitTimer()
+    this.state.limitResumeAt = null
     if (this.state.startCommit === null && this.state.history.length === 0) {
       this.state.startCommit = await this.deps.git.headSha(this.state.projectPath).catch(() => null)
     }
@@ -195,6 +218,76 @@ export class PipelineRun {
     this.finish('failure', `abandoned: ${reason}`)
   }
 
+  /**
+   * Add an instruction to the run. A running agent step is interrupted and
+   * resumed in its own session with the instruction; every later step sees it
+   * in its context. Returns what happened.
+   */
+  async amend(text: string, by: Amendment['by']): Promise<'restarted' | 'noted'> {
+    if (this.isFinal()) throw new Error('The run has already ended.')
+    this.state.amendments!.push({ node: this.state.current, text, by, at: new Date().toISOString() })
+    this.save()
+    const step = this.tree.leaf(this.state.current)?.step
+    if ((this.state.status !== 'running' && this.state.status !== 'pausing') || step?.type !== 'agent' || !this.active) return 'noted'
+    const pausing = this.state.status === 'pausing'
+    this.amending = true
+    this.interruptRequested = true
+    try {
+      await this.active.cancel()
+      await this.loop
+    } finally {
+      this.amending = false
+    }
+    void this.run()
+    if (pausing) this.pause()
+    return 'restarted'
+  }
+
+  /**
+   * Switch to an edited machine file between steps (`pipeline_reload`). The run
+   * keeps its position and loop state, so the steps and blocks it has state for
+   * must still exist with the same kind. Returns the problems, empty on success.
+   */
+  reload(stored: StoredMachine): string[] {
+    if (this.state.status === 'running' || this.state.status === 'pausing') return ['The run is executing a step; pause or stop it first (or reload while it waits on an escalation).']
+    if (this.isFinal()) return ['The run has already ended.']
+    const tree = new MachineTree(stored.machine)
+    const problems: string[] = []
+    const kindOf = (t: MachineTree, id: string): string | undefined => t.leaves.get(id)?.step.type ?? t.blocks.get(id)?.kind
+    const ids = new Set([...(this.state.current ? [this.state.current] : []), ...Object.keys(this.state.iterations), ...this.state.escalations.filter((e) => !e.answer).map((e) => e.node)])
+    for (const id of ids) {
+      const before = kindOf(this.tree, id)
+      const after = kindOf(tree, id)
+      if (!after) problems.push(`"${id}" is part of the run's state but is no longer in the machine.`)
+      else if (before && before !== after) problems.push(`"${id}" changed from ${before} to ${after}.`)
+    }
+    if (problems.length) return problems
+    this.machine = stored.machine
+    this.machineDir = stored.machineDir
+    this.tree = tree
+    this.store.writeMachine(this.runId, stored)
+    this.save()
+    return []
+  }
+
+  /** Re-arm the automatic resume after a usage limit (after an AIDE restart). */
+  scheduleLimitResume(): void {
+    this.clearLimitTimer()
+    const at = this.state.limitResumeAt ? Date.parse(this.state.limitResumeAt) : NaN
+    if (Number.isNaN(at) || this.state.status !== 'stopped') return
+    // A minute of slack: limits reset on the minute and clocks differ.
+    this.limitTimer = setTimeout(() => {
+      this.limitTimer = null
+      if (this.state.status === 'stopped' && this.state.limitResumeAt) void this.run()
+    }, Math.max(0, at - Date.now()) + 60_000)
+    this.limitTimer.unref?.()
+  }
+
+  private clearLimitTimer(): void {
+    if (this.limitTimer) clearTimeout(this.limitTimer)
+    this.limitTimer = null
+  }
+
   pendingEscalation(): Escalation | null {
     return this.state.escalations.find((e) => e.answer === null) ?? null
   }
@@ -229,7 +322,14 @@ export class PipelineRun {
         if (!leaf) break
         if (approved) { this.state.current = this.tree.next(leaf, this.descendContext()); break }
         const target = this.repeatTarget(leaf, leaf.step.type === 'gate' ? leaf.step.repeatLoop : undefined)
-        if (!target) { this.finish('failure', `the gate "${node}" was rejected: ${answer.text}`); return null }
+        if (!target) {
+          // Outside a loop there is nothing to repeat: hold the run at the gate. Resume asks again; abandon ends it.
+          this.state.visits[node] = Math.max(0, (this.state.visits[node] ?? 1) - 1)
+          this.state.current = node
+          this.setStatus('stopped')
+          this.deps.emit(this.runId, 'run_stopped', { node, summary: `the gate "${node}" was rejected; the run holds there — pipeline_resume asks it again, abandon ends the run` })
+          return null
+        }
         this.repeat(target, { from: node, reason: `the gate "${node}" was rejected by the ${answer.by}`, details: answer.text })
         break
       }
@@ -303,7 +403,14 @@ export class PipelineRun {
         visit.outcome = 'interrupted'
         this.state.visits[id] = visits - 1 // an interrupted visit does not count
         this.setStatus('stopped')
-        this.deps.emit(this.runId, 'run_stopped', { node: id, visit: visits, summary: `run stopped during ${id}; resume with pipeline_resume` })
+        if (!this.amending) this.deps.emit(this.runId, 'run_stopped', { node: id, visit: visits, summary: `run stopped during ${id}; resume with pipeline_resume` })
+        return
+      }
+      if (result.kind === 'limited') {
+        visit.outcome = 'interrupted'
+        visit.error = result.message
+        this.state.visits[id] = visits - 1
+        this.holdForLimit(id, result.message)
         return
       }
       if (result.kind === 'escalate') {
@@ -319,6 +426,7 @@ export class PipelineRun {
       this.store.writeOutput(this.runId, id, visits, result.output)
       this.deps.emit(this.runId, 'node_finished', { node: id, visit: visits, outcome: result.outcome, summary: `${id} finished: ${result.outcome}` })
       if (step.type === 'check' && result.outcome === 'fail') this.deps.emit(this.runId, 'check_failed', { node: id, visit: visits, summary: `check ${id} failed (visit ${visits})` })
+      if (step.type === 'agent') this.notePipelineIssues(id, visits, result.output)
 
       this.afterLeaf(leaf, result.outcome, result.output)
       if (this.state.status !== 'running' && this.state.status !== 'pausing') return
@@ -349,10 +457,11 @@ export class PipelineRun {
       }
     }
     if (step.type === 'check' && outcome === 'fail') {
-      const tail = (output as { output?: string }).output ?? ''
+      const result = output as CheckOutput
+      const command = result.command ?? step.command
       const target = this.repeatTarget(leaf, step.repeatLoop)
-      if (target) this.repeat(target, { from: id, reason: `the check "${id}" (\`${step.command}\`) failed`, details: tail })
-      else this.raise({ node: id, kind: 'step', to: 'orchestrator', message: `Check "${id}" (\`${step.command}\`) failed outside any loop. Continue ignores the failure; retry runs the check again.\n\n${tail.slice(-2000)}`, source: { step: id, visit: this.state.visits[id] ?? 1 } })
+      if (target) this.repeat(target, { from: id, reason: `the check "${id}" (\`${command}\`) failed`, details: checkFeedback(result) })
+      else this.raise({ node: id, kind: 'step', to: 'orchestrator', message: `Check "${id}" (\`${command}\`) failed outside any loop. Continue ignores the failure; retry runs the check again.\n\n${checkFeedback(result, 2000)}`, source: { step: id, visit: this.state.visits[id] ?? 1 } })
       return
     }
     if (step.type === 'commit' && outcome === 'fail') {
@@ -384,6 +493,7 @@ export class PipelineRun {
       return
     }
     this.state.iterations[block.id] = next
+    this.state.iterationStart![block.id] = this.state.history.length
     this.clearNested(block)
     this.state.current = this.tree.restart(block, this.descendContext())
     this.deps.emit(this.runId, 'loop_repeated', { loop: block.id, iteration: next, from: feedback.from, summary: `${block.id} → ${unit} ${next}: ${clip(feedback.reason, 200)}` })
@@ -395,6 +505,7 @@ export class PipelineRun {
       delete this.state.iterations[nested.id]
       delete this.state.feedback[nested.id]
       delete this.state.bonus[nested.id]
+      delete this.state.iterationStart![nested.id]
     }
   }
 
@@ -402,18 +513,24 @@ export class PipelineRun {
     return {
       enterLoop: (block) => {
         this.state.iterations[block.id] = 1
+        this.state.iterationStart![block.id] = this.state.history.length
         delete this.state.feedback[block.id]
         delete this.state.bonus[block.id]
         this.clearNested(block)
       },
-      evaluate: (condition) => evaluateCondition(condition, this.scope({}))
+      evaluate: (condition, block) => evaluateCondition(condition, this.scope({}, block))
     }
   }
 
-  private scope(run: Record<string, unknown>): Scope {
-    const leaf = this.tree.leaf(this.state.current)
-    const loop = leaf ? this.tree.repeatable(leaf)[0] : undefined
-    return { params: this.params, outputs: this.state.outputs, run: { id: this.runId, iteration: loop ? this.state.iterations[loop.id] ?? 1 : 1, ...run } }
+  /**
+   * Values for conditions and templates. `run.iteration` is the iteration of the
+   * innermost loop around `at` (default: the current step) — while descending
+   * into a block, the current step is still the one that ran before it.
+   */
+  private scope(run: Record<string, unknown>, at?: TreeNode): Scope {
+    const node = at ?? this.tree.leaf(this.state.current)
+    const loop = node ? this.tree.repeatable(node)[0] : undefined
+    return { params: this.params, outputs: this.state.outputs, run: { id: this.runId, iteration: loop ? this.state.iterations[loop.id] ?? 1 : 1, iterations: { ...this.state.iterations }, ...run } }
   }
 
   /** Compute the `run.*` values an agent step actually references. */
@@ -461,10 +578,20 @@ export class PipelineRun {
       const previous = [...this.state.history].reverse().find((h) => h.sessionId === resumeSessionId && h.finishedAt)
       if (previous && previous.node !== id) prompt = stepSwitchPrompt(previous.node, id, stepSummary(node), roleText, context, contract) + '\n\n' + prompt
     }
-    const interrupted = [...this.state.history].reverse().find((h) => h.node === id && h.outcome === 'interrupted' && h.visit === visit.visit)
-    if (interrupted?.sessionId) {
-      resumeSessionId = interrupted.sessionId
-      prompt = `Your previous attempt at this step was interrupted. Continue where you left off.\n\n${prompt}`
+    // An earlier attempt at this same visit (stopped, amended, usage limit, or an
+    // engine failure answered with retry) continues in its own session. The session
+    // already holds the task, so only the continuation is sent: resending the task
+    // made agents redo work they had finished (staging, bookkeeping).
+    const earlier = [...this.state.history].reverse().find((h) => h !== visit && h.node === id && h.visit === visit.visit && (h.outcome === 'interrupted' || h.error))
+    if (earlier?.sessionId) {
+      resumeSessionId = earlier.sessionId
+      const why = earlier.outcome === 'interrupted' ? 'was interrupted' : `ended with an error (${clip(earlier.error ?? '', 300)})`
+      const added = (this.state.amendments ?? []).filter((a) => a.at >= earlier.startedAt).map((a) => `- ${a.text}`)
+      prompt = [
+        `Your previous attempt at this step ${why}. Continue from where you stopped: the work you already did is in the working tree, so check it and do not redo it.`,
+        ...(added.length ? [`New instructions from the ${this.state.amendments!.at(-1)!.by}; they take precedence over the task where they conflict:`, ...added] : []),
+        'Finish the step and give the final answer in the required format.'
+      ].join('\n')
     }
 
     const timeoutMs = (node.timeoutMin ?? this.machine.defaults?.timeoutMin ?? DEFAULT_TIMEOUT_MIN) * 60_000
@@ -493,6 +620,7 @@ export class PipelineRun {
     this.active = handle
     let result = await handle.result
     if (result.error?.code === 'cancelled' || this.interruptRequested) return { kind: 'interrupted' }
+    if (result.error?.code === 'limit') return { kind: 'limited', message: `${cli}: ${result.error.message}` }
     if (!result.ok) return { kind: 'escalate', message: `${cli} failed (${result.error?.code}): ${result.error?.message}` }
 
     let errors = validateAgainstSchema(result.structured, schema)
@@ -501,6 +629,7 @@ export class PipelineRun {
       this.active = handle
       result = await handle.result
       if (result.error?.code === 'cancelled' || this.interruptRequested) return { kind: 'interrupted' }
+      if (result.error?.code === 'limit') return { kind: 'limited', message: `${cli}: ${result.error.message}` }
       if (!result.ok) return { kind: 'escalate', message: `${cli} failed (${result.error?.code}): ${result.error?.message}` }
       errors = validateAgainstSchema(result.structured, schema)
     }
@@ -510,9 +639,15 @@ export class PipelineRun {
 
   private async runCheck(id: string, node: CheckStep, visit: NodeVisit): Promise<NodeResult> {
     let output = ''
+    let commandLine: string
+    try {
+      commandLine = renderCommand(node.command, this.scope({}))
+    } catch (err) {
+      return { kind: 'escalate', message: `Check "${id}": ${err instanceof Error ? err.message : String(err)}` }
+    }
     const timeoutMs = (node.timeoutMin ?? this.machine.defaults?.timeoutMin ?? DEFAULT_TIMEOUT_MIN) * 60_000
     const handle = this.deps.runCheck({
-      commandLine: node.command,
+      commandLine,
       cwd: this.state.projectPath,
       timeoutMs,
       label: `check:${id}`,
@@ -528,7 +663,11 @@ export class PipelineRun {
     if (exit.spawnError) return { kind: 'escalate', message: `Check "${id}" could not start: ${exit.spawnError}` }
     const tail = output.slice(-CHECK_OUTPUT_TAIL)
     const note = exit.timedOut ? `\n(timed out after ${timeoutMs / 60_000} min)` : ''
-    return { kind: 'done', outcome: exit.exitCode === 0 && !exit.timedOut ? 'ok' : 'fail', output: { exitCode: exit.exitCode, output: tail + note } }
+    const passed = exit.exitCode === 0 && !exit.timedOut
+    const result: CheckOutput = { exitCode: exit.exitCode, output: tail + note, log: this.store.checkLogPath(this.runId, id, visit.visit) }
+    if (commandLine !== node.command) result.command = commandLine
+    if (!passed) result.failures = checkFailureLines(this.store.readCheckLog(this.runId, id, visit.visit))
+    return { kind: 'done', outcome: passed ? 'ok' : 'fail', output: result }
   }
 
   private async runCommit(id: string, node: CommitStep, visit: NodeVisit): Promise<NodeResult> {
@@ -570,6 +709,7 @@ export class PipelineRun {
       this.active = handle
       const result = await handle.result
       if (result.error?.code === 'cancelled' || this.interruptRequested) return { kind: 'interrupted' }
+      if (result.error?.code === 'limit') return { kind: 'limited', message: `${cli}: ${result.error.message}` }
       if (!result.ok) return { kind: 'escalate', message: `Commit reviewer failed (${result.error?.code}): ${result.error?.message}` }
       const errors = validateAgainstSchema(result.structured, BUILTIN_SCHEMAS.commitReview)
       if (errors.length) return { kind: 'escalate', message: `Commit review output invalid: ${errors.join('; ')}` }
@@ -584,6 +724,31 @@ export class PipelineRun {
   }
 
   // ── State transitions ─────────────────────────────────────────────────────
+
+  /** A CLI usage limit: hold the run, keep the session, resume by itself when the limit resets (if the message says when). */
+  private holdForLimit(node: string, message: string): void {
+    const resumeAt = limitResetTime(message, new Date())
+    this.state.limitResumeAt = resumeAt?.toISOString() ?? null
+    this.setStatus('stopped')
+    this.deps.emit(this.runId, 'run_stopped', {
+      node,
+      reason: 'usage_limit',
+      resumeAt: this.state.limitResumeAt,
+      message: clip(message, 400),
+      summary: resumeAt
+        ? `${node} hit a CLI usage limit; the run resumes by itself at ${resumeAt.toISOString()} (or earlier with pipeline_resume)`
+        : `${node} hit a CLI usage limit; resume with pipeline_resume once it resets (the session is kept)`
+    })
+    this.scheduleLimitResume()
+  }
+
+  /** Pipeline issues an agent reported, as an event the UI and the event log keep (not sent to the orchestrator's wait). */
+  private notePipelineIssues(node: string, visit: number, output: unknown): void {
+    const issues = (output as { pipelineIssues?: unknown } | null)?.pipelineIssues
+    if (Array.isArray(issues) && issues.some((i) => typeof i === 'string' && i.trim())) {
+      this.deps.emit(this.runId, 'pipeline_issue', { node, visit, issues, summary: `${node} reported ${issues.length} pipeline issue(s)` })
+    }
+  }
 
   private recordVisit(id: string, visit: number, outcome: Outcome | null): void {
     const now = new Date().toISOString()
@@ -605,6 +770,8 @@ export class PipelineRun {
   }
 
   private finish(result: 'success' | 'failure', reason: string | null): void {
+    this.clearLimitTimer()
+    this.state.limitResumeAt = null
     this.state.result = result
     this.state.finishedAt = new Date().toISOString()
     if (result === 'success') this.state.current = null
@@ -636,6 +803,18 @@ export class PipelineRun {
       if (o && typeof o.summary === 'string' && this.tree.leaf(node)?.step.type === 'agent') summaries.push({ node, summary: o.summary })
       if (o && Array.isArray(o.non_blocking)) for (const f of o.non_blocking) if (typeof f === 'string') nonBlocking.push(f)
     }
+    // Pipeline issues from every visit, not only the last one of each step.
+    const pipelineIssues: RunReport['pipelineIssues'] = []
+    const seen = new Set<string>()
+    for (const h of this.state.history) {
+      if (!h.finishedAt || this.tree.leaf(h.node)?.step.type !== 'agent') continue
+      const o = this.store.readOutput(this.runId, h.node, h.visit) as { pipelineIssues?: unknown } | undefined
+      for (const issue of Array.isArray(o?.pipelineIssues) ? o.pipelineIssues : []) {
+        if (typeof issue !== 'string' || !issue.trim() || seen.has(issue.trim())) continue
+        seen.add(issue.trim())
+        pipelineIssues.push({ step: h.node, visit: h.visit, issue: issue.trim() })
+      }
+    }
     return {
       runId: this.runId,
       machine: { id: this.machine.id, name: this.machine.name },
@@ -653,6 +832,8 @@ export class PipelineRun {
       }),
       summaries,
       nonBlockingFindings: nonBlocking,
+      pipelineIssues,
+      amendments: this.state.amendments ?? [],
       escalations: this.state.escalations,
       costUsd: this.state.history.reduce((sum, h) => sum + (h.costUsd ?? 0), 0)
     }
@@ -672,6 +853,7 @@ export class PipelineRun {
       loops: this.state.iterations,
       visits: this.state.visits,
       pendingEscalation: pending ? compactEscalation(pending) : null,
+      ...(this.state.limitResumeAt ? { limitResumeAt: this.state.limitResumeAt } : {}),
       result: this.state.result
     }
   }
@@ -686,4 +868,26 @@ export class PipelineRun {
     this.store.saveState(this.state)
     this.deps.onStateChange?.(this.state)
   }
+}
+
+/** Output of a check visit. */
+interface CheckOutput {
+  exitCode: number | null
+  /** Tail of the output. */
+  output: string
+  /** The full log on disk. */
+  log: string
+  /** The command as run, when it had `{{refs}}`. */
+  command?: string
+  /** Lines that look like failures (failing tests, panics, compiler errors), from the whole log. */
+  failures?: string[]
+}
+
+/** What a failed check feeds back: the failure lines from the whole log, the log path, the tail. */
+function checkFeedback(result: CheckOutput, maxTail = CHECK_OUTPUT_TAIL): string {
+  const parts = [`Exit code ${result.exitCode ?? 'none'}. Full log: ${result.log}`]
+  if (result.failures?.length) parts.push(`Failure lines from the log:\n${result.failures.join('\n')}`)
+  const tail = result.output.trim()
+  parts.push(tail ? `Last output:\n${tail.slice(-maxTail)}` : 'The command printed nothing.')
+  return parts.join('\n\n')
 }

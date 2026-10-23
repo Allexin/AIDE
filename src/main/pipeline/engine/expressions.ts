@@ -66,6 +66,30 @@ export function renderTemplate(text: string, scope: Scope): string {
   return text.replace(/\{\{\s*([A-Za-z_][\w.]*)\s*\}\}/g, (_, ref: string) => stringifyValue(resolveRef(ref, scope)))
 }
 
+/**
+ * Quote one value for a shell command line: `cmd.exe` on Windows, `sh` elsewhere.
+ * cmd.exe has no escape for `"` and expands `%` even inside quotes, so values
+ * with those characters (or line breaks) are refused rather than mangled.
+ */
+export function shellQuote(value: string, platform: NodeJS.Platform = process.platform): string {
+  if (/^[\w./\\:,+=@-]+$/.test(value)) return value
+  if (platform === 'win32') {
+    if (/["%\r\n]/.test(value)) throw new Error(`the value ${JSON.stringify(value)} cannot be passed to cmd.exe safely (it contains ", % or a line break)`)
+    return `"${value}"`
+  }
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+/** A check command with `{{ref}}` replaced by shell-quoted values; a list becomes several arguments. */
+export function renderCommand(command: string, scope: Scope, platform: NodeJS.Platform = process.platform): string {
+  return command.replace(/\{\{\s*([A-Za-z_][\w.]*)\s*\}\}/g, (_, ref: string) => {
+    const value = resolveRef(ref, scope)
+    if (value === undefined || value === null) return '""'
+    const items = Array.isArray(value) ? value : [value]
+    return items.map((item) => shellQuote(typeof item === 'string' ? item : JSON.stringify(item), platform)).join(' ')
+  })
+}
+
 /** References used by a template, for validation. */
 export function templateRefs(text: string): string[] {
   return Array.from(text.matchAll(/\{\{\s*([A-Za-z_][\w.]*)\s*\}\}/g), (match) => match[1])

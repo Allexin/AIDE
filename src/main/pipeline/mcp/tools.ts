@@ -42,7 +42,7 @@ function eventDeliveryText(launcherPath: string): string {
     '1. Stay in one turn and block: pass `wait` to pipeline_start / pipeline_answer / pipeline_resume (they act, then return the next event), or call pipeline_wait. The event comes back as the call result — no output files, no extra turns. When the user types in your terminal, the wait returns early with type "user_input", so their message reaches you right away; handle it, then wait again.',
     `2. If your client cannot block on a tool call for long: a background command or monitor — "${launcherPath}" events --run <runId> --since <lastEventId> (one JSON line per event that needs you) or "${launcherPath}" wait --run <runId> --since <lastEventId> (prints the next one and exits). Each wake-up costs extra calls.`,
     '3. Last resort: poll pipeline_status.',
-    'Events that need you: escalation (a decision; answer with pipeline_answer), run_paused / run_stopped (the run changed hands, possibly by the user or an AIDE restart; continue with pipeline_resume), run_finished / run_failed (the event carries the compact report). Step progress is not sent.',
+    'Events that need you: escalation (a decision; answer with pipeline_answer), run_paused / run_stopped (the run changed hands, possibly by the user or an AIDE restart; continue with pipeline_resume — reason "usage_limit" means a CLI hit its usage limit: the run resumes by itself at resumeAt when the message said when, keeping the step\'s session), run_finished / run_failed (the event carries the compact report). Step progress is not sent.',
     'Pass the last event id you have seen as `since`; ids continue across AIDE restarts, so nothing is lost.'
   ].join('\n')
 }
@@ -202,7 +202,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     },
     {
       name: 'pipeline_answer',
-      description: 'Answer a pending escalation. action: continue (go on after the step; approve a gate; leave an exhausted loop as if it passed), reject (reject a gate: repeats its loop, or fails the run outside loops), retry (run the step again; for an exhausted loop: one more iteration), stop (end the run).',
+      description: 'Answer a pending escalation. action: continue (go on after the step; approve a gate; leave an exhausted loop as if it passed), reject (reject a gate: repeats its loop; outside loops the run holds at the gate — pipeline_resume asks again), retry (run the step again — after an engine failure it continues the failed session; for an exhausted loop: one more iteration), stop (end the run for good; it cannot be resumed). To hold the run without deciding, do not answer: a run waiting on an escalation does nothing and survives AIDE restarts. Your text is shown to every later agent of the run.',
       inputSchema: OBJECT({ escalationId: { type: 'string' }, action: { type: 'string', enum: ['continue', 'retry', 'reject', 'stop'] }, text: { type: 'string', description: 'Your answer; shown to the later agents of the run.' }, runId: RUN_ID, wait: WAIT_ARG }, ['escalationId', 'action']),
       handler: async (args, { projectPath, tabId }) => {
         try {
@@ -219,15 +219,44 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     },
     {
       name: 'pipeline_stop',
-      description: 'pause: finish the current step, then hold. stop: interrupt the current step now (resumable). abandon: end a stopped/paused run for good.',
+      description: 'pause: finish the current step, then hold. stop: interrupt the current step now (resumable; the step continues its session on resume). abandon: end a stopped/paused/waiting run for good; the result lists the uncommitted files left in the working tree.',
       inputSchema: OBJECT({ mode: { type: 'string', enum: ['pause', 'stop', 'abandon'] }, reason: { type: 'string' }, runId: RUN_ID }, ['mode']),
       handler: async (args, { projectPath }) => {
         const runId = typeof args.runId === 'string' ? args.runId : undefined
         try {
           if (args.mode === 'pause') manager().pause(projectPath, runId)
           else if (args.mode === 'stop') await manager().stop(projectPath, runId)
-          else manager().abandon(projectPath, String(args.reason ?? 'abandoned by the orchestrator'), runId)
+          else {
+            const left = await manager().abandon(projectPath, String(args.reason ?? 'abandoned by the orchestrator'), runId)
+            return ok(left.length ? `Done: abandon. Uncommitted changes left in the working tree (${left.length}): ${clip(left.join(', '), 2000)}` : 'Done: abandon. The working tree is clean.')
+          }
           return ok(`Done: ${String(args.mode)}.`)
+        } catch (err) {
+          return fail(err instanceof Error ? err.message : String(err))
+        }
+      }
+    },
+    {
+      name: 'pipeline_amend',
+      description: 'Add an instruction to the active run — a new requirement or a ruling while a step works. A running agent step is interrupted and continues at once in its own session with the instruction (its work so far is kept); every later step of the run sees it in its context. When no agent step is running, the instruction is only recorded for the later steps. Cheaper than stop, abandon and restart.',
+      inputSchema: OBJECT({ text: { type: 'string', description: 'The instruction, written for the step agents.' }, runId: RUN_ID }, ['text']),
+      handler: async (args, { projectPath }) => {
+        try {
+          const outcome = await manager().amend(projectPath, String(args.text ?? ''), 'orchestrator', typeof args.runId === 'string' ? args.runId : undefined)
+          return ok(outcome === 'restarted' ? 'Instruction added; the running step continues with it in its session.' : 'Instruction recorded; the later steps of the run will see it.')
+        } catch (err) {
+          return fail(err instanceof Error ? err.message : String(err))
+        }
+      }
+    },
+    {
+      name: 'pipeline_reload',
+      description: 'Make the active run use its edited machine file (a timeout, a task text, a model) for the steps still to come. The run must be paused, stopped or waiting on an escalation; the steps and loops it is in must still exist. Role files need no reload: every visit reads them afresh.',
+      inputSchema: OBJECT({ runId: RUN_ID }),
+      handler: (args, { projectPath }) => {
+        try {
+          const problems = manager().reload(projectPath, typeof args.runId === 'string' ? args.runId : undefined)
+          return problems.length ? fail(`Not reloaded:\n- ${problems.join('\n- ')}`) : ok('Reloaded; the coming steps use the edited machine.')
         } catch (err) {
           return fail(err instanceof Error ? err.message : String(err))
         }
@@ -252,7 +281,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     },
     {
       name: 'pipeline_report',
-      description: 'Report of a run: result, commits, visits per step, loop iterations, agent summaries, non-blocking findings, decisions taken, cost. detail: true adds every visit with its outcome, duration and error, and the full escalations.',
+      description: 'Report of a run: result, commits, visits per step, loop iterations, agent summaries, non-blocking findings (first 20), pipeline issues the agents reported, instructions added, decisions taken, cost. detail: true returns the full report: every finding and visit with its outcome, duration and error, and the full escalations.',
       inputSchema: OBJECT({ runId: { type: 'string' }, detail: { type: 'boolean' } }, ['runId']),
       handler: (args, { projectPath }) => {
         const report = manager().report(projectPath, String(args.runId))

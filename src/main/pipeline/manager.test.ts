@@ -61,9 +61,9 @@ function environment(agent: (label: string) => Partial<HeadlessResult>): Manager
 }
 
 const happy = (label: string): Partial<HeadlessResult> => {
-  if (label.endsWith(':review')) return { structured: { verdict: 'accept', blocking: [], non_blocking: ['nit'], summary: 'fine' } }
-  if (label.endsWith(':commitPrep')) return { structured: { commitMessage: 'Add X', excluded: [] } }
-  return { structured: { status: 'done', summary: 'did X', docsChanged: [] } }
+  if (label.endsWith(':review')) return { structured: { verdict: 'accept', blocking: [], non_blocking: ['nit'], summary: 'fine', pipelineIssues: [] } }
+  if (label.endsWith(':commitPrep')) return { structured: { commitMessage: 'Add X', excluded: [], pipelineIssues: [] } }
+  return { structured: { status: 'done', summary: 'did X', docsChanged: [], pipelineIssues: [] } }
 }
 
 /** Calls a tool; `data` is the JSON on the last line of the text result, when there is one. */
@@ -142,7 +142,7 @@ describe('PipelineManager through the MCP tools', () => {
   it('refuses a second active run and answers escalations', async () => {
     const machine = guideExample()
     const dir = project('p2', machine)
-    const manager = new PipelineManager(environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [] } } : happy(label)))
+    const manager = new PipelineManager(environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [], pipelineIssues: [] } } : happy(label)))
     const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', docPath: 'd', manager })))
     const started = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] } })
     const runId = /Run (\S+) started/.exec(started.text)![1]
@@ -157,6 +157,19 @@ describe('PipelineManager through the MCP tools', () => {
     const answered = await call(server, dir, 'pipeline_answer', { escalationId, action: 'stop', text: 'agreed, drop it' })
     expect(answered.isError).toBeUndefined()
     await until(() => manager.activeRun(dir)?.isFinal() === true)
+    expect(manager.activeRun(dir)?.state.result).toBe('failure')
+  })
+
+  it('records an instruction with pipeline_amend; abandon lists what the run left uncommitted', async () => {
+    const dir = project('p2b', guideExample())
+    const manager = new PipelineManager(environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [], pipelineIssues: [] } } : happy(label)))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', docPath: 'd', manager })))
+    await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] }, wait: 5 })
+    const amended = await call(server, dir, 'pipeline_amend', { text: 'Keep the old save format.' })
+    expect(amended.text).toBe('Instruction recorded; the later steps of the run will see it.')
+    expect(manager.activeRun(dir)?.state.amendments).toMatchObject([{ node: 'implement', text: 'Keep the old save format.', by: 'orchestrator' }])
+    const abandoned = await call(server, dir, 'pipeline_stop', { mode: 'abandon', reason: 'test' })
+    expect(abandoned.text).toMatch(/^Done: abandon\./)
     expect(manager.activeRun(dir)?.state.result).toBe('failure')
   })
 
@@ -189,7 +202,7 @@ describe('PipelineManager through the MCP tools', () => {
 
   it('acts and waits in one call: start and answer return the next event', async () => {
     const dir = project('p4', guideExample())
-    const manager = new PipelineManager(environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [] } } : happy(label)))
+    const manager = new PipelineManager(environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [], pipelineIssues: [] } } : happy(label)))
     const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', docPath: 'd', manager })))
     const started = await callWith(server, dir, 'tab-1', 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] }, wait: 5 })
     const escalation = JSON.parse(started.split('\n').pop()!) as { type: string; data: { escalationId: string; actions: string[] } }
@@ -212,7 +225,7 @@ describe('PipelineManager through the MCP tools', () => {
 
   it('after an AIDE restart, a run waiting on an escalation is re-announced with continuing event ids', async () => {
     const dir = project('p6', guideExample())
-    const env = environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [] } } : happy(label))
+    const env = environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [], pipelineIssues: [] } } : happy(label))
     const first = new PipelineManager(env)
     const { runId } = await first.start(dir, 'code-feature', { taskSpec: 'X', acceptance: [] })
     await until(() => first.activeRun(dir)?.state.status === 'waiting')

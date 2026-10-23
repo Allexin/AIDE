@@ -13,6 +13,8 @@ export type PipelineEventType =
   | 'loop_repeated'
   | 'escalation'
   | 'commit_done'
+  | 'pipeline_issue'
+  | 'amended'
   | 'run_paused'
   | 'run_stopped'
   | 'run_finished'

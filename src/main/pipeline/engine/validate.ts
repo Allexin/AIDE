@@ -114,6 +114,11 @@ export function validateMachine(machine: MachineDefinition, env: ValidationEnvir
         break
       case 'check':
         if (typeof step.command !== 'string' || !step.command.trim()) err(`${label}: "command" is required.`)
+        else for (const ref of templateRefs(step.command)) {
+          // run.* values (diffs, file lists) are not command arguments.
+          if (!/^(params|outputs)\./.test(ref)) err(`${label} command: "{{${ref}}}" — commands can only use params.* and outputs.* values.`)
+          else validateRef(ref, machine, tree, node, `${label} command`, err, warnings)
+        }
         checkRepeat(undefined, step.repeatLoop)
         break
       case 'gate':
@@ -190,7 +195,7 @@ function validateAgent(step: AgentStep, tree: MachineTree, node: TreeNode, machi
   for (const ref of templateRefs(step.task ?? '')) validateRef(ref, machine, tree, node, `${label} task`, err, warnings)
 }
 
-const RUN_REFS = new Set(['diff', 'stagedDiff', 'changedFiles', 'iteration', 'id'])
+const RUN_REFS = new Set(['diff', 'stagedDiff', 'changedFiles', 'iteration', 'iterations', 'id'])
 
 function validateRef(ref: string, machine: MachineDefinition, tree: MachineTree, from: TreeNode, where: string, err: (m: string) => void, warnings: string[]): void {
   const [root, first, second] = String(ref).split('.')
@@ -209,6 +214,10 @@ function validateRef(ref: string, machine: MachineDefinition, tree: MachineTree,
     }
   } else if (root === 'run') {
     if (!first || !RUN_REFS.has(first)) err(`${where}: unknown run value "${ref}". Known: ${[...RUN_REFS].map((r) => `run.${r}`).join(', ')}.`)
+    else if (first === 'iterations') {
+      const block = second ? tree.blocks.get(second) : undefined
+      if (!block || (block.kind !== 'loop' && block.kind !== 'commit')) err(`${where}: "${ref}" — use run.iterations.<loop id> with the id of a loop or commit step.`)
+    }
   } else err(`${where}: "${ref}" must start with params., outputs. or run.`)
 }
 

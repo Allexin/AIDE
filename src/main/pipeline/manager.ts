@@ -164,7 +164,10 @@ export class PipelineManager extends EventEmitter {
       // Re-announce what needs the orchestrator: a waiter from before the restart lost its call.
       const pending = run.pendingEscalation()
       if (pending) deps.emit(runId, 'escalation', { ...compactEscalation(pending), summary: `AIDE restarted; still waiting for a decision at ${pending.node}` })
-      else if (state.status === 'paused' || state.status === 'stopped') {
+      else if (state.status === 'stopped' && state.limitResumeAt) {
+        run.scheduleLimitResume()
+        deps.emit(runId, 'run_stopped', { next: state.current, reason: 'usage_limit', resumeAt: state.limitResumeAt, summary: `AIDE restarted; the run waits for a CLI usage limit and resumes by itself at ${state.limitResumeAt} (or pipeline_resume)` })
+      } else if (state.status === 'paused' || state.status === 'stopped') {
         deps.emit(runId, state.status === 'paused' ? 'run_paused' : 'run_stopped', {
           next: state.current,
           summary: `AIDE restarted; the run is ${state.status}${wasExecuting ? ` (interrupted during ${state.current ?? 'a step'})` : ''} — continue with pipeline_resume`
@@ -206,10 +209,32 @@ export class PipelineManager extends EventEmitter {
     void run.run()
   }
 
-  abandon(projectPath: string, reason: string, runId?: string): void {
+  /** End a run for good. Returns the uncommitted changes left in the working tree (the run's partial work, and anything else uncommitted). */
+  async abandon(projectPath: string, reason: string, runId?: string): Promise<string[]> {
     const run = this.require(projectPath, runId)
     if (run.state.status === 'running' || run.state.status === 'pausing') throw new Error('Stop the run before abandoning it.')
     run.abandon(reason)
+    const changes = await this.env.deps(projectPath).git.status(projectPath).catch(() => [])
+    return changes.map((c) => `${c.path} (${c.kind})`)
+  }
+
+  /**
+   * Re-read the active run's machine file (`pipeline_reload`): later steps use the
+   * edited definition. Role files need no reload — they are read at every visit.
+   */
+  reload(projectPath: string, runId?: string): string[] {
+    const run = this.require(projectPath, runId)
+    const entry = this.machineEntry(projectPath, run.definition.id)
+    if (!entry) return [`The machine "${run.definition.id}" is no longer in the library.`]
+    const validation = this.validate(entry)
+    if (validation.errors.length) return validation.errors.map((e) => `Invalid: ${e}`)
+    return run.reload({ machine: entry.machine, machineDir: entry.machineDir })
+  }
+
+  /** Add an instruction to the active run (`pipeline_amend`). */
+  async amend(projectPath: string, text: string, by: 'user' | 'orchestrator', runId?: string): Promise<'restarted' | 'noted'> {
+    if (!text.trim()) throw new Error('The instruction is empty.')
+    return this.require(projectPath, runId).amend(text.trim(), by)
   }
 
   async answer(projectPath: string, escalationId: string, answer: Omit<EscalationAnswer, 'at'>, runId?: string): Promise<void> {

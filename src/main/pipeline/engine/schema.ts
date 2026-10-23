@@ -6,32 +6,41 @@ import type { JsonSchema } from './types'
  * which Claude Code accepts as well.
  */
 
+/** Problems with the pipeline itself (instructions, context, tools), collected in the run report. */
+const PIPELINE_ISSUES: JsonSchema = {
+  type: 'array',
+  items: { type: 'string' },
+  description: 'Problems with the pipeline itself — contradictory instructions, wrong context, a missing tool or input — one line each. Empty when there are none. Not for findings about the code.'
+}
+
 export const BUILTIN_SCHEMAS: Record<string, JsonSchema> = {
   implementerReport: {
     type: 'object',
     additionalProperties: false,
-    required: ['status', 'summary', 'docsChanged'],
+    required: ['status', 'summary', 'docsChanged', 'pipelineIssues'],
     properties: {
       status: { type: 'string', enum: ['done', 'blocked', 'plan_wrong'], description: 'done: the task is implemented completely. blocked: an external obstacle stops you and you name it (missing information, a broken environment, a dependency that does not exist) — the size of the task or the time it takes is not an obstacle. plan_wrong: the task as specified contradicts itself or should not be done this way.' },
       summary: { type: 'string', description: 'What was done; for blocked, the obstacle; for plan_wrong, the contradiction.' },
-      docsChanged: { type: 'array', items: { type: 'string' }, description: 'Documentation files changed.' }
+      docsChanged: { type: 'array', items: { type: 'string' }, description: 'Documentation files changed.' },
+      pipelineIssues: PIPELINE_ISSUES
     }
   },
   reviewVerdict: {
     type: 'object',
     additionalProperties: false,
-    required: ['verdict', 'blocking', 'non_blocking', 'summary'],
+    required: ['verdict', 'blocking', 'non_blocking', 'summary', 'pipelineIssues'],
     properties: {
       verdict: { type: 'string', enum: ['accept', 'reject'] },
       blocking: { type: 'array', items: { type: 'string' }, description: 'Findings that must be fixed before acceptance. Empty when accepting.' },
       non_blocking: { type: 'array', items: { type: 'string' }, description: 'Optional improvements; they do not block acceptance.' },
-      summary: { type: 'string' }
+      summary: { type: 'string' },
+      pipelineIssues: PIPELINE_ISSUES
     }
   },
   commitPrep: {
     type: 'object',
     additionalProperties: false,
-    required: ['commitMessage', 'excluded'],
+    required: ['commitMessage', 'excluded', 'pipelineIssues'],
     properties: {
       commitMessage: { type: 'string', description: 'Full commit message: subject line, blank line, body.' },
       excluded: {
@@ -43,7 +52,8 @@ export const BUILTIN_SCHEMAS: Record<string, JsonSchema> = {
           required: ['path', 'reason'],
           properties: { path: { type: 'string' }, reason: { type: 'string' } }
         }
-      }
+      },
+      pipelineIssues: PIPELINE_ISSUES
     }
   },
   commitReview: {

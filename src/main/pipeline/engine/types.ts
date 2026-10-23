@@ -47,9 +47,16 @@ export interface Escalation {
 export interface EscalationAnswer {
   /**
    * continue: go on after the step (gate: approve; limit: leave the loop as if it passed);
-   * retry: run the step again (limit: one more iteration); reject: reject a gate; stop: end the run.
-   */
+   * retry: run the step again (limit: one more iteration); reject: reject a gate; stop: end the run.   */
   action: 'continue' | 'retry' | 'reject' | 'stop'
+  text: string
+  by: 'user' | 'orchestrator'
+  at: string
+}
+
+export interface Amendment {
+  /** The step that was running (or next) when the instruction was given. */
+  node: string | null
   text: string
   by: 'user' | 'orchestrator'
   at: string
@@ -79,6 +86,12 @@ export interface RunState {
   bonus: Record<string, number>
   /** Why each loop is on its current iteration (shown to the agents inside it). */
   feedback: Record<string, LoopFeedback>
+  /** `history.length` when each loop's current iteration started (what ran in this iteration). */
+  iterationStart?: Record<string, number>
+  /** Instructions added while the run was going (`pipeline_amend`), shown to every later step. */
+  amendments?: Amendment[]
+  /** Set while the run waits for a CLI usage limit to reset; the run resumes by itself then. */
+  limitResumeAt?: string | null
   outputs: Record<string, unknown>
   history: NodeVisit[]
   escalations: Escalation[]

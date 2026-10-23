@@ -40,6 +40,11 @@ export class RunStore {
     this.saveState(state)
   }
 
+  /** Replace the machine snapshot (`pipeline_reload`). */
+  writeMachine(runId: string, stored: StoredMachine): void {
+    writeFileSync(join(this.dir(runId), 'machine.json'), JSON.stringify(stored, null, 2), 'utf8')
+  }
+
   saveState(state: RunState): void {
     const path = join(this.dir(state.runId), 'state.json')
     const temp = `${path}.tmp`
@@ -96,8 +101,12 @@ export class RunStore {
     appendFileSync(join(this.dir(runId), 'checks', `${node}-${visit}.log`), text, 'utf8')
   }
 
+  checkLogPath(runId: string, node: string, visit: number): string {
+    return join(this.dir(runId), 'checks', `${node}-${visit}.log`)
+  }
+
   readCheckLog(runId: string, node: string, visit: number): string {
-    const path = join(this.dir(runId), 'checks', `${node}-${visit}.log`)
+    const path = this.checkLogPath(runId, node, visit)
     return existsSync(path) ? readFileSync(path, 'utf8') : ''
   }
 

@@ -54,8 +54,8 @@ export function blockName(block: TreeBlock): string {
 export interface DescendContext {
   /** A loop or commit block is entered from outside (its first iteration starts). */
   enterLoop(block: TreeBlock): void
-  /** Evaluate an `if` condition. */
-  evaluate(condition: string): boolean
+  /** Evaluate the condition of an `if` block (`run.iteration` is that block's innermost loop). */
+  evaluate(condition: string, block: TreeBlock): boolean
 }
 
 export class MachineTree {
@@ -172,7 +172,7 @@ export class MachineTree {
       if (node.kind === 'loop' || node.kind === 'commit') ctx.enterLoop(node)
       if (node.kind === 'if') {
         const step = node.step as Extract<Step, { type: 'if' }>
-        return this.descend(node.lists[ctx.evaluate(step.condition) ? 0 : 1] ?? [], 0, node, ctx)
+        return this.descend(node.lists[ctx.evaluate(step.condition, node) ? 0 : 1] ?? [], 0, node, ctx)
       }
       return this.descend(node.lists[0] ?? [], 0, node, ctx)
     }

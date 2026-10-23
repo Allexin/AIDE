@@ -35,7 +35,7 @@ names the step's output: `outputs.<id>`.
 | Step | What AIDE does |
 |---|---|
 | `agent` | Runs a headless CLI with the role, the pipeline context, the inputs and an output schema; the JSON answer becomes `outputs.<id>` (agent failures stop the run for a decision) |
-| `check` | Runs `command` in the project root; exit code 0 passes. Output in `outputs.<id>.output` |
+| `check` | Runs `command` in the project root; exit code 0 passes. Output in `outputs.<id>.output`. The command may use `{{params.x}}` and `{{outputs.step.field}}` (§2, Check commands) |
 | `gate` | Asks the user or the orchestrator to approve |
 | `repeat` | Starts an enclosing loop over (like `continue`); usually inside an `if` |
 | `commit` | Block: its `prep` agent stages the change and writes the message, AIDE reviews the prepared commit and commits it |
@@ -75,7 +75,22 @@ one, wrap both phases in an outer loop (see §6).
 `repeatIf`, `escalateIf` and `if.condition` are `<ref> == <literal>` or
 `<ref> != <literal>`: `"outputs.review.verdict != 'accept'"`,
 `"params.withReview == true"`. Refs: `params.<name>`,
-`outputs.<step>.<field>`, `run.iteration` (iteration of the innermost loop).
+`outputs.<step>.<field>`, `run.iteration` (iteration of the innermost loop
+around the condition — for an `if`, the loop that contains the `if`),
+`run.iterations.<loop id>` (the iteration of a named loop).
+
+### Check commands
+
+A check command can take values of the run: `"cargo xtask captures --stage
+{{params.stageId}}"`. Only `params.*` and `outputs.*` refs are allowed. AIDE
+quotes each value for the shell (`cmd.exe` on Windows, `sh` elsewhere); a list
+param becomes several arguments. On Windows a value containing `"`, `%` or a
+line break is refused (cmd.exe cannot pass it safely) and the step stops for a
+decision.
+
+A failed check feeds back the exit code, the path of its full log, the lines of
+the whole log that look like failures (failing tests, panics, compiler errors)
+and the tail of the output.
 
 ### Decisions
 
@@ -84,7 +99,12 @@ one, wrap both phases in an outer loop (see §6).
   `retry` runs the step again, `stop` ends the run. `escalateMessage` and
   `escalateTo` (`orchestrator` by default, or `user`) shape the request.
 - A `check` that fails **outside** any loop stops the run for a decision too.
-- Answers with text are shown to every later agent of the run.
+- A `gate` rejected **outside** any loop holds the run at the gate (nothing to
+  repeat); resuming asks again.
+- Answers with text are shown to every later agent of the run, and so are
+  instructions the orchestrator adds while the run goes (`pipeline_amend`).
+- A CLI usage limit is not a failure: the run holds, keeps the step's session,
+  and resumes by itself when the limit resets (if the CLI says when).
 
 ## 3. What each agent receives
 
@@ -94,19 +114,29 @@ AIDE composes the prompt; you only write the role file and the step fields.
   how it reports. Keep it about the role, not about the flow.
 - **Pipeline context** — generated: the whole step tree with "you are here", the
   loops the agent is in and their iteration, what later steps do, and what
-  happened before. Agents therefore know not to run checks that a check step
-  runs, and not to stage or commit before the commit step. This is why every
-  agent step needs a good one-line `summary`.
+  happened before — including the latest results of the current loop pass, so
+  feedback from an earlier pass is not mistaken for the current state. Agents
+  therefore know they need not run checks that a check step runs (they may when
+  their task asks for it), and not to stage or commit before the commit step.
+  This is why every agent step needs a good one-line `summary`. Steps with the
+  `implementerReport` output are also told to finish the whole task in the visit;
+  reviewers are not, whatever their permissions.
 - **Task and inputs**: `task` (may use `{{params.x}}`, `{{outputs.step.field}}`)
   and `inputs` — references rendered as sections: `params.x`,
   `outputs.<step>.<field>`, `run.diff` (working tree vs HEAD including
   untracked files), `run.stagedDiff`, `run.changedFiles`.
 - **Feedback** of the loops it is in, from the second iteration on (§2).
 - **Output contract**: the schema named by `output`. Built-ins:
-  - `implementerReport`: `status` (`done` | `blocked` | `plan_wrong`), `summary`, `docsChanged`
-  - `reviewVerdict`: `verdict` (`accept` | `reject`), `blocking[]`, `non_blocking[]`, `summary`
-  - `commitPrep`: `commitMessage`, `excluded[{path, reason}]`
+  - `implementerReport`: `status` (`done` | `blocked` | `plan_wrong`), `summary`, `docsChanged`, `pipelineIssues[]`
+  - `reviewVerdict`: `verdict` (`accept` | `reject`), `blocking[]`, `non_blocking[]`, `summary`, `pipelineIssues[]`
+  - `commitPrep`: `commitMessage`, `excluded[{path, reason}]`, `pipelineIssues[]`
   - `commitReview`: `verdict`, `issues[]`
+
+  `pipelineIssues` is where an agent reports a problem with the pipeline itself
+  (contradictory instructions, wrong context, a missing tool) instead of
+  smuggling it into findings or exclusions. AIDE collects them from every visit
+  into the run report. Give a custom schema a `pipelineIssues` string array to
+  get the same.
 
   Custom schemas go into `schemas`; for Codex they must be strict
   (`additionalProperties: false`, every property in `required`).

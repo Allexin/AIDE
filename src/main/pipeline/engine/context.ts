@@ -1,7 +1,8 @@
 import type { AgentStep, MachineDefinition, Step } from '../../../shared/pipelineMachine'
 import type { LoopFeedback, RunState } from './types'
 import { parseCondition, renderTemplate, resolveRef, stringifyValue, type Scope } from './expressions'
-import { MachineTree, blockLimit, blockName, type LeafStep, type TreeNode } from './tree'
+import { MachineTree, blockLimit, blockName, type LeafStep, type TreeBlock, type TreeNode } from './tree'
+import { resolveSchema } from './schema'
 
 /**
  * Prompt composition for agent steps (plan §3.1). Besides its role, every agent
@@ -78,7 +79,8 @@ function outline(tree: MachineTree, current: string, state: RunState): string[] 
       const iteration = enclosing.has(node.id) ? state.iterations[node.id] : undefined
       if (node.kind === 'loop' || node.kind === 'commit') {
         const name = node.kind === 'loop' && blockName(node) !== node.id ? ` "${blockName(node)}"` : ''
-        const what = node.kind === 'commit' ? `commit ${node.id} (up to ${blockLimit(node)} attempts)` : `loop ${node.id}${name} (repeats until a pass completes, at most ${blockLimit(node)} iterations)`
+        const limit = blockLimit(node) + (state.bonus?.[node.id] ?? 0)
+        const what = node.kind === 'commit' ? `commit ${node.id} (up to ${limit} attempts)` : `loop ${node.id}${name} (repeats until a pass completes, at most ${limit} iterations)`
         const now = iteration ? ` — now on ${node.kind === 'commit' ? 'attempt' : 'iteration'} ${iteration}` : ''
         lines.push(`${pad}- ${what}${step.summary ? `: ${step.summary}` : ''}${now}`)
         walk(node.lists[0] ?? [], depth + 1)
@@ -121,7 +123,7 @@ export function buildPipelineContext(machine: MachineDefinition, current: string
   const next = tree.order[leaf.order + 1]
   if (next) lines.push(`- Next in order: ${next} — ${stepSummary(tree.leaves.get(next)!.step)}.`)
   else lines.push('- You are the last step; the run ends after you.')
-  if (checks.length) lines.push(`- AIDE itself runs these checks later: ${checks.map((c) => `\`${c.command}\``).join(', ')}. Do not run them; if they fail, the failure output comes back to the steps that must fix it.`)
+  if (checks.length) lines.push(`- AIDE itself runs these checks later: ${checks.map((c) => `\`${c.command}\``).join(', ')}. You need not run them: if they fail, the failure output comes back to the steps that must fix it. Run one yourself only when your task or a decision explicitly asks for it.`)
   if (isCommitPrep) lines.push('- You prepare the commit (stage files, write the message); AIDE reviews it and commits. Do not commit yourself.')
   else if (commitLater) lines.push('- Staging and committing happen in a later step. Do not stage or commit.')
   if (loops.length && leaf.step.type === 'agent') lines.push('- You are inside a loop. It exists so that problems a later step finds come back to be fixed — not to continue unfinished work. Finish your whole task in this visit.')
@@ -129,7 +131,12 @@ export function buildPipelineContext(machine: MachineDefinition, current: string
   if (leaf.step.type === 'agent') {
     const minutes = leaf.step.timeoutMin ?? machine.defaults?.timeoutMin ?? DEFAULT_TIMEOUT_MIN
     lines.push(`- Your only limit in this step is time: ${minutes} minutes. There is no token or work budget beyond that, and large tasks are expected here.`)
-    if ((leaf.step.permissions ?? 'write') === 'write') lines.push('- For a large task, plan the increments, then implement all of them now.')
+    // Only for implementing steps: reviewers often have write access for tools and scratch files.
+    if ((leaf.step.output ?? 'implementerReport') === 'implementerReport') lines.push('- For a large task, plan the increments, then implement all of them now.')
+    const schema = resolveSchema(leaf.step.output ?? 'implementerReport', machine.schemas)
+    if (schema && 'pipelineIssues' in ((schema.properties ?? {}) as Record<string, unknown>)) {
+      lines.push('- If the pipeline itself is wrong (its instructions contradict each other or your role, this context is wrong, a tool or input is missing), say so in "pipelineIssues", one line each, and carry on with your task. Do not put such notes in other fields.')
+    }
   }
 
   lines.push('', 'Before you:')
@@ -139,12 +146,41 @@ export function buildPipelineContext(machine: MachineDefinition, current: string
     const iteration = state.iterations[loop.id]
     if (iteration) lines.push(`- ${loop.kind === 'commit' ? 'Commit' : 'Loop'} "${loop.id}": ${loop.kind === 'commit' ? 'attempt' : 'iteration'} ${iteration} of at most ${blockLimit(loop) + (state.bonus[loop.id] ?? 0)}.`)
   }
+  const sofar = iterationResults(tree, loops, current, state)
+  if (sofar) lines.push(`- Results so far in this pass: ${sofar}. These are the current results; feedback from earlier passes may be outdated.`)
   const previous = [...state.history].reverse().find((h) => h.finishedAt && !(h.node === current && h.visit === visit))
   if (previous) lines.push(`- The previous step was "${previous.node}" (visit ${previous.visit}), outcome: ${previous.outcome ?? 'unknown'}.`)
   else lines.push('- You are the first step of this run.')
   const decisions = state.escalations.filter((e) => e.answer && e.answer.text.trim())
   for (const e of decisions) lines.push(`- Decision by the ${e.answer!.by} at "${e.node}" (${e.answer!.action}): ${e.answer!.text.trim()}`)
+  for (const a of state.amendments ?? []) lines.push(`- Instruction from the ${a.by}${a.node ? ` (given during "${a.node}")` : ''}: ${a.text.trim()}`)
   return lines.join('\n')
+}
+
+/** History index where the outermost enclosing loop's current pass started, if known. */
+function passStart(loops: TreeBlock[], state: RunState): number | undefined {
+  for (const loop of [...loops].reverse()) {
+    const start = state.iterationStart?.[loop.id]
+    if (start !== undefined) return start
+  }
+  return undefined
+}
+
+/** Latest outcome of each step that finished in the current pass of the enclosing loops, e.g. "ci passed, review: reject". */
+function iterationResults(tree: MachineTree, loops: TreeBlock[], current: string, state: RunState): string {
+  const start = passStart(loops, state)
+  if (start === undefined) return ''
+  const latest = new Map<string, string>()
+  for (const h of state.history.slice(start)) {
+    if (h.node === current || !h.finishedAt || h.outcome === 'interrupted' || !h.outcome) continue
+    const step = tree.leaves.get(h.node)?.step
+    if (!step) continue
+    const output = state.outputs[h.node] as Record<string, unknown> | null | undefined
+    const detail = typeof output?.verdict === 'string' ? `: ${output.verdict}` : typeof output?.status === 'string' ? `: ${output.status}` : ''
+    latest.delete(h.node) // keep the order of the latest runs
+    latest.set(h.node, step.type === 'check' ? `${h.node} ${h.outcome === 'ok' ? 'passed' : 'failed'}` : step.type === 'agent' ? `${h.node}${detail}` : `${h.node} ${h.outcome}`)
+  }
+  return [...latest.values()].join(', ')
 }
 
 export function outputContract(schemaName: string, schema: Record<string, unknown>): string {
@@ -169,7 +205,11 @@ export function feedbackSections(machine: MachineDefinition, current: string, st
     const feedback: LoopFeedback | undefined = state.feedback[loop.id]
     if (!feedback || (state.iterations[loop.id] ?? 1) < 2) return []
     const what = loop.kind === 'commit' ? `attempt ${feedback.iteration} of commit "${loop.id}"` : `iteration ${feedback.iteration} of loop "${loop.id}"`
-    return [`## Feedback: this is ${what}\n\nThe previous pass was repeated because ${feedback.reason}.\n\n${feedback.details || '(no details)'}`]
+    // The step that asked for this pass has run again in it: its complaint is history now.
+    const start = state.iterationStart?.[loop.id]
+    const rerun = start === undefined ? undefined : state.history.slice(start).filter((h) => h.node === feedback.from && h.finishedAt && h.outcome && h.outcome !== 'interrupted').at(-1)
+    const superseded = rerun ? `\n\nSuperseded: "${feedback.from}" has run again in this pass (outcome: ${rerun.outcome === 'ok' ? (tree.leaves.get(feedback.from)?.step.type === 'check' ? 'passed' : 'ok') : 'failed'}). The feedback below is what started this pass, not the current state.` : ''
+    return [`## Feedback: this is ${what}\n\nThe previous pass was repeated because ${feedback.reason}.${superseded}\n\n${feedback.details || '(no details)'}`]
   })
 }
 

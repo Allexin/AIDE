@@ -4,7 +4,7 @@
  * (unique ids, references, loop targets, sessions) are checked by `pipeline_validate`.
  */
 
-const CONDITION = { type: 'string', description: '"<ref> == <literal>" or "<ref> != <literal>", e.g. "outputs.review.verdict != \'accept\'". Refs: params.x, outputs.<step>.<field>, run.iteration.' }
+const CONDITION = { type: 'string', description: '"<ref> == <literal>" or "<ref> != <literal>", e.g. "outputs.review.verdict != \'accept\'". Refs: params.x, outputs.<step>.<field>, run.iteration (innermost loop around the condition), run.iterations.<loop id>.' }
 const STEPS = { type: 'array', items: { $ref: '#/$defs/step' } }
 const ID = { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_-]*$', description: 'Unique across the machine; used in outputs.<id>.' }
 
@@ -77,7 +77,7 @@ export const MACHINE_FILE_SCHEMA = {
           required: ['type', 'id', 'command'],
           properties: {
             type: { const: 'check' }, id: ID, summary: { type: 'string' },
-            command: { type: 'string', description: 'Shell command run in the project root; success = exit code 0. Inside a loop a failure repeats the loop with the output as feedback; outside any loop it stops the run for a decision.' },
+            command: { type: 'string', description: 'Shell command run in the project root; success = exit code 0. May use {{params.x}} and {{outputs.step.field}}; values are shell-quoted, a list becomes several arguments. Inside a loop a failure repeats the loop with the output as feedback; outside any loop it stops the run for a decision.' },
             timeoutMin: { type: 'number' },
             repeatLoop: { type: 'string', description: 'Enclosing loop a failure repeats; default the innermost.' }
           }

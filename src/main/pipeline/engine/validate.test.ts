@@ -33,6 +33,22 @@ describe('validateMachine', () => {
     expect(text).toMatch(/invalid "id" \("bad id"\)/)
   })
 
+  it('checks the refs of check commands: params and outputs only', () => {
+    const text = errorsOf(machine([
+      agent('a'),
+      { type: 'check', id: 'c', command: 'run {{params.stage}} {{outputs.a.status}} {{run.diff}} {{params.nope}}' }
+    ], { params: { stage: { type: 'string' } } }))
+    expect(text).toMatch(/"\{\{run\.diff\}\}" — commands can only use params\.\* and outputs\.\* values/)
+    expect(text).toMatch(/unknown param "nope"/)
+    expect(text).not.toMatch(/stage|outputs\.a/)
+  })
+
+  it('accepts run.iterations.<loop> and rejects other ids', () => {
+    const steps: Step[] = [{ type: 'loop', id: 'l', maxIterations: 2, steps: [agent('a', { repeatIf: 'run.iterations.l == 1' }), agent('b', { escalateIf: 'run.iterations.a == 1' })] }]
+    expect(errorsOf(machine(steps))).toMatch(/run\.iterations\.a.*use run\.iterations\.<loop id>/)
+    expect(errorsOf(machine(steps))).not.toMatch(/iterations\.l\b/)
+  })
+
   it('warns about a loop that nothing can repeat', () => {
     const result = validateMachine(machine([{ type: 'loop', id: 'l', maxIterations: 2, steps: [agent('a')] }]), env)
     expect(result.errors).toEqual([])
@@ -115,14 +131,15 @@ describe('schemas', () => {
   })
 
   it('validates values', () => {
-    expect(validateAgainstSchema({ verdict: 'accept', blocking: [], non_blocking: [], summary: '' }, BUILTIN_SCHEMAS.reviewVerdict)).toEqual([])
+    expect(validateAgainstSchema({ verdict: 'accept', blocking: [], non_blocking: [], summary: '', pipelineIssues: [] }, BUILTIN_SCHEMAS.reviewVerdict)).toEqual([])
     const errors = validateAgainstSchema({ verdict: 'maybe', blocking: 'x' }, BUILTIN_SCHEMAS.reviewVerdict)
-    expect(errors).toHaveLength(4)
+    expect(errors).toHaveLength(5)
     expect(errors).toEqual(expect.arrayContaining([
       '$.verdict: must be one of "accept", "reject"',
       '$.blocking: expected array, got string',
       '$.non_blocking: required',
-      '$.summary: required'
+      '$.summary: required',
+      '$.pipelineIssues: required'
     ]))
   })
 })

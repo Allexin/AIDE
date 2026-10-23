@@ -454,7 +454,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
       if (action === 'pause') pipelineManager.pause(projectPath)
       else if (action === 'stop') await pipelineManager.stop(projectPath)
       else if (action === 'resume') pipelineManager.resume(projectPath)
-      else pipelineManager.abandon(projectPath, 'abandoned by the user')
+      else await pipelineManager.abandon(projectPath, 'abandoned by the user')
       return null
     } catch (err) {
       return err instanceof Error ? err.message : String(err)

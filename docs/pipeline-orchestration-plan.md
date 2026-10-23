@@ -424,6 +424,8 @@ overlay shows it, and `pipeline_status` recovers the picture at any time.
 |---|---|---|
 | **Pause** (default; also implicit on app close) | Current node finishes, next does not start | Consistent; resumable from the next node |
 | **Stop now** | Agent process tree killed by its PID; CLI session id kept | Node `interrupted`; tree may hold uncommitted changes. Options: resume the node's session (continue the run) or end the run and leave the tree as is |
+| **Usage limit** (automatic) | The CLI reported its usage limit | Like stop now; resumes by itself at the reset time when the CLI names it |
+| **Amend** (`pipeline_amend`) | A running agent step is interrupted and resumed at once in its session with the new instruction | Running; no stop event |
 
 No automatic rollback: reverting is the user's ordinary git business. If the
 working tree is dirty at start, AIDE warns (pre-existing changes would mix into
@@ -711,6 +713,15 @@ overlay is shown.
    invites "continue later"; `blocked` means a named external obstacle. Catching
    a premature `blocked` stays with the orchestrator — no auto-continue rule in
    the engine.
+9. **Holding, amending and limits** (deficiency report 2026-10-23) — a CLI
+   usage limit holds the run (status `stopped`, reason `usage_limit`) with the
+   step's session kept, and resumes by itself when the CLI's message says when
+   the limit resets. A retry after an engine failure, a stop or an amendment
+   continues the step's own session with a continuation note instead of
+   resending the task. `pipeline_amend` adds instructions mid-run. Answering
+   `stop` still ends the run; holding is not answering. A gate rejected outside
+   loops holds the run at the gate. No `pause` answer and no `mayRunChecks`:
+   the context now says checks need not be run, not that they must not be.
 
 No open decisions remain; outstanding uncertainty is in the **[verify]** items,
 resolved by Phase 0.

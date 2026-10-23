@@ -134,7 +134,7 @@ your context:
 | Event | What to do |
 |---|---|
 | `escalation` | Decide: answer with `pipeline_answer`, or ask the user |
-| `run_paused`, `run_stopped` | The run changed hands (possibly the user paused or stopped it in AIDE); resume when appropriate |
+| `run_paused`, `run_stopped` | The run changed hands (possibly the user paused or stopped it in AIDE, or a gate was rejected outside loops); resume when appropriate. `reason: "usage_limit"`: a CLI hit its usage limit — the run resumes by itself at `resumeAt` (when the CLI said when) in the same session; otherwise resume once it has reset |
 | `run_finished`, `run_failed` | The event's `report` has the result; update the plan (`pipeline_report detail: true` only when you need every visit) |
 
 Step progress (`node_started`, `node_finished`, `check_failed`, `loop_repeated`,
@@ -151,8 +151,19 @@ it — `source` with a ready `pipeline_output` call for the details:
 - `gate` — approval: continue / reject / stop;
 - `limit` — a loop used up its iterations: retry (one more) / continue (accept
   as it is) / stop;
-- `engine` — a step could not run (CLI crash, usage limit, unusable output):
-  retry / stop.
+- `engine` — a step could not run (CLI crash, stream disconnect, unusable
+  output): retry (the step continues its failed session with "continue from
+  where you stopped", so finished work is not redone) / stop.
+
+**Holding a run.** `stop` as an answer ends the run for good. To keep it without
+deciding yet, do not answer: a run waiting on an escalation does nothing and
+survives AIDE restarts. A run stopped with `pipeline_stop` while an escalation is
+open asks for the answer again on resume.
+
+**Changing course mid-step.** A new requirement or a ruling while a step works:
+`pipeline_amend` with the text. A running agent step is interrupted and
+continues at once in its own session with the instruction; every later step
+sees it. This replaces stop, abandon, edit and restart.
 
 ## 6. Tools
 
@@ -163,10 +174,12 @@ it — `source` with a ready `pipeline_output` call for the details:
 | `pipeline_start` | Start a run: `{ machine, params, wait? }` → run id (and with `wait`, its next event) |
 | `pipeline_status` | Current step, loop iterations, visits per step, pending escalation, last events |
 | `pipeline_wait` | Block until the next event that needs you, the user typing (`user_input`), or a timeout |
-| `pipeline_answer` | Answer an escalation: `continue` (go on; approve a gate; leave an exhausted loop as it is), `retry` (run the step again; one more loop iteration), `reject` (gates), `stop` |
-| `pipeline_stop` | `pause` (after the current step), `stop` (now, resumable), `abandon` |
+| `pipeline_answer` | Answer an escalation: `continue` (go on; approve a gate; leave an exhausted loop as it is), `retry` (run the step again; one more loop iteration), `reject` (gates), `stop` (ends the run) |
+| `pipeline_amend` | Add an instruction to the run; a running agent step continues with it in its session |
+| `pipeline_reload` | The active run uses its edited machine file for the steps to come (paused, stopped or waiting runs). Role files are read at every visit and need no reload |
+| `pipeline_stop` | `pause` (after the current step), `stop` (now, resumable), `abandon` (lists the uncommitted files left) |
 | `pipeline_resume` | Continue a paused or stopped run (`wait` as for start) |
-| `pipeline_report` | Compact report: result, commits, visits per step, loops, summaries, findings, decisions, cost; `detail: true` adds every visit |
+| `pipeline_report` | Compact report: result, commits, visits per step, loops, summaries, findings (first 20), pipeline issues, instructions added, decisions, cost; `detail: true` is the full report |
 | `pipeline_output` | Details on demand: the output of one step visit (agent JSON, check log tail, commit result) |
 | `pipeline_runs` | Recent runs |
 | `pipeline_guide` / `pipeline_schema` | How to author machines; the machine file schema |
