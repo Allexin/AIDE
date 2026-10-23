@@ -94,11 +94,9 @@ export interface CliTool {
 
   /** Check whether the CLI has finished starting up by inspecting accumulated output.
    *  Returns 'ok' when ready, 'dead' if the session is invalid, 'pending' otherwise.
+   *  Never decide by elapsed time: PtyManager reports a check that stays pending as 'unknown'.
    */
-  checkStartupHealth?(
-    accumulated: string,
-    elapsedMs: number
-  ): 'ok' | 'dead' | 'pending'
+  checkStartupHealth?(accumulated: string): 'ok' | 'dead' | 'pending'
 
   /** Given a set of candidate PTY PIDs (powershell), resolve which one
    *  is the parent of a currently running CLI process.

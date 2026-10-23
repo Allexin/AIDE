@@ -197,7 +197,7 @@ export const devinTool: CliTool = {
 
   // ── Startup health ────────────────────────────────────────────────────────
 
-  checkStartupHealth(accumulated: string, elapsedMs: number): 'ok' | 'dead' | 'pending' {
+  checkStartupHealth(accumulated: string): 'ok' | 'dead' | 'pending' {
     if (
       accumulated.includes('command not found') ||
       accumulated.includes('is not recognized') ||
@@ -207,7 +207,6 @@ export const devinTool: CliTool = {
     // The Devin TUI enters the alternate screen and prints ANSI immediately.
     if (accumulated.includes('\x1b[?1049h') || accumulated.includes('Devin')) return 'ok'
 
-    if (elapsedMs > 15000) return 'ok'
     return 'pending'
   },
 

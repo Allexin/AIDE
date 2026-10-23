@@ -36,16 +36,32 @@ function getMap(win: BrowserWindow): Map<string, RunningProcess> {
   return windowProcesses.get(win)!
 }
 
-function forceKill(proc: ChildProcess): void {
+/** Safety limit on waiting for a killed process tree — the wait itself is on exit events. */
+const KILL_TIMEOUT_MS = 5000
+
+/** Kill the process tree. Resolves once it is gone (or after KILL_TIMEOUT_MS), so a
+ *  restart does not race the old process for its port or files. */
+function forceKill(proc: ChildProcess): Promise<void> {
+  const exited = proc.exitCode !== null || proc.signalCode !== null
+    ? Promise.resolve()
+    : new Promise<void>((resolve) => { proc.once('exit', () => resolve()) })
+  let killed = Promise.resolve()
   if (proc.pid && process.platform === 'win32') {
-    // Kill entire process tree so child processes (e.g. spawned by npm) also die
-    spawn('taskkill', ['/pid', String(proc.pid), '/f', '/t'], {
+    // Kill entire process tree so child processes (e.g. spawned by npm) also die.
+    // taskkill exits only after the whole tree is terminated.
+    const taskkill = spawn('taskkill', ['/pid', String(proc.pid), '/f', '/t'], {
       windowsHide: true,
       shell: false
+    })
+    killed = new Promise<void>((resolve) => {
+      taskkill.once('exit', () => resolve())
+      taskkill.once('error', () => resolve())
     })
   } else {
     proc.kill('SIGTERM')
   }
+  const timeout = new Promise<void>((resolve) => { setTimeout(resolve, KILL_TIMEOUT_MS).unref() })
+  return Promise.race([Promise.all([exited, killed]).then(() => undefined), timeout])
 }
 
 export function getRunningCount(win: BrowserWindow): number {
@@ -160,19 +176,21 @@ export function spawnButtonProcess(
 /**
  * Kills a running button process and immediately notifies the renderer.
  * The 'close' event handler in spawnButtonProcess skips if entry is gone from map.
+ * The returned promise settles once the process tree is gone.
  */
-export function killButtonProcess(win: BrowserWindow, buttonId: string): void {
+export function killButtonProcess(win: BrowserWindow, buttonId: string): Promise<void> {
   const map = getMap(win)
   const entry = map.get(buttonId)
-  if (!entry) return
+  if (!entry) return Promise.resolve()
 
   // Remove BEFORE killing — 'close' event handler skips if not found in map
   map.delete(buttonId)
-  forceKill(entry.proc)
+  const gone = forceKill(entry.proc)
   for (const obs of processObservers) obs(win, 'exited', buttonId, null)
   if (!win.isDestroyed()) {
     win.webContents.send('toolbar:process-exited', { buttonId, exitCode: null })
   }
+  return gone
 }
 
 /**
@@ -182,7 +200,7 @@ export function killButtonProcess(win: BrowserWindow, buttonId: string): void {
 export function killAllProcesses(win: BrowserWindow): void {
   const map = getMap(win)
   for (const [, entry] of [...map.entries()]) {
-    forceKill(entry.proc)
+    void forceKill(entry.proc)
   }
   map.clear()
 }

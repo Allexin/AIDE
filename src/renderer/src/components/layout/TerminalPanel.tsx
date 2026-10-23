@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -251,7 +252,8 @@ function TerminalTab({ tabId, isActive, isLocked, onMount, onUnmount, onAttentio
   // Fit when becoming the active tab — only if the terminal panel itself has focus
   useEffect(() => {
     if (isActive && focusedPanelRef.current === 'terminal' && fitAddonRef.current && terminalRef.current) {
-      const t = setTimeout(() => {
+      // Next frame: the now-visible container has been laid out.
+      const frame = requestAnimationFrame(() => {
         try {
           fitAddonRef.current?.fit()
           const term = terminalRef.current
@@ -259,8 +261,8 @@ function TerminalTab({ tabId, isActive, isLocked, onMount, onUnmount, onAttentio
             window.editorApi.terminalResize(tabId, term.cols, term.rows)
           }
         } catch {}
-      }, 50)
-      return () => clearTimeout(t)
+      })
+      return () => cancelAnimationFrame(frame)
     }
     return undefined
   }, [isActive, tabId])
@@ -304,7 +306,7 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   const { terminalCollapsed, collapsedWidthPx, toggleTerminalCollapse, focusTerminal, focusedPanel } =
     usePanelStore()
 
-  const { tabs, activeTabId, initialized, remoteLockedTabs, initWithTab, initWithTabs, addTab, setActiveTab, closeTab, resetTabs, updateSlug, updateSessionId, markExited, setAttention, setRemoteLocked } =
+  const { tabs, activeTabId, initialized, remoteLockedTabs, initWithTab, initWithTabs, addTab, setActiveTab, closeTab, updateSlug, updateSessionId, markExited, setAttention, setRemoteLocked } =
     useSessionStore()
 
   const projectPath = useFileTreeStore((s) => s.projectPath)
@@ -358,9 +360,12 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 
   // H2: Focus xterm when clicking a tab (including the already-active one)
   const handleSelectTab = useCallback((tabId: string) => {
-    setPipelineActive(false)
-    setActiveTab(tabId)
-    setTimeout(() => fitFunctions.current.get(tabId)?.focus(), 50)
+    // Render the switch synchronously: a terminal that is still hidden cannot take focus.
+    flushSync(() => {
+      setPipelineActive(false)
+      setActiveTab(tabId)
+    })
+    fitFunctions.current.get(tabId)?.focus()
   }, [setActiveTab, setPipelineActive])
 
   // H3: Close tab — kill PTY, remove from store
@@ -450,11 +455,6 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
       closeTab(tabId)
     })
 
-    // Account switch: replace all tabs with a fresh one
-    const removeResetTabs = window.editorApi.onTerminalResetTabs((newTabs) => {
-      resetTabs(newTabs)
-    })
-
     const removeRemoteLock = window.editorApi.onRemoteTabLockChanged((tabId, locked) => {
       setRemoteLocked(tabId, locked)
     })
@@ -467,10 +467,9 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
       removeNewTab()
       removeDeadSession()
       removeTabClosed()
-      removeResetTabs()
       removeRemoteLock()
     }
-  }, [updateSessionId, markExited, setActiveTab, addTab, updateSlug, closeTab, resetTabs, setRemoteLocked])
+  }, [updateSessionId, markExited, setActiveTab, addTab, updateSlug, closeTab, setRemoteLocked])
 
   // Resize active terminal when the panel container resizes — but only when the
   // terminal panel has focus. When the editor takes focus the container shrinks,
@@ -838,9 +837,9 @@ function TabStrip({ tabs, activeTabId, remoteLockedTabs, onSelectTab, onCloseTab
     updateScrollState()
   }, [tabs, updateScrollState])
 
+  // The strip's onScroll keeps the arrows in sync while the smooth scroll runs.
   const scroll = (dir: 'left' | 'right') => {
     stripRef.current?.scrollBy({ left: dir === 'left' ? -120 : 120, behavior: 'smooth' })
-    setTimeout(updateScrollState, 200)
   }
 
   return (

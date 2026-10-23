@@ -227,7 +227,7 @@ export const codexTool: CliTool = {
 
   // ── Startup health ────────────────────────────────────────────────────────
 
-  checkStartupHealth(accumulated: string, elapsedMs: number): 'ok' | 'dead' | 'pending' {
+  checkStartupHealth(accumulated: string): 'ok' | 'dead' | 'pending' {
     if (
       accumulated.includes('command not found') ||
       accumulated.includes('is not recognized') ||
@@ -241,7 +241,6 @@ export const codexTool: CliTool = {
       accumulated.includes('Codex')
     ) return 'ok'
 
-    if (elapsedMs > 15000) return 'ok'
     return 'pending'
   },
 

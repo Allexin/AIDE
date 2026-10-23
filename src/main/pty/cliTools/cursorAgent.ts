@@ -726,7 +726,7 @@ export const cursorAgentTool: CliTool = {
     return `agent --resume "${sessionId}"`
   },
 
-  checkStartupHealth(accumulated: string, elapsedMs: number): 'ok' | 'dead' | 'pending' {
+  checkStartupHealth(accumulated: string): 'ok' | 'dead' | 'pending' {
     if (
       accumulated.includes('is not recognized') ||
       accumulated.includes('command not found') ||
@@ -744,7 +744,6 @@ export const cursorAgentTool: CliTool = {
       return 'ok'
     }
 
-    if (elapsedMs > 15000) return 'ok'
     return 'pending'
   },
 

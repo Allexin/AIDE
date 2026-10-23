@@ -22,7 +22,7 @@ import { orchestrators } from '../pipeline/orchestrators'
 import { osDisplayName } from '../platform'
 import { runGitStatus } from '../filetree/gitStatus'
 import { searchProjectFileIndex } from '../filetree/fileIndex'
-import { ptyRegistry, pickerEditorMap, restartToolSessionsAfterAccountChange } from '../pty/registry'
+import { ptyRegistry, pickerEditorMap, offerRestartAfterAccountChange } from '../pty/registry'
 import { getRegisteredTools, getToolById, getDefaultTool } from '../pty/cliTools/registry'
 import {
   listAccounts,
@@ -856,7 +856,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   // ── Toolbar: kill a running button process ────────────────────────────────────
   ipcMain.handle('toolbar:kill-button', (event, buttonId: string) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender)
-    if (senderWin) killButtonProcess(senderWin, buttonId)
+    if (senderWin) void killButtonProcess(senderWin, buttonId)
   })
 
   // ── Toolbar: kill and restart a button process ────────────────────────────────
@@ -864,11 +864,9 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const senderWin = BrowserWindow.fromWebContents(event.sender)
     if (!senderWin) return
 
-    killButtonProcess(senderWin, buttonId)
-
-    // Brief delay so the OS has time to release resources (port, file handles)
-    // before the new process spawns. 200ms is enough for most cases.
-    await new Promise<void>((resolve) => setTimeout(resolve, 200))
+    // Wait for the old process tree to be gone so the new one does not race it for
+    // its port or file handles.
+    await killButtonProcess(senderWin, buttonId)
 
     for (const [projectPath, win] of openProjects) {
       if (win === senderWin) {
@@ -1212,7 +1210,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   // ── Accounts: load saved credentials into CLI tool ─────────────────────────
   // autoSaveMode: 'check' = detect conflict and return it | 'force' = overwrite regardless | 'skip' = skip auto-save
   ipcMain.handle('accounts:load', async (
-    _event,
+    event,
     toolId: string,
     accountId: string,
     autoSaveMode: 'check' | 'force' | 'skip' = 'check'
@@ -1229,8 +1227,8 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
 
     await tool.importCredentials(stored.credentials)
     setActiveAccount(toolId, accountId)
-    restartToolSessionsAfterAccountChange(toolId)
     broadcastAccountsChanged()
+    await offerRestartAfterAccountChange(toolId, BrowserWindow.fromWebContents(event.sender))
     return true
   })
 

@@ -37,8 +37,16 @@ interface HealthCheck {
   startTime: number
   resolved: boolean
   silent: boolean
-  onResult: ((result: 'ok' | 'dead') => void) | null
+  onResult: ((result: StartupResult) => void) | null
 }
+
+/** 'unknown': the CLI gave neither a ready nor a dead signal in time. */
+type StartupResult = 'ok' | 'dead' | 'unknown'
+
+/** Safety limits on event waits — never a guess that the event has happened. */
+const READY_TIMEOUT_MS = 15000
+const ECHO_TIMEOUT_MS = 2000
+const EXIT_TIMEOUT_MS = 5000
 
 let tabIdCounter = 0
 function nextTabId(): string {
@@ -214,8 +222,11 @@ export class PtyManager {
     const tabInfo = this.spawnNewSessionTab(tool)
 
     this.waitForReady(tabInfo.tabId).then((result) => {
-      if (result === 'ok' && this.tabs.has(tabInfo.tabId)) {
-        void this.submitInteractiveInput(tabInfo.tabId, prompt.replace(/\n+/g, ' ').trim(), 'paste')
+      if (!this.tabs.has(tabInfo.tabId)) return
+      if (result === 'ok') {
+        void this.submitPastedInput(tabInfo.tabId, prompt.replace(/\n+/g, ' ').trim())
+      } else if (result === 'unknown') {
+        cliLog('startup', `${tool.name} did not report ready within ${READY_TIMEOUT_MS / 1000}s; the prompt was not sent.`)
       }
     })
 
@@ -237,22 +248,30 @@ export class PtyManager {
     } catch {}
   }
 
-  /** Type and submit text to the active CLI using its terminal keyboard protocol. */
-  async submitInteractiveInput(tabId: string, text: string, mode: 'type' | 'paste' = 'type'): Promise<void> {
+  /** Bracketed-paste text into the CLI and submit it once the CLI has rendered the paste —
+   *  an Enter that arrives in the same read as the paste is taken as part of it. */
+  private async submitPastedInput(tabId: string, text: string): Promise<void> {
     const tab = this.tabs.get(tabId)
-    if (!tab) throw new Error('Terminal tab not found')
-    if (mode === 'paste') {
-      const pasted = `\x1b[200~${text}\x1b[201~`
-      tab.pty.write(pasted)
-    } else {
-      for (const char of Array.from(text)) {
-        tab.pty.write(char)
-        await new Promise((resolve) => setTimeout(resolve, 35))
-      }
+    if (!tab) return
+    const echoed = this.nextOutput(tabId, ECHO_TIMEOUT_MS)
+    tab.pty.write(`\x1b[200~${text}\x1b[201~`)
+    if (!(await echoed)) {
+      cliLog('startup', `${tab.toolName} did not render the pasted prompt within ${ECHO_TIMEOUT_MS / 1000}s; submitting anyway.`)
     }
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    const submit = tab.tool.interactiveSubmitSequence?.() ?? '\r'
-    tab.pty.write(submit)
+    if (!this.tabs.has(tabId)) return
+    tab.pty.write(tab.tool.interactiveSubmitSequence?.() ?? '\r')
+  }
+
+  /** Resolves true on the tab's next output chunk, false if none arrives within timeoutMs. */
+  private nextOutput(tabId: string, timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { unsubscribe(); resolve(false) }, timeoutMs)
+      const unsubscribe = this.subscribeToOutput(tabId, () => {
+        clearTimeout(timer)
+        unsubscribe()
+        resolve(true)
+      })
+    })
   }
 
   resize(tabId: string, cols: number, rows: number): void {
@@ -280,36 +299,40 @@ export class PtyManager {
     this.onTabClosed?.(tabId)
   }
 
-  async resetAllTabs(): Promise<void> {
-    const sessions = [...this.tabs.values()].map((t) => ({
-      sessionId: t.sessionId,
-      tool: t.tool
-    }))
+  /** Close a tab and resolve once its process has exited — a CLI refuses to resume a session
+   *  that is still running. Resolves false if the process outlives the timeout. */
+  private closeTabAndWaitExit(tabId: string, timeoutMs = EXIT_TIMEOUT_MS): Promise<boolean> {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return Promise.resolve(true)
+    const exited = new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs)
+      tab.pty.onExit(() => { clearTimeout(timer); resolve(true) })
+    })
+    this.closeTab(tabId)
+    return exited
+  }
 
-    for (const tabId of [...this.tabs.keys()]) {
-      this.closeTab(tabId)
-    }
+  /** Restart the tool's tabs the way a user would — close the tab, then open its session again —
+   *  leaving other tools' tabs untouched. The renderer is told about the replacement before the
+   *  old tab goes, because it never drops its last tab. */
+  async restartToolTabs(toolId: string): Promise<void> {
+    const old = [...this.tabs.values()].filter((t) => t.tool.id === toolId)
+    if (old.length === 0) return
 
-    const uniqueToolIds = new Set(sessions.map((s) => s.tool.id))
-    for (const toolId of uniqueToolIds) {
-      const tool = getToolById(toolId)
-      await tool?.prepareProject?.(this.projectPath)
-    }
+    const tool = old[0].tool
+    await tool.prepareProject?.(this.projectPath)
 
-    const newTabs: SessionTabInfo[] = []
-    for (const { sessionId, tool } of sessions) {
-      const info = sessionId
-        ? this.spawnResumeTab(sessionId, false, tool)
+    for (const tab of old) {
+      const title = this.titleCache.get(tab.tabId)
+      if (!(await this.closeTabAndWaitExit(tab.tabId))) {
+        logEvent('pty-restart-exit-timeout', { tabId: tab.tabId, toolId }, 'warn')
+      }
+      const info = tab.sessionId
+        ? this.spawnResumeTab(tab.sessionId, false, tool)
         : this.spawnNewSessionTab(tool)
-      newTabs.push(info)
+      this.send('terminal:new-tab', { ...info, title })
+      this.send('terminal:tab-closed', { tabId: tab.tabId })
     }
-
-    if (newTabs.length === 0) {
-      const info = this.spawnNewSessionTab(getDefaultTool(this.activatedTools))
-      newTabs.push(info)
-    }
-
-    this.send('terminal:reset-tabs', newTabs)
   }
 
   subscribeToOutput(tabId: string, cb: (data: string) => void): () => void {
@@ -319,9 +342,9 @@ export class PtyManager {
     return () => { this.outputListeners.get(tabId)?.delete(cb) }
   }
 
-  /** Returns true if any open tab uses the given tool. */
-  hasTool(toolId: string): boolean {
-    return [...this.tabs.values()].some((t) => t.tool.id === toolId)
+  /** Number of open tabs that use the given tool. */
+  countToolTabs(toolId: string): number {
+    return [...this.tabs.values()].filter((t) => t.tool.id === toolId).length
   }
 
   disposeAll(): void {
@@ -424,18 +447,11 @@ export class PtyManager {
 
   private spawnNewSessionTab(tool: CliTool): SessionTabInfo {
     const tabId = nextTabId()
-    const pty = this.spawnPty(tabId, tool)
+    const pty = this.spawnPty(tabId, tool, this.launchCommand(tabId, tool, tool.newSessionCommand()))
     const tab: PtyTab = { tabId, sessionId: null, pty, tool, toolId: tool.id, toolName: tool.name }
     this.tabs.set(tabId, tab)
 
     this.ensureToolWatcher(tool)
-
-    setTimeout(() => {
-      if (!this.tabs.has(tabId)) return
-      const cmd = tool.newSessionCommand()
-      if (cmd) pty.write(`${cmd}${this.wireHooks(tabId, tool)}\r`)
-    }, 500)
-
     this.startHealthCheck(tabId)
 
     return { tabId, sessionId: null, toolId: tool.id, toolName: tool.name }
@@ -443,19 +459,12 @@ export class PtyManager {
 
   private spawnResumeTab(sessionId: string, silent = false, tool: CliTool): SessionTabInfo {
     const tabId = nextTabId()
-    const pty = this.spawnPty(tabId, tool)
+    const pty = this.spawnPty(tabId, tool, this.launchCommand(tabId, tool, tool.resumeCommand(sessionId)))
     const tab: PtyTab = { tabId, sessionId, pty, tool, toolId: tool.id, toolName: tool.name }
     this.tabs.set(tabId, tab)
 
     this.ensureToolWatcher(tool)
     this.onSessionAssigned?.(tabId, sessionId, tool)
-
-    setTimeout(() => {
-      if (!this.tabs.has(tabId)) return
-      const cmd = tool.resumeCommand(sessionId)
-      if (cmd) pty.write(`${cmd}${this.wireHooks(tabId, tool)}\r`)
-    }, 500)
-
     this.startHealthCheck(tabId, silent)
 
     return { tabId, sessionId, toolId: tool.id, toolName: tool.name }
@@ -488,7 +497,12 @@ export class PtyManager {
     }
   }
 
-  private spawnPty(tabId: string, tool?: CliTool): nodePty.IPty {
+  /** The CLI's command line with its hook wiring, or undefined for a plain shell. */
+  private launchCommand(tabId: string, tool: CliTool, cmd: string): string | undefined {
+    return cmd ? `${cmd}${this.wireHooks(tabId, tool)}` : undefined
+  }
+
+  private spawnPty(tabId: string, tool?: CliTool, command?: string): nodePty.IPty {
     const env = { ...process.env } as Record<string, string>
     // Lets the pipeline MCP shim, started by the agent in this tab, identify the tab.
     env.AIDE_TAB_ID = tabId
@@ -501,7 +515,7 @@ export class PtyManager {
       this.send('terminal:tab-event', { tabId, event })
     )
 
-    const { file: shellFile, args: shellArgs } = defaultShell()
+    const { file: shellFile, args: shellArgs } = defaultShell(command)
     const pty = nodePty.spawn(shellFile, shellArgs, {
       name: 'xterm-256color',
       cols: 80,
@@ -540,13 +554,22 @@ export class PtyManager {
   private startHealthCheck(tabId: string, silent = false): void {
     const tab = this.tabs.get(tabId)
     if (!tab?.tool.checkStartupHealth) return
-    this.healthChecks.set(tabId, {
+    const hc: HealthCheck = {
       buf: '',
       startTime: Date.now(),
       resolved: false,
       silent,
       onResult: null
-    })
+    }
+    this.healthChecks.set(tabId, hc)
+    // No verdict in time is reported as 'unknown' — never as a guessed 'ok'.
+    setTimeout(() => {
+      if (this.healthChecks.get(tabId) !== hc || hc.resolved) return
+      hc.resolved = true
+      this.debugLog(`  healthCheck ${tabId}: unknown (no verdict within ${READY_TIMEOUT_MS}ms)`)
+      hc.onResult?.('unknown')
+      this.healthChecks.delete(tabId)
+    }, READY_TIMEOUT_MS)
   }
 
   private feedHealthCheck(tabId: string, data: string): void {
@@ -556,7 +579,7 @@ export class PtyManager {
 
     hc.buf += data
     const elapsed = Date.now() - hc.startTime
-    const result = tab.tool.checkStartupHealth(hc.buf, elapsed)
+    const result = tab.tool.checkStartupHealth(hc.buf)
 
     if (result === 'pending') return
 
@@ -574,24 +597,11 @@ export class PtyManager {
     this.healthChecks.delete(tabId)
   }
 
-  private waitForReady(tabId: string): Promise<'ok' | 'dead'> {
+  /** The tab's startup verdict. A tool without a health check has nothing to wait for. */
+  private waitForReady(tabId: string): Promise<StartupResult> {
     const hc = this.healthChecks.get(tabId)
     if (!hc) return Promise.resolve('ok')
-
-    if (hc.resolved) return Promise.resolve('ok')
-
-    return new Promise((resolve) => {
-      hc.onResult = resolve
-
-      setTimeout(() => {
-        if (!hc.resolved) {
-          hc.resolved = true
-          this.send('terminal:tab-ready', { tabId })
-          resolve('ok')
-          this.healthChecks.delete(tabId)
-        }
-      }, 15000)
-    })
+    return new Promise((resolve) => { hc.onResult = resolve })
   }
 
   private send(channel: string, data: unknown): void {

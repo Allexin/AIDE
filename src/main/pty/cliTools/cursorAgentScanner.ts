@@ -354,29 +354,25 @@ export function watchCursorSessions(
     }
   }
 
+  // The session directory and its .jsonl appear as separate events; the recursive watch
+  // reports both, so a session whose file is not there yet is simply emitted on the later one.
   const emitIfReady = async (sessionId: string) => {
     if (stopped || known.has(sessionId)) return
-
-    for (let attempt = 0; attempt < 12; attempt++) {
-      const filePath = getCursorSessionFilePath(projectPath, sessionId)
-      if (existsSync(filePath)) {
-        known.add(sessionId)
-        const sessions = await scanCursorSessions(projectPath, fallbackSlug)
-        const found = sessions.find((s) => s.sessionId === sessionId)
-        onNew(found ?? { sessionId, slug: fallbackSlug, lastModified: new Date() })
-        return
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250))
-    }
+    if (!existsSync(getCursorSessionFilePath(projectPath, sessionId))) return
+    known.add(sessionId)
+    const sessions = await scanCursorSessions(projectPath, fallbackSlug)
+    const found = sessions.find((s) => s.sessionId === sessionId)
+    onNew(found ?? { sessionId, slug: fallbackSlug, lastModified: new Date() })
   }
 
   const start = () => {
     if (stopped || !existsSync(transcriptsDir)) return
     seedKnown()
     try {
-      watcher = watch(transcriptsDir, (_event, filename) => {
+      watcher = watch(transcriptsDir, { recursive: true }, (_event, filename) => {
         if (!filename) return
-        void emitIfReady(filename)
+        // "<id>" or "<id>/<id>.jsonl" — the first segment is the session id.
+        void emitIfReady(filename.split(/[\\/]/)[0])
       })
     } catch {
       watcher = null

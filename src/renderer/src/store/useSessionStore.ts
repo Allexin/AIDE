@@ -32,7 +32,6 @@ interface SessionState {
   updateSessionId: (tabId: string, sessionId: string) => void
   markExited: (tabId: string) => void
   closeTab: (tabId: string) => void
-  resetTabs: (tabs: SessionTabInfo[]) => void
   setAttention: (tabId: string, attention: boolean) => void
   setRemoteLocked: (tabId: string, locked: boolean) => void
 }
@@ -105,12 +104,6 @@ export const useSessionStore = create<SessionState>((set) => ({
           ? remaining[Math.max(0, state.tabs.findIndex((t) => t.tabId === tabId) - 1)]?.tabId ?? remaining[0].tabId
           : state.activeTabId
       return { tabs: remaining, activeTabId: newActive }
-    }),
-
-  resetTabs: (newTabs: SessionTabInfo[]) =>
-    set({
-      tabs: newTabs.map((t) => tabFromInfo(t)),
-      activeTabId: newTabs[0]?.tabId ?? null
     }),
 
   setAttention: (tabId: string, attention: boolean) =>

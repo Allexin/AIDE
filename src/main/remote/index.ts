@@ -23,6 +23,9 @@ import { runGitStatus } from '../filetree/gitStatus'
 import type { HistoryEntry } from '../pty/cliTools/types'
 
 const AGGREGATOR_PORT = 3847
+// Retry pacing while another process holds the aggregator port: doubles per attempt.
+const AGGREGATOR_RETRY_MIN_MS = 500
+const AGGREGATOR_RETRY_MAX_MS = 30_000
 const SESSION_TTL = 24 * 60 * 60 * 1000  // 24 hours
 const REMOTE_FILE_MAX_BYTES = 5 * 1024 * 1024
 
@@ -88,6 +91,7 @@ export class RemoteServer {
   private lastUnauthNotify = 0
   private cleanupInterval: ReturnType<typeof setInterval> | null = null
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null
+  private aggregatorRetryMs = AGGREGATOR_RETRY_MIN_MS
   private toolbarWatchers = new Set<WebSocket>()
   private logBuf = new Map<string, string[]>()       // channel → last 500 lines
   private logWatchers = new Set<WebSocket>()
@@ -546,7 +550,10 @@ export class RemoteServer {
   private connectToAggregator(): void {
     this.stopHeartbeat()
     this.postRegister()
-      .then(() => { this.startHeartbeat() })
+      .then(() => {
+        this.aggregatorRetryMs = AGGREGATOR_RETRY_MIN_MS
+        this.startHeartbeat()
+      })
       .catch(() => { this.tryBecomeAggregator() })
   }
 
@@ -555,11 +562,15 @@ export class RemoteServer {
     aggServer.once('error', (err: NodeJS.ErrnoException) => {
       logEvent('aggregator-bind-error', { code: err?.code ?? null, message: err?.message ?? String(err) }, 'warn')
       if (err.code === 'EADDRINUSE') {
-        // Another instance just won the port race — wait and register with it.
-        setTimeout(() => this.connectToAggregator(), 500)
+        // Another process holds the port: an instance that may not be serving yet, or
+        // something else entirely. Retry registering with backoff instead of a fixed beat.
+        const delay = this.aggregatorRetryMs
+        this.aggregatorRetryMs = Math.min(delay * 2, AGGREGATOR_RETRY_MAX_MS)
+        setTimeout(() => this.connectToAggregator(), delay)
       }
     })
     aggServer.listen(AGGREGATOR_PORT, () => {
+      this.aggregatorRetryMs = AGGREGATOR_RETRY_MIN_MS
       this.aggregatorServer = aggServer
       // `once` above is consumed only on a failed bind; on this path it is still
       // attached, but it would fire at most once more. Runtime errors need a
@@ -1459,7 +1470,7 @@ export class RemoteServer {
           case 'toolbar-kill': {
             const buttonId = String(msg.buttonId ?? '')
             const win = this.findProjectWindow(projectPath)
-            if (win && !win.isDestroyed()) killButtonProcess(win, buttonId)
+            if (win && !win.isDestroyed()) void killButtonProcess(win, buttonId)
             break
           }
           case 'log-subscribe': {
@@ -2373,7 +2384,7 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
       document.body.classList.toggle('files-open', filesOpen)
       document.body.classList.toggle('file-preview', filePreviewOpen)
       document.body.classList.toggle('history-open', historyOpen)
-      setTimeout(doResize, 20)
+      requestAnimationFrame(doResize)  // after the class change has been laid out
     }
     function showFileTree() {
       filePreviewOpen = false
@@ -3209,13 +3220,17 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
       inp.placeholder = 'Type command... (Enter = newline, ⌨ = send)'
       inp.disabled = !isConnected()
       inp.addEventListener('focus', function() {
-        setTimeout(function() { ctrlBar.scrollIntoView(false) }, 350)
+        // The virtual keyboard shrinks the visual viewport; scroll again once it has.
+        ctrlBar.scrollIntoView(false)
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener('resize', function() { ctrlBar.scrollIntoView(false) }, { once: true })
+        }
       })
       ctrlBar.appendChild(inp)
       var kb = makeKbBtn()
       kb.addEventListener('click', sendAndClose)
       ctrlBar.appendChild(kb)
-      setTimeout(function() { inp.focus() }, 30)
+      inp.focus()
     }
 
     function sendAndClose() {
@@ -3622,14 +3637,18 @@ function makeTerminalHtml(): string {
       inp.placeholder = 'Type command... (Enter = newline, ⌨ = send)'
       inp.disabled = !isConnected()
       inp.addEventListener('focus', function() {
-        setTimeout(function() { container.scrollIntoView(false) }, 350)
+        // The virtual keyboard shrinks the visual viewport; scroll again once it has.
+        container.scrollIntoView(false)
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener('resize', function() { container.scrollIntoView(false) }, { once: true })
+        }
       })
       row.appendChild(inp)
       var kb = makeKbBtn()
       kb.addEventListener('click', sendAndClose)
       row.appendChild(kb)
       container.appendChild(row)
-      setTimeout(function() { inp.focus() }, 30)
+      inp.focus()
     }
 
     function sendAndClose() {

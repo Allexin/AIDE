@@ -356,11 +356,8 @@ export function watchSessionsDir(
         if (stopped || !filename || !filename.endsWith('.jsonl')) return
         if (!knownFiles.has(filename)) {
           knownFiles.add(filename)
-          const sessionId = filename.slice(0, -6) // remove .jsonl (6 chars)
-          // Small delay to let claude write the initial data
-          setTimeout(() => {
-            if (!stopped) onNewFile(sessionId)
-          }, 300)
+          // Only the session id is reported; the file's content is not read here.
+          onNewFile(filename.slice(0, -6)) // remove .jsonl (6 chars)
         }
       })
     } catch {}

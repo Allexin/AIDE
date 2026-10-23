@@ -21,11 +21,17 @@ export function osDisplayName(): string {
   return 'Linux'
 }
 
-/** Interactive login shell for the integrated terminal. */
-export function defaultShell(): { file: string; args: string[] } {
-  if (isWindows) return { file: 'powershell.exe', args: [] }
-  if (isMac) return { file: process.env.SHELL || '/bin/zsh', args: ['-l'] }
-  return { file: process.env.SHELL || '/bin/bash', args: ['-l'] }
+/** Interactive login shell for the integrated terminal. With `command`, the shell runs it
+ *  first and stays interactive after it exits — the command is part of the launch, not
+ *  typed into a shell that may not be ready yet. */
+export function defaultShell(command?: string): { file: string; args: string[] } {
+  if (isWindows) {
+    // -EncodedCommand (UTF-16LE base64) sidesteps command-line quoting entirely.
+    const args = command ? ['-NoExit', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')] : []
+    return { file: 'powershell.exe', args }
+  }
+  const file = process.env.SHELL || (isMac ? '/bin/zsh' : '/bin/bash')
+  return { file, args: command ? ['-l', '-c', `${command}; exec "${file}" -l`] : ['-l'] }
 }
 
 /** Snapshot of all processes as {pid, ppid, name}. Backend differs per OS. */

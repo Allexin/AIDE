@@ -224,7 +224,7 @@ export const qwenCodeTool: CliTool = {
     return `qwen --resume ${sessionId}`
   },
 
-  checkStartupHealth(accumulated: string, elapsedMs: number): 'ok' | 'dead' | 'pending' {
+  checkStartupHealth(accumulated: string): 'ok' | 'dead' | 'pending' {
     if (
       accumulated.includes('command not found') ||
       accumulated.includes('is not recognized') ||
@@ -236,7 +236,6 @@ export const qwenCodeTool: CliTool = {
     if (accumulated.includes('Qwen Code') || accumulated.includes('qwen-code')) {
       return 'ok'
     }
-    if (elapsedMs > 15000) return 'ok'
     return 'pending'
   },
 

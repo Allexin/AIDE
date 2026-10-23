@@ -268,9 +268,9 @@ export default function CommitDialog({ onClose }: Props): React.ReactElement {
     progressEndRef.current?.scrollIntoView({ behavior: 'auto' })
   }, [progressLines])
 
-  // Focus textarea after load
+  // Focus textarea after load — the effect runs after the commit that rendered it.
   useEffect(() => {
-    if (!loading && !isCommitting) setTimeout(() => messageRef.current?.focus(), 50)
+    if (!loading && !isCommitting) messageRef.current?.focus()
   }, [loading, isCommitting])
 
   // Update select-all indeterminate state

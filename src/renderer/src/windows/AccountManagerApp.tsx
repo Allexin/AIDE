@@ -104,7 +104,7 @@ export default function AccountManagerApp(): React.ReactElement {
   const handleLoad = async (accountId: string, autoSaveMode: 'check' | 'force' | 'skip' = 'check'): Promise<void> => {
     const result = await api().loadAccount(activeToolId, accountId, autoSaveMode)
     if (result === true) {
-      showToast('Account loaded — restart AIDE to apply')
+      showToast('Account loaded')
       refresh(activeToolId)
     } else if (result === false) {
       showToast('Failed to load account')
