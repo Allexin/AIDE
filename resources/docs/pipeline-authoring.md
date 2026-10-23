@@ -118,9 +118,13 @@ AIDE composes the prompt; you only write the role file and the step fields.
   feedback from an earlier pass is not mistaken for the current state. Agents
   therefore know they need not run checks that a check step runs (they may when
   their task asks for it), and not to stage or commit before the commit step.
-  This is why every agent step needs a good one-line `summary`. Steps with the
-  `implementerReport` output are also told to finish the whole task in the visit;
-  reviewers are not, whatever their permissions.
+  This is why every agent step needs a good one-line `summary`.
+
+  The pipeline context states **facts only** — the machine's structure, the
+  step's time limit, the run's state. It never tells an agent *how* to work:
+  "finish the whole task in this visit", "plan the increments", "never modify
+  files" belong in the role file (or the `task`), where you write them for that
+  step. AIDE does not know a step's purpose and would only guess it.
 - **Task and inputs**: `task` (may use `{{params.x}}`, `{{outputs.step.field}}`)
   and `inputs` — references rendered as sections: `params.x`,
   `outputs.<step>.<field>`, `run.diff` (working tree vs HEAD including
@@ -356,7 +360,11 @@ the project's conventions (read its CLAUDE.md / AGENTS.md first).
   information, a broken environment). The size of the task is not an obstacle:
   this step has no budget but its time limit, so plan the increments and
   implement all of them.
+- Finish the whole task in this visit. The loop around this step repeats only
+  to fix what later steps find; it is not a way to continue unfinished work.
 When you get feedback (failed checks or review findings), fix exactly that.
+If the pipeline itself is wrong (contradictory instructions, a missing tool or
+input), say so in "pipelineIssues" and carry on.
 ```
 
 `roles/code-reviewer.md`
@@ -368,6 +376,8 @@ against the task and its acceptance criteria.
   documentation updates, junk in the diff (build output, temporary files).
 - Non-blocking: style and improvements that can wait.
 Accept when there are no blocking findings. Never modify files.
+If the pipeline itself is wrong (contradictory instructions, a missing tool or
+input), say so in "pipelineIssues" and carry on.
 ```
 
 `roles/commit-prep.md`

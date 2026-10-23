@@ -710,7 +710,8 @@ overlay is shown.
    explicitly because `--ignore-user-config` drops them (reasoning summaries are
    not available in `codex exec` at all). The
    pipeline context states the step's real budget (its time limit) and no longer
-   invites "continue later"; `blocked` means a named external obstacle. Catching
+   invites "continue later" (the "finish now" advice moved to the roles, see
+   decision 10); `blocked` means a named external obstacle. Catching
    a premature `blocked` stays with the orchestrator — no auto-continue rule in
    the engine.
 9. **Holding, amending and limits** (deficiency report 2026-10-23) — a CLI
@@ -722,6 +723,12 @@ overlay is shown.
    `stop` still ends the run; holding is not answering. A gate rejected outside
    loops holds the run at the gate. No `pause` answer and no `mayRunChecks`:
    the context now says checks need not be run, not that they must not be.
+10. **The pipeline context states facts, roles state behaviour** — the generated
+   context describes the machine, the step's time limit and the run's state.
+   Advice on how to work ("finish everything in this visit", "plan the
+   increments") is not generated: AIDE cannot know a step's purpose, and
+   guessing it (from permissions, then from the output schema) misled
+   reviewers. It lives in the role files; the starter roles carry it.
 
 No open decisions remain; outstanding uncertainty is in the **[verify]** items,
 resolved by Phase 0.

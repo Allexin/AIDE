@@ -267,7 +267,7 @@ changed tool schemas.
 | Item | Status | What changed |
 |---|---|---|
 | A1 | done | Check commands take `{{params.x}}` / `{{outputs.step.field}}`, shell-quoted (cmd.exe on Windows refuses values with `"`, `%` or line breaks); a list param becomes several arguments. The validator allows only `params.*` / `outputs.*` there. |
-| A2 | done | "Plan the increments, then implement all of them" goes only to steps with the `implementerReport` output, whatever their permissions. |
+| A2 | done | AIDE no longer writes behaviour into the pipeline context at all — only facts (structure, time limit, run state). "Finish the whole task in this visit", "plan the increments, then implement all of them" and the `pipelineIssues` hint are gone from it. **Space Hospital must add them to its role files** (implementer: the first two; every role: the `pipelineIssues` line) before running the new release — see the starter roles in `pipeline-authoring.md` §8. |
 | A3 | done | The overview counts granted iterations, same as "Before you". |
 | A4 | done | "You need not run them … Run one yourself only when your task or a decision explicitly asks for it." No `mayRunChecks`. |
 | A5 | done | `pipeline_amend`: a running agent step is interrupted and continues at once in its own session with the instruction; every later step sees it in "Before you"; the report lists it. |
@@ -276,7 +276,7 @@ changed tool schemas.
 | A8 | done | Check feedback: exit code, full log path, failure lines from the whole log (`FAILED`, `panicked at`, `error[`, …), then the tail. |
 | A9 | done | `run.iteration` in an `if` is the loop around the `if` (it took the previous step's loop while descending). New `run.iterations.<loop id>`. |
 | A10 | not done | Allex decided against an auto-continue rule in the engine (2026-10-11): catching a premature `blocked` stays with the orchestrator. |
-| A11 | done | `pipelineIssues[]` in `implementerReport`, `reviewVerdict` and `commitPrep`; the context tells agents to use it; the report collects them from every visit. Roles that write "PIPELINE ISSUE:" into `non_blocking` or `excluded` should switch. Custom schemas can add the field. |
+| A11 | done | `pipelineIssues[]` in `implementerReport`, `reviewVerdict` and `commitPrep` (the schema describes it; roles should mention it); the report collects them from every visit. Roles that write "PIPELINE ISSUE:" into `non_blocking` or `excluded` should switch. Custom schemas can add the field. |
 | A12 | partly | A gate rejected outside loops now holds the run at the gate (resume asks again) instead of failing it. A run stopped while an escalation is open asks for the answer again on resume. No `pause` answer: not answering already holds a run, and the tool descriptions now say so. `stop` still ends the run. |
 | A13 | done | A CLI usage limit holds the run (`run_stopped`, `reason: "usage_limit"`, `resumeAt`), keeps the session, and resumes by itself at the reset time when the message names it (also after an AIDE restart). No retry loop; 403s are not treated as limits. |
 | A14 | done | A retry after an engine failure, a stop or an amendment continues the step's own session with "continue from where you stopped … do not redo it", without resending the task. |

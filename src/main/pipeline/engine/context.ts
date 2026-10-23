@@ -2,7 +2,6 @@ import type { AgentStep, MachineDefinition, Step } from '../../../shared/pipelin
 import type { LoopFeedback, RunState } from './types'
 import { parseCondition, renderTemplate, resolveRef, stringifyValue, type Scope } from './expressions'
 import { MachineTree, blockLimit, blockName, type LeafStep, type TreeBlock, type TreeNode } from './tree'
-import { resolveSchema } from './schema'
 
 /**
  * Prompt composition for agent steps (plan §3.1). Besides its role, every agent
@@ -126,18 +125,11 @@ export function buildPipelineContext(machine: MachineDefinition, current: string
   if (checks.length) lines.push(`- AIDE itself runs these checks later: ${checks.map((c) => `\`${c.command}\``).join(', ')}. You need not run them: if they fail, the failure output comes back to the steps that must fix it. Run one yourself only when your task or a decision explicitly asks for it.`)
   if (isCommitPrep) lines.push('- You prepare the commit (stage files, write the message); AIDE reviews it and commits. Do not commit yourself.')
   else if (commitLater) lines.push('- Staging and committing happen in a later step. Do not stage or commit.')
-  if (loops.length && leaf.step.type === 'agent') lines.push('- You are inside a loop. It exists so that problems a later step finds come back to be fixed — not to continue unfinished work. Finish your whole task in this visit.')
-
-  if (leaf.step.type === 'agent') {
-    const minutes = leaf.step.timeoutMin ?? machine.defaults?.timeoutMin ?? DEFAULT_TIMEOUT_MIN
-    lines.push(`- Your only limit in this step is time: ${minutes} minutes. There is no token or work budget beyond that, and large tasks are expected here.`)
-    // Only for implementing steps: reviewers often have write access for tools and scratch files.
-    if ((leaf.step.output ?? 'implementerReport') === 'implementerReport') lines.push('- For a large task, plan the increments, then implement all of them now.')
-    const schema = resolveSchema(leaf.step.output ?? 'implementerReport', machine.schemas)
-    if (schema && 'pipelineIssues' in ((schema.properties ?? {}) as Record<string, unknown>)) {
-      lines.push('- If the pipeline itself is wrong (its instructions contradict each other or your role, this context is wrong, a tool or input is missing), say so in "pipelineIssues", one line each, and carry on with your task. Do not put such notes in other fields.')
-    }
-  }
+  // Facts about the machine and the engine only. How an agent should work (finish
+  // everything now, plan increments, …) belongs in its role file: AIDE does not
+  // know a step's purpose and would have to guess it.
+  if (loops.length && leaf.step.type === 'agent') lines.push('- You are inside a loop: it starts over only when a later step reports a problem, and the steps then get that problem as feedback.')
+  if (leaf.step.type === 'agent') lines.push(`- Time limit of this step: ${leaf.step.timeoutMin ?? machine.defaults?.timeoutMin ?? DEFAULT_TIMEOUT_MIN} minutes.`)
 
   lines.push('', 'Before you:')
   const visit = state.visits[current] ?? 1
