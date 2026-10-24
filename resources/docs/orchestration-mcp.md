@@ -174,7 +174,7 @@ sees it. This replaces stop, abandon, edit and restart.
 | `pipeline_start` | Start a run: `{ machine, params, wait?, acceptOutdated? }` → run id (and with `wait`, its next event). A machine written for an older pipeline engine is refused with what changed since; review it with the user, raise its `engineVersion`, or pass `acceptOutdated: true` |
 | `pipeline_status` | Current step, loop iterations, visits per step, pending escalation, last events |
 | `pipeline_wait` | Block until the next event that needs you, the user typing (`user_input`), or a timeout |
-| `pipeline_answer` | Answer an escalation: `continue` (go on; approve a gate; leave an exhausted loop as it is), `retry` (run the step again; one more loop iteration), `reject` (gates), `stop` (ends the run) |
+| `pipeline_answer` | Answer an escalation: `continue` (go on; approve a gate; leave an exhausted loop as it is), `retry` (run the step again; one more loop iteration), `reject` (gates), `stop` (ends the run). `params` changes machine params for the rest of the run (e.g. the stage id after approving a split) |
 | `pipeline_amend` | Add an instruction to the run; a running agent step continues with it in its session |
 | `pipeline_reload` | The active run uses its edited machine file for the steps to come (paused, stopped or waiting runs). Role files are read at every visit and need no reload |
 | `pipeline_stop` | `pause` (after the current step), `stop` (now, resumable), `abandon` (lists the uncommitted files left) |

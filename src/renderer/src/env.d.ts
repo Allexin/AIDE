@@ -267,6 +267,7 @@ interface EditorAPI {
   pipelineControl: (action: 'pause' | 'stop' | 'resume' | 'abandon') => Promise<string | null>
   pipelineAnswer: (escalationId: string, action: 'continue' | 'retry' | 'reject' | 'stop', text: string) => Promise<string | null>
   pipelineGetTranscript: (runId: string, node: string, visit: number) => Promise<HistoryEntry[]>
+  pipelineGetAgentInput: (runId: string, node: string, visit: number) => Promise<import('../../shared/pipelineMachine').AgentInputRecord[]>
   pipelineGetCheckLog: (runId: string, node: string, visit: number) => Promise<string>
   pipelineGetReport: (runId: string) => Promise<Record<string, unknown> | null>
   onPipelineRunState: (cb: (snapshot: PipelineRunSnapshot) => void) => () => void

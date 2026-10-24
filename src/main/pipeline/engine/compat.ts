@@ -50,6 +50,18 @@ export const ENGINE_CHANGES: readonly EngineChange[] = [
       'Check every "if" condition that uses run.iteration.',
       'A check command that contains "{{" literally must be rewritten.'
     ]
+  },
+  {
+    version: 4,
+    changes: [
+      'Claude Code steps start without MCP servers: neither the servers of the user nor claude.ai connectors reach step agents (Codex steps already ran without the user config).',
+      'The context resolves an "if" whose condition uses only params and shows just the branch that runs (numbering, "Next in order" and the later checks follow it).',
+      'An input over 100,000 characters is saved to a file under the run directory; the prompt gets its path and a file list instead of the value.'
+    ],
+    actions: [
+      'A role that relied on an MCP tool in a Claude Code step must do without it.',
+      'Inputs that bring in noise (regenerated golden files in run.diff) can be filtered: {"ref": "run.diff", "exclude": ["<glob>"]}.'
+    ]
   }
 ]
 

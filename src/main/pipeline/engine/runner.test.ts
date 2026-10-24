@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { PipelineRun, type AgentRequest, type EngineDeps } from './runner'
@@ -18,7 +18,7 @@ const MACHINE: MachineDefinition = {
   id: 'content-and-code',
   name: 'Content and code',
   description: 'Generates content, then integrates it.',
-  engineVersion: 3,
+  engineVersion: 4,
   params: { taskSpec: { type: 'string' } },
   defaults: { cli: 'claude-code' },
   steps: [
@@ -558,6 +558,75 @@ describe('PipelineRun', () => {
     await no.run.run()
     expect(no.labels()).toEqual(['finish'])
     expect(no.state().history.map((v) => v.node)).toEqual(['quick', 'finish'])
+  })
+
+  it('the context shows only the if branch the params select', async () => {
+    const steps: Step[] = [
+      { type: 'agent', id: 'implement', summary: 'implements', role: 'r.md', output: 'implementerReport' },
+      { type: 'if', id: 'which', condition: 'params.milestone == true', then: [{ type: 'check', id: 'ciFull', command: 'ci --full' }], else: [{ type: 'check', id: 'ci', command: 'ci --quick' }] },
+      { type: 'if', id: 'late', condition: "outputs.implement.status == 'done'", then: [{ type: 'check', id: 'extra', command: 'extra' }] }
+    ]
+    const machine: MachineDefinition = { ...MACHINE, id: 'milestones', params: { milestone: { type: 'boolean' } }, steps }
+    const h = harness({ agent: () => done }, machine, { milestone: false })
+    await h.run.run()
+    const system = h.requests[0].systemAppend ?? ''
+    expect(system).toContain('milestone is false in this run, so:')
+    expect(system).toContain('2. ci [AIDE]')
+    expect(system).not.toContain('ciFull')
+    expect(system).toContain('Next in order: ci')
+    expect(system).toContain('`ci --quick`')
+    expect(system).not.toContain('ci --full')
+    expect(system).toContain('if status is "done":') // depends on an output: both shown as a condition
+  })
+
+  it('an answer can change params for the rest of the run; invalid params are refused', async () => {
+    const steps: Step[] = [
+      { type: 'gate', id: 'approveSpec', question: 'Approve the split?' },
+      { type: 'agent', id: 'commitPrep', summary: 'prepares', role: 'r.md', task: 'Prepare the commit of stage {{params.stageId}}.', output: 'implementerReport' }
+    ]
+    const machine: MachineDefinition = { ...MACHINE, id: 'split', params: { stageId: { type: 'string' } }, steps }
+    const h = harness({ agent: () => done }, machine, { stageId: 'S5.7' })
+    await h.run.run()
+    const id = h.run.pendingEscalation()!.id
+    expect(await h.run.answer(id, { action: 'continue', text: 'Part A only', by: 'orchestrator', params: { stageId: 5 } })).toContain('must be string')
+    expect(h.run.pendingEscalation()?.id).toBe(id)
+    await h.run.answer(id, { action: 'continue', text: 'Part A only', by: 'orchestrator', params: { stageId: 'S5.7a' } })
+    await waitFor(() => h.state().status === 'finished')
+    expect(h.requests[0].prompt).toContain('stage S5.7a')
+    expect(h.requests[0].systemAppend).toContain('Part A only (params changed for the rest of the run: stageId = "S5.7a")')
+    expect(h.store.load('run-1')!.params).toEqual({ stageId: 'S5.7a' })
+  })
+
+  it('keeps what each agent CLI invocation was sent', async () => {
+    const h = harness({ agent: (req, call) => call === 0 ? { structured: { wrong: true } } : happy(req) })
+    await h.run.run()
+    const inputs = h.store.readAgentInputs('run-1', 'generate', 1)
+    expect(inputs.map((i) => i.kind)).toEqual(['task', 'retry'])
+    expect(inputs[0]).toMatchObject({ cli: 'claude-code', permissions: 'write', resumeSessionId: null })
+    expect(inputs[0].prompt).toContain('Add feature X')
+    expect(inputs[0].systemAppend).toContain('ROLE roles/generator.md')
+    expect(inputs[1].resumeSessionId).toBe('session-1')
+  })
+
+  it('filters file inputs by globs and saves an oversized input to a file', async () => {
+    const big = 'x'.repeat(120_000)
+    const diff = [`diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n+${big}`, 'diff --git a/golden/one.txt b/golden/one.txt\n--- a/golden/one.txt\n+++ b/golden/one.txt\n+golden'].join('\n')
+    const steps: Step[] = [
+      { type: 'agent', id: 'review', summary: 'reviews', role: 'r.md', permissions: 'read-only', output: 'reviewVerdict', inputs: [{ ref: 'run.diff', exclude: ['golden/**'] }] }
+    ]
+    const machine: MachineDefinition = { ...MACHINE, id: 'filtered', steps }
+    const h = harness({ agent: () => accept }, machine)
+    const deps = (h.run as unknown as { deps: EngineDeps }).deps
+    deps.git.workingDiff = async () => diff
+    await h.run.run()
+    const prompt = h.requests[0].prompt
+    expect(prompt).toContain('Filtered by the machine (exclude golden/**): 1 of 2 files.')
+    expect(prompt).toContain('Too large for the prompt')
+    expect(prompt).toContain('- src/a.ts (+1 −0)')
+    expect(prompt).not.toContain('golden/one.txt')
+    expect(prompt.length).toBeLessThan(5000)
+    const saved = /saved it to `([^`]+)`/.exec(prompt)![1]
+    expect(readFileSync(saved, 'utf8')).toContain(big)
   })
 
   it('gates: approval goes on; rejection repeats the loop with the answer, or holds the run outside loops', async () => {

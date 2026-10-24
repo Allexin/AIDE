@@ -5,6 +5,7 @@ import type { ProcessHandle } from '../processRunner'
 import type { CommitResult, FileChange } from '../git'
 import { checkCommitCoverage } from '../git'
 import { clip, type PipelineEventType } from '../events'
+import { inputRef, type AgentInputRecord } from '../../../shared/pipelineMachine'
 import type { AgentStep, Amendment, CheckStep, CommitStep, Escalation, EscalationAnswer, LoopFeedback, MachineDefinition, NodeVisit, Outcome, RunState } from './types'
 import { evaluateCondition, renderCommand, stringifyValue, templateRefs, type Scope } from './expressions'
 import { resolveSchema, validateAgainstSchema, BUILTIN_SCHEMAS } from './schema'
@@ -13,6 +14,7 @@ import { MachineTree, blockLimit, type DescendContext, type TreeBlock, type Tree
 import type { RunStore, StoredMachine } from './runStore'
 import { compactReport } from './reportView'
 import { checkFailureLines, limitResetTime } from './failures'
+import { validateParams } from './library'
 
 /**
  * Deterministic executor of one pipeline run (plan §1, §3, §4).
@@ -296,6 +298,12 @@ export class PipelineRun {
     const escalation = this.state.escalations.find((e) => e.id === escalationId)
     if (!escalation) return `Unknown escalation ${escalationId}.`
     if (escalation.answer) return `Escalation ${escalationId} was already answered.`
+    if (answer.params && Object.keys(answer.params).length && answer.action !== 'stop') {
+      const errors = validateParams(this.machine.params, { ...this.params, ...answer.params })
+      if (errors.length) return `Invalid params:\n- ${errors.join('\n- ')}`
+      Object.assign(this.params, answer.params)
+      this.store.writeParams(this.runId, this.params)
+    }
     escalation.answer = { ...answer, at: new Date().toISOString() }
     const node = escalation.node
     if (answer.action === 'stop') {
@@ -552,13 +560,14 @@ export class PipelineRun {
     const schemaName = node.output ?? 'implementerReport'
     const schema = resolveSchema(schemaName, this.machine.schemas) ?? BUILTIN_SCHEMAS.implementerReport
 
-    const refs = [...(node.inputs ?? []), ...templateRefs(node.task ?? '')]
+    const refs = [...(node.inputs ?? []).map(inputRef), ...templateRefs(node.task ?? '')]
     const scope = this.scope(await this.runValues(refs))
-    const context = buildPipelineContext(this.machine, id, this.state)
+    const context = buildPipelineContext(this.machine, id, this.state, this.params)
     const roleText = this.deps.readRole(this.machineDir, node.role)
     const contract = outputContract(schemaName, schema)
     const systemAppend = buildSystemAppend(roleText, context, contract)
-    let prompt = buildTaskPrompt(node, scope, feedbackSections(this.machine, id, this.state))
+    const runDir = this.store.nodeRunDir(this.runId, id, visit.visit)
+    let prompt = buildTaskPrompt(node, scope, feedbackSections(this.machine, id, this.state), (name, text) => this.store.writeInputFile(this.runId, id, visit.visit, name, text))
 
     // keep (default): continue this step's own session from its previous visit.
     // continue:<step>: continue that step's session (then our own, once we have one).
@@ -595,8 +604,7 @@ export class PipelineRun {
     }
 
     const timeoutMs = (node.timeoutMin ?? this.machine.defaults?.timeoutMin ?? DEFAULT_TIMEOUT_MIN) * 60_000
-    const runDir = this.store.nodeRunDir(this.runId, id, visit.visit)
-    const attempt = (attemptPrompt: string, sessionId: string | undefined): HeadlessRun => this.deps.startAgent({
+    const attempt = (attemptPrompt: string, sessionId: string | undefined, kind: AgentInputRecord['kind']): HeadlessRun => this.startAgent(id, visit.visit, kind, {
       cli,
       cwd: this.state.projectPath,
       runDir,
@@ -616,7 +624,7 @@ export class PipelineRun {
       }
     })
 
-    let handle = attempt(prompt, resumeSessionId)
+    let handle = attempt(prompt, resumeSessionId, earlier?.sessionId ? 'continuation' : 'task')
     this.active = handle
     let result = await handle.result
     if (result.error?.code === 'cancelled' || this.interruptRequested) return { kind: 'interrupted' }
@@ -625,7 +633,7 @@ export class PipelineRun {
 
     let errors = validateAgainstSchema(result.structured, schema)
     if (errors.length > 0 && result.sessionId) {
-      handle = attempt(invalidOutputPrompt(errors), result.sessionId)
+      handle = attempt(invalidOutputPrompt(errors), result.sessionId, 'retry')
       this.active = handle
       result = await handle.result
       if (result.error?.code === 'cancelled' || this.interruptRequested) return { kind: 'interrupted' }
@@ -635,6 +643,22 @@ export class PipelineRun {
     }
     if (errors.length > 0) return { kind: 'escalate', message: `Output of "${id}" does not match "${schemaName}": ${errors.join('; ')}` }
     return { kind: 'done', outcome: 'ok', output: result.structured, sessionId: result.sessionId, costUsd: result.costUsd }
+  }
+
+  /** Start an agent CLI and keep what it was sent, for the run view. */
+  private startAgent(node: string, visit: number, kind: AgentInputRecord['kind'], options: AgentRequest): HeadlessRun {
+    this.store.appendAgentInput(this.runId, node, visit, {
+      at: new Date().toISOString(),
+      kind,
+      cli: options.cli,
+      model: options.model ?? null,
+      effort: options.effort ?? null,
+      permissions: options.permissions,
+      resumeSessionId: options.resumeSessionId ?? null,
+      prompt: options.prompt,
+      systemAppend: options.systemAppend ?? ''
+    })
+    return this.deps.startAgent(options)
   }
 
   private async runCheck(id: string, node: CheckStep, visit: NodeVisit): Promise<NodeResult> {
@@ -689,12 +713,12 @@ export class PipelineRun {
         `## Excluded files\n\n${excluded.length ? excluded.map((e) => `- ${e.path}: ${e.reason}`).join('\n') : '(none)'}`,
         `## Staged diff\n\n${stagedDiff}`
       ].join('\n\n')
-      const handle = this.deps.startAgent({
+      const handle = this.startAgent(id, visit.visit, 'review', {
         cli,
         cwd,
         runDir: this.store.nodeRunDir(this.runId, id, visit.visit),
         prompt,
-        systemAppend: buildSystemAppend(this.deps.readRole(this.machineDir, reviewer.role), buildPipelineContext(this.machine, id, this.state), outputContract('commitReview', BUILTIN_SCHEMAS.commitReview)),
+        systemAppend: buildSystemAppend(this.deps.readRole(this.machineDir, reviewer.role), buildPipelineContext(this.machine, id, this.state, this.params), outputContract('commitReview', BUILTIN_SCHEMAS.commitReview)),
         permissions: 'read-only',
         outputSchema: BUILTIN_SCHEMAS.commitReview,
         model: reviewer.model ?? this.machine.defaults?.model,

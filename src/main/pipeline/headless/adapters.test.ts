@@ -43,6 +43,7 @@ describe('claude headless adapter', () => {
     const fresh = buildClaudeArgs({ ...options([]), permissions: 'read-only', outputSchema: schema }, 'sid-1', '/tmp/append.md')
     expect(fresh).toEqual(expect.arrayContaining(['-p', '--output-format', 'stream-json', '--verbose', '--session-id', 'sid-1', '--append-system-prompt-file', '/tmp/append.md', '--json-schema', '--permission-mode', 'dontAsk']))
     expect(fresh).not.toContain('--resume')
+    expect(fresh).toEqual(expect.arrayContaining(['--strict-mcp-config', '--add-dir']))
     const resumed = buildClaudeArgs({ ...options([]), resumeSessionId: 'sid-9' }, 'ignored', null)
     expect(resumed).toEqual(expect.arrayContaining(['--resume', 'sid-9', '--permission-mode', 'bypassPermissions']))
     expect(resumed).not.toContain('--session-id')

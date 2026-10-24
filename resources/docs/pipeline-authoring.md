@@ -111,6 +111,13 @@ and the tail of the output.
   repeat); resuming asks again.
 - Answers with text are shown to every later agent of the run, and so are
   instructions the orchestrator adds while the run goes (`pipeline_amend`).
+- An answer can change params for the rest of the run (`pipeline_answer` with
+  `params`, validated against the machine's params). Example: a spec proposes a
+  split, the gate approves part A and sets `{"stageId": "S5.7a"}`; later tasks,
+  inputs and conditions use the new value. To reach the orchestrator on a split
+  as well as on a design question, let the spec schema report one field the
+  gate condition tests (e.g. `"gate": "none" | "decision" | "split"` with
+  `outputs.specify.gate != 'none'`): conditions compare one reference.
 - A CLI usage limit is not a failure: the run holds, keeps the step's session,
   and resumes by itself when the limit resets (if the CLI says when).
 
@@ -126,7 +133,9 @@ AIDE composes the prompt; you only write the role file and the step fields.
   feedback from an earlier pass is not mistaken for the current state. Agents
   therefore know they need not run checks that a check step runs (they may when
   their task asks for it), and not to stage or commit before the commit step.
-  This is why every agent step needs a good one-line `summary`.
+  This is why every agent step needs a good one-line `summary`. An `if` whose
+  condition uses only params is resolved: the agent sees just the branch that
+  runs. Conditions on outputs are shown as conditions.
 
   The pipeline context states **facts only** — the machine's structure, the
   step's time limit, the run's state. It never tells an agent *how* to work:
@@ -137,6 +146,20 @@ AIDE composes the prompt; you only write the role file and the step fields.
   and `inputs` — references rendered as sections: `params.x`,
   `outputs.<step>.<field>`, `run.diff` (working tree vs HEAD including
   untracked files), `run.stagedDiff`, `run.changedFiles`.
+  - The `run.*` file refs take path filters, so regenerated or generated files
+    do not drown a reviewer: `{"ref": "run.diff", "exclude":
+    ["Source/Scenarios/**/*.txt"]}` or `"include": ["src/**"]`. Globs match
+    repo-relative paths: `*` and `?` within a segment, `**` across segments,
+    `{a,b}` alternatives, a trailing `/` for a whole directory; a pattern
+    without `/` matches a file name at any depth. The prompt says how many
+    files the filter kept.
+  - An input over 100,000 characters is not put into the prompt: AIDE saves it
+    to `nodes/<step>-<visit>/inputs/` in the run directory and the prompt gets
+    the path and the file list (with added/removed line counts for diffs). The
+    agent reads it with its file tools (read-only Claude steps may read the
+    run directory).
+  - An agent with a shell still sees every file through `git status`; filter
+    the inputs and say in the role which files are generated.
 - **Feedback** of the loops it is in, from the second iteration on (§2).
 - **Output contract**: the schema named by `output`. Built-ins:
   - `implementerReport`: `status` (`done` | `blocked` | `plan_wrong`), `summary`, `docsChanged`, `pipelineIssues[]`
@@ -164,6 +187,15 @@ AIDE composes the prompt; you only write the role file and the step fields.
   continues the implementer, so it knows which files belong to the change.
 
 `permissions: "read-only"` for reviewers.
+
+**MCP servers**: step agents start without any. Claude Code steps get neither
+the user's MCP servers nor claude.ai connectors (their tools and server
+instructions contradicted roles); Codex steps run without the user config.
+
+**What an agent was sent** is kept per visit (`nodes/<step>-<visit>.input.jsonl`:
+the message and the system prompt append of every CLI invocation, including
+retries and continuations). The run view in AIDE shows it on the step's
+**Input** tab — the first place to look when an agent did something odd.
 
 **Model and effort** (`model`, `effort` on a step, or in `defaults`; `effort` and
 `model` also on a commit `reviewer`). Effort levels: Claude Code `low`, `medium`,
@@ -206,7 +238,7 @@ rows.
   "id": "code-feature",
   "name": "Code feature",
   "description": "Implements one plan stage that is pure code. Needs the stage spec and acceptance criteria. Produces one reviewed commit.",
-  "engineVersion": 3,
+  "engineVersion": 4,
   "params": {
     "taskSpec": { "type": "string", "description": "What to implement, or a path to the spec section" },
     "acceptance": { "type": "string[]", "description": "Acceptance criteria" }
@@ -266,7 +298,7 @@ an outer loop and return to it with a `repeat` step:
   "id": "location-content",
   "name": "Location content",
   "description": "Generates the assets of a game location and integrates them. Needs the location brief. Produces one commit.",
-  "engineVersion": 3,
+  "engineVersion": 4,
   "params": { "brief": { "type": "string", "description": "The location brief or a path to it" } },
   "defaults": { "cli": "claude-code" },
   "schemas": {

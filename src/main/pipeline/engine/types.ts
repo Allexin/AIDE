@@ -52,6 +52,8 @@ export interface EscalationAnswer {
   text: string
   by: 'user' | 'orchestrator'
   at: string
+  /** Params changed by this answer for the rest of the run (e.g. the stage id after a split). */
+  params?: Record<string, unknown>
 }
 
 export interface Amendment {

@@ -184,6 +184,7 @@ export interface EditorAPI {
   pipelineControl: (action: 'pause' | 'stop' | 'resume' | 'abandon') => Promise<string | null>
   pipelineAnswer: (escalationId: string, action: 'continue' | 'retry' | 'reject' | 'stop', text: string) => Promise<string | null>
   pipelineGetTranscript: (runId: string, node: string, visit: number) => Promise<unknown[]>
+  pipelineGetAgentInput: (runId: string, node: string, visit: number) => Promise<unknown[]>
   pipelineGetCheckLog: (runId: string, node: string, visit: number) => Promise<string>
   pipelineGetReport: (runId: string) => Promise<unknown>
   onPipelineRunState: (cb: (snapshot: unknown) => void) => () => void
@@ -457,6 +458,7 @@ const editorApi: EditorAPI = {
   pipelineControl: (action) => ipcRenderer.invoke('pipeline:control', action),
   pipelineAnswer: (escalationId, action, text) => ipcRenderer.invoke('pipeline:answer', escalationId, action, text),
   pipelineGetTranscript: (runId, node, visit) => ipcRenderer.invoke('pipeline:get-transcript', runId, node, visit),
+  pipelineGetAgentInput: (runId, node, visit) => ipcRenderer.invoke('pipeline:get-agent-input', runId, node, visit),
   pipelineGetCheckLog: (runId, node, visit) => ipcRenderer.invoke('pipeline:get-check-log', runId, node, visit),
   pipelineGetReport: (runId) => ipcRenderer.invoke('pipeline:get-report', runId),
   onPipelineRunState: (cb: (snapshot: unknown) => void): (() => void) => {

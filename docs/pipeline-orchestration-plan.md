@@ -361,7 +361,9 @@ first an overlay over the editor area, which left it too narrow to read.)
   failed / interrupted / escalated) and per-visit chips. Elapsed time per step
   and total; token/cost figures where the CLI reports them.
 - **Transcript pane** — live `TranscriptView` of the active agent step. Clicking
-  any completed step shows its transcript, its structured output (verdict,
+  any completed step shows its transcript, what its agent was sent (the
+  **Input** tab: message and system prompt append of every CLI invocation,
+  from `nodes/<node>-<visit>.input.jsonl`), its structured output (verdict,
   findings) and, for `check` steps, the command log.
 - **Escalation panel** — pending question with an answer box; the same
   escalation is also delivered to the orchestrator; whoever answers first wins.
@@ -670,6 +672,8 @@ without spending tokens. **Decided** (§8).
   state.json          # current node, visit counters, outputs, checkpoints, status
   events.jsonl        # append-only; source for the event feed and for recovery
   nodes/<nodeId>-<visit>.jsonl   # normalized transcript per agent node visit
+  nodes/<nodeId>-<visit>.input.jsonl  # what the agent was sent, per CLI invocation
+  nodes/<nodeId>-<visit>/inputs/ # inputs too large for the prompt
   checks/<nodeId>-<visit>.log
   report.json
 ```
@@ -743,6 +747,16 @@ overlay is shown.
    with the history. A machine without the field counts as older than
    engine 1. Refusing rather than warning: a warning arrives with a run that
    is already going wrong.
+12. **Agent inputs are bounded and isolated** (engine 4) — the `run.*` file
+   inputs take include/exclude globs; an input over 100,000 characters goes to
+   a file in the run directory and the prompt gets its path and file list,
+   instead of a prompt the CLI refuses. Step agents start without MCP servers
+   (Claude Code: `--strict-mcp-config`, claude.ai connectors off), because
+   foreign server instructions contradicted roles. An `if` on params only is
+   resolved in the context. An escalation answer may change params for the
+   rest of the run (a split stage gets its own id). A commit counts as made
+   when HEAD moved onto the old HEAD, whatever git printed (an auto gc after
+   the commit once outlasted the timeout); commits run with `gc.auto=0`.
 
 No open decisions remain; outstanding uncertainty is in the **[verify]** items,
 resolved by Phase 0.

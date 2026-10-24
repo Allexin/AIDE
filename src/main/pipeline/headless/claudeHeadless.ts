@@ -22,7 +22,11 @@ const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob', 'Bash(git diff:*)', 'Bash(git s
 const WRITE_TOOLS = ['Edit', 'Write', 'NotebookEdit']
 
 export function buildClaudeArgs(options: HeadlessRunOptions, sessionId: string, systemAppendFile: string | null): string[] {
-  const args = ['-p', '--output-format', 'stream-json', '--verbose']
+  // No MCP servers: the user's servers and claude.ai connectors bring tools and
+  // server instructions that contradict the role (a docs connector told a spec
+  // writer to create a web document first). The run dir is readable for inputs
+  // AIDE saved there because they were too large for the prompt.
+  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--add-dir', options.runDir]
   if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
   else args.push('--session-id', sessionId)
   if (options.model) args.push('--model', options.model)
@@ -57,7 +61,8 @@ export const claudeHeadless: HeadlessCapability = {
       command: executable.command,
       args: [...(executable.args ?? []), ...buildClaudeArgs(options, sessionId, systemAppendFile)],
       cwd: options.cwd,
-      env: options.env,
+      // claude.ai connectors are not covered by --strict-mcp-config in every version.
+      env: { ...(options.env ?? process.env), ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
       stdin: options.prompt,
       timeoutMs: options.timeoutMs,
       label: options.label,

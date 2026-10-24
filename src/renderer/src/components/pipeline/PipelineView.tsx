@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react'
 import { isRunActive, liveKey, usePipelineStore, type VisitRef } from '../../store/usePipelineStore'
 import { TranscriptView } from '../history/TranscriptView'
-import { blockTitle, walkSteps, type Step } from '../../../../shared/pipelineMachine'
+import { blockTitle, walkSteps, type AgentInputRecord, type Step } from '../../../../shared/pipelineMachine'
 import { AccountLabel, UsageLabel, useAccountUsage } from '../cli/AccountUsage'
 
 /**
  * Pipeline run view (plan §4.1), shown as a tab of the terminal panel next to
  * the CLI session tabs: the machine's step tree with step states, the transcript
- * or log of any visit, run controls, escalation answers and the final report.
+ * or log of any visit and what its agent was sent, run controls, escalation
+ * answers and the final report.
  * The tab can be closed only after the run ended.
  */
 
@@ -278,6 +279,8 @@ function VisitDetail({ run, visit }: { run: PipelineRunSnapshot; visit: VisitRef
   const record = state.history.filter((h) => h.node === visit.node && h.visit === visit.visit).slice(-1)[0]
   const running = !record?.finishedAt && state.current === visit.node && isRunActive(state.status)
   const output = state.outputs[visit.node]
+  const hasAgent = node?.type === 'agent' || (node?.type === 'commit' && node.review === 'agent')
+  const [pane, setPane] = useState<'transcript' | 'input'>('transcript')
   return <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
     <div style={{ padding: '6px 12px', borderBottom: '1px solid #2d2d2d', fontSize: 12, display: 'flex', gap: 10, alignItems: 'baseline' }}>
       <span style={{ fontWeight: 600, color: '#e0e0e0' }}>{visit.node}</span>
@@ -287,10 +290,17 @@ function VisitDetail({ run, visit }: { run: PipelineRunSnapshot; visit: VisitRef
       {record && <span style={{ color: '#666' }}>{elapsed(record.startedAt, record.finishedAt)}</span>}
       {record?.costUsd ? <span style={{ color: '#666' }}>${record.costUsd.toFixed(3)}</span> : null}
       {node?.type === 'agent' && <span style={{ color: '#666' }}>{node.cli ?? machine.defaults?.cli}</span>}
+      {hasAgent && <span style={{ marginLeft: 'auto', display: 'flex', gap: 2 }}>
+        {(['transcript', 'input'] as const).map((p) => <span key={p} onClick={() => setPane(p)}
+          title={p === 'input' ? 'What the agent was sent: the task message and the system prompt append' : 'What the agent did'}
+          style={{ padding: '1px 8px', borderRadius: 3, cursor: 'pointer', color: pane === p ? '#e0e0e0' : '#888', background: pane === p ? '#37373d' : 'transparent' }}>
+          {p === 'input' ? 'Input' : 'Transcript'}
+        </span>)}
+      </span>}
     </div>
     {record?.error && <div style={{ padding: '6px 12px', fontSize: 12, color: '#f48771', whiteSpace: 'pre-wrap' }}>{record.error}</div>}
-    {node?.type === 'agent' || (node?.type === 'commit' && node.review === 'agent')
-      ? <AgentTranscript runId={state.runId} visit={visit} running={running} />
+    {hasAgent
+      ? pane === 'input' ? <AgentInputView runId={state.runId} visit={visit} running={running} /> : <AgentTranscript runId={state.runId} visit={visit} running={running} />
       : node?.type === 'check'
         ? <CheckLog runId={state.runId} visit={visit} running={running} />
         : <pre style={PRE}>{output === undefined ? '(no output)' : JSON.stringify(output, null, 2)}</pre>}
@@ -311,6 +321,40 @@ function AgentTranscript({ runId, visit, running }: { runId: string; visit: Visi
   // Stored entries are complete once the visit ended; while it runs, live entries are newer.
   const entries = running && live && live.length > (stored?.length ?? 0) ? live : stored ?? live ?? []
   return <TranscriptView entries={entries} toolName="Agent" loading={stored === null && !live} resetKey={`${runId}:${visit.node}:${visit.visit}`} />
+}
+
+const INPUT_KIND: Record<AgentInputRecord['kind'], string> = {
+  task: 'task', retry: 'invalid output sent back', continuation: 'continuation of an interrupted attempt', review: 'commit review'
+}
+
+/** Every message the visit's agent CLI was sent, with the system prompt append. */
+function AgentInputView({ runId, visit, running }: { runId: string; visit: VisitRef; running: boolean }): React.ReactElement {
+  const [records, setRecords] = useState<AgentInputRecord[] | null>(null)
+  useEffect(() => {
+    let alive = true
+    setRecords(null)
+    void window.editorApi.pipelineGetAgentInput(runId, visit.node, visit.visit).then((r) => { if (alive) setRecords(r) })
+    return () => { alive = false }
+  }, [runId, visit.node, visit.visit, running])
+  if (records === null) return <pre style={PRE}>Loading…</pre>
+  if (records.length === 0) return <pre style={PRE}>(not recorded — runs before AIDE kept agent inputs)</pre>
+  return <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '4px 0' }}>
+    {records.map((r, i) => <div key={i} style={{ borderBottom: '1px solid #2d2d2d', padding: '6px 12px' }}>
+      <div style={{ fontSize: 12, display: 'flex', flexWrap: 'wrap', gap: 10, color: '#888' }}>
+        <span style={{ color: '#e0e0e0', fontWeight: 600 }}>#{i + 1} {INPUT_KIND[r.kind]}</span>
+        <span>{new Date(r.at).toLocaleTimeString()}</span>
+        <span>{[r.cli, r.model, r.effort].filter(Boolean).join(' · ')}</span>
+        <span>{r.permissions}</span>
+        <span title={r.resumeSessionId ?? undefined}>{r.resumeSessionId ? 'continues the session' : 'new session'}</span>
+      </div>
+      <div style={{ fontSize: 11, color: '#888', textTransform: 'uppercase', letterSpacing: 1, marginTop: 6 }}>Message</div>
+      <pre style={{ ...PRE, padding: '4px 0', overflow: 'visible' }}>{r.prompt}</pre>
+      {r.systemAppend && <details style={{ fontSize: 12 }}>
+        <summary style={{ cursor: 'pointer', color: '#888' }}>System prompt append ({r.systemAppend.length.toLocaleString('en-US')} characters): role, pipeline context, output contract</summary>
+        <pre style={{ ...PRE, padding: '4px 0', overflow: 'visible' }}>{r.systemAppend}</pre>
+      </details>}
+    </div>)}
+  </div>
 }
 
 function CheckLog({ runId, visit, running }: { runId: string; visit: VisitRef; running: boolean }): React.ReactElement {

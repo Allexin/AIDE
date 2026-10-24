@@ -9,15 +9,17 @@ import { join, resolve } from 'path'
  */
 
 const GIT_TIMEOUT_MS = 15_000
+/** Commit hooks (formatters, linters) can take minutes. */
+const COMMIT_TIMEOUT_MS = 10 * 60_000
 const MAX_BUFFER = 64 * 1024 * 1024
 /** Untracked files larger than this are listed in the diff without content. */
 const MAX_UNTRACKED_DIFF_BYTES = 256 * 1024
 
 interface GitResult { code: number; stdout: string; stderr: string }
 
-export function git(cwd: string, args: string[], stdin?: string, env?: NodeJS.ProcessEnv): Promise<GitResult> {
+export function git(cwd: string, args: string[], stdin?: string, env?: NodeJS.ProcessEnv, timeoutMs = GIT_TIMEOUT_MS): Promise<GitResult> {
   return new Promise((resolve) => {
-    const child = execFile('git', ['-c', 'core.quotepath=off', ...args], { cwd, env, timeout: GIT_TIMEOUT_MS, maxBuffer: MAX_BUFFER, windowsHide: true, encoding: 'utf8' }, (err, stdout, stderr) => {
+    const child = execFile('git', ['-c', 'core.quotepath=off', ...args], { cwd, env, timeout: timeoutMs, maxBuffer: MAX_BUFFER, windowsHide: true, encoding: 'utf8' }, (err, stdout, stderr) => {
       // execFile reports the exit status as a numeric `code`; spawn failures carry a string code.
       const exit = (err as { code?: unknown } | null)?.code
       const code = !err ? 0 : typeof exit === 'number' ? exit : 1
@@ -201,10 +203,28 @@ export interface CommitResult {
   message: string
 }
 
-/** Commit exactly the current index with the given message. Hooks run as usual. */
+/**
+ * Commit exactly the current index with the given message. Hooks run as usual.
+ *
+ * Success is decided by HEAD, not by the exit code alone: an auto gc after the
+ * commit once outlasted the git timeout, so the commit was made but reported as
+ * failed ("Auto packing the repository…"), and the retry found nothing staged.
+ * Auto gc is off for this command (the user's next git command packs instead),
+ * the timeout leaves room for hooks, and a new HEAD on top of the old one counts
+ * as a commit whatever happened after it.
+ */
 export async function commitIndex(cwd: string, message: string): Promise<CommitResult> {
   const files = (await gitOk(cwd, ['diff', '--cached', '--name-only', '-z'])).split('\0').filter(Boolean)
-  await gitOk(cwd, ['commit', '-F', '-'], message)
-  const sha = (await headSha(cwd)) ?? ''
-  return { sha, files, message }
+  const before = await headSha(cwd)
+  const result = await git(cwd, ['-c', 'gc.auto=0', 'commit', '-F', '-'], message, undefined, COMMIT_TIMEOUT_MS)
+  const after = await headSha(cwd)
+  if (result.code !== 0 && !(after && after !== before && (await parentSha(cwd, after)) === before)) {
+    throw new Error(`git commit -F - failed: ${(result.stderr || result.stdout).trim() || `exit code ${result.code}`}`)
+  }
+  return { sha: after ?? '', files, message }
+}
+
+async function parentSha(cwd: string, sha: string): Promise<string | null> {
+  const result = await git(cwd, ['rev-parse', '--verify', '--quiet', `${sha}^`])
+  return result.code === 0 ? result.stdout.trim() : null
 }

@@ -55,8 +55,12 @@ export interface AgentStep extends StepBase {
   session?: string
   /** Task text; may reference `{{params.x}}` / `{{outputs.step.field}}`. */
   task?: string
-  /** References included in the prompt: `params.x`, `outputs.step.field`, `run.diff`, `run.stagedDiff`, `run.changedFiles`. */
-  inputs?: string[]
+  /**
+   * References included in the prompt: `params.x`, `outputs.step.field`, `run.diff`,
+   * `run.stagedDiff`, `run.changedFiles`. The `run.*` file refs accept path filters:
+   * `{ "ref": "run.diff", "exclude": ["Source/Scenarios/**\/*.txt"] }`.
+   */
+  inputs?: Array<string | AgentInput>
   /** Name of a schema in `schemas` or a built-in (implementerReport, reviewVerdict, commitPrep, commitReview). */
   output?: string
   timeoutMin?: number
@@ -68,6 +72,36 @@ export interface AgentStep extends StepBase {
   escalateIf?: string
   escalateMessage?: string
   escalateTo?: 'user' | 'orchestrator'
+}
+
+/** An input with a path filter; filters apply to `run.diff`, `run.stagedDiff` and `run.changedFiles`. */
+export interface AgentInput {
+  ref: string
+  /** Globs over repo-relative paths: only matching files are kept. */
+  include?: string[]
+  /** Globs over repo-relative paths: matching files are dropped. */
+  exclude?: string[]
+}
+
+export function inputRef(input: string | AgentInput): string {
+  return typeof input === 'string' ? input : input.ref
+}
+
+/** What an agent CLI was sent, one record per invocation (kept per visit for the run view). */
+export interface AgentInputRecord {
+  at: string
+  /** task: the step's prompt; retry: invalid output sent back; continuation: an earlier attempt resumed; review: the commit reviewer. */
+  kind: 'task' | 'retry' | 'continuation' | 'review'
+  cli: string
+  model: string | null
+  effort: string | null
+  permissions: 'read-only' | 'write'
+  /** The CLI session continued, or null for a fresh one. */
+  resumeSessionId: string | null
+  /** The user message. */
+  prompt: string
+  /** Role, pipeline context and output contract, appended to the CLI's system prompt. */
+  systemAppend: string
 }
 
 export interface CheckStep extends StepBase {

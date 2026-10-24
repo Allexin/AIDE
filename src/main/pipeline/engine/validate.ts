@@ -1,5 +1,6 @@
 import { STEP_TYPES, walkSteps, type AgentStep, type MachineDefinition, type Step } from '../../../shared/pipelineMachine'
 import { parseCondition, templateRefs } from './expressions'
+import { FILE_REFS } from './inputs'
 import { resolveSchema, strictSchemaProblems } from './schema'
 import { MachineTree, type TreeNode } from './tree'
 import { ENGINE_VERSION, outdatedMachine } from './compat'
@@ -195,7 +196,17 @@ function validateAgent(step: AgentStep, tree: MachineTree, node: TreeNode, machi
       if (node.kind === 'leaf' && target.order >= node.order) err(`${label}: "continue:${target.id}" must name a step that runs earlier.`)
     }
   }
-  for (const ref of step.inputs ?? []) validateRef(ref, machine, tree, node, `${label} input`, err, warnings)
+  for (const input of step.inputs ?? []) {
+    if (typeof input === 'string') { validateRef(input, machine, tree, node, `${label} input`, err, warnings); continue }
+    if (!input || typeof input !== 'object' || typeof input.ref !== 'string') { err(`${label}: an input must be a reference string or { "ref", "include"?, "exclude"? }.`); continue }
+    validateRef(input.ref, machine, tree, node, `${label} input`, err, warnings)
+    for (const key of ['include', 'exclude'] as const) {
+      const globs = input[key]
+      if (globs === undefined) continue
+      if (!FILE_REFS.has(input.ref)) err(`${label} input "${input.ref}": "${key}" filters only ${[...FILE_REFS].join(', ')}.`)
+      else if (!Array.isArray(globs) || !globs.every((g) => typeof g === 'string' && g.trim())) err(`${label} input "${input.ref}": "${key}" must be a list of globs.`)
+    }
+  }
   for (const ref of templateRefs(step.task ?? '')) validateRef(ref, machine, tree, node, `${label} task`, err, warnings)
 }
 

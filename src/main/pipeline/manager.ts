@@ -6,6 +6,7 @@ import { loadLibrary, readRole, roleExists, validateParams, type LibraryEntry } 
 import { validateMachine, type ValidationResult } from './engine/validate'
 import { outdatedMessage } from './engine/compat'
 import type { EscalationAnswer, MachineDefinition, RunState } from './engine/types'
+import type { AgentInputRecord } from '../../shared/pipelineMachine'
 import { pipelineEvents, type PipelineEventType } from './events'
 
 /**
@@ -280,6 +281,10 @@ export class PipelineManager extends EventEmitter {
 
   transcript(projectPath: string, runId: string, node: string, visit: number): HistoryEntry[] {
     return this.store(projectPath).readTranscript(runId, node, visit)
+  }
+
+  agentInputs(projectPath: string, runId: string, node: string, visit: number): AgentInputRecord[] {
+    return this.store(projectPath).readAgentInputs(runId, node, visit)
   }
 
   checkLog(projectPath: string, runId: string, node: string, visit: number): string {

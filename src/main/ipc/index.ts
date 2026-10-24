@@ -474,6 +474,10 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const projectPath = projectOf(event.sender)
     return projectPath ? pipelineManager.transcript(projectPath, runId, node, visit) : []
   })
+  ipcMain.handle('pipeline:get-agent-input', (event, runId: string, node: string, visit: number) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? pipelineManager.agentInputs(projectPath, runId, node, visit) : []
+  })
   ipcMain.handle('pipeline:get-check-log', (event, runId: string, node: string, visit: number) => {
     const projectPath = projectOf(event.sender)
     return projectPath ? pipelineManager.checkLog(projectPath, runId, node, visit) : ''

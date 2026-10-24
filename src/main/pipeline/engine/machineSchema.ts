@@ -22,7 +22,25 @@ const AGENT = {
     permissions: { enum: ['read-only', 'write'], description: 'Default write. Reviewers: read-only.' },
     session: { type: 'string', description: '"keep" (default: each visit continues this step\'s own session), "new" (fresh every visit), or "continue:<earlier agent step>".' },
     task: { type: 'string', description: 'Task text; may use {{params.x}} and {{outputs.step.field}}.' },
-    inputs: { type: 'array', items: { type: 'string' }, description: 'References rendered into the prompt: params.x, outputs.<step>.<field>, run.diff, run.stagedDiff, run.changedFiles.' },
+    inputs: {
+      type: 'array',
+      items: {
+        oneOf: [
+          { type: 'string' },
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['ref'],
+            properties: {
+              ref: { type: 'string' },
+              include: { type: 'array', items: { type: 'string' }, description: 'Globs over repo-relative paths; only matching files are kept.' },
+              exclude: { type: 'array', items: { type: 'string' }, description: 'Globs over repo-relative paths; matching files are dropped.' }
+            }
+          }
+        ]
+      },
+      description: 'References rendered into the prompt: params.x, outputs.<step>.<field>, run.diff, run.stagedDiff, run.changedFiles. The run.* file refs take path filters as { "ref": "run.diff", "exclude": ["Source/Scenarios/**/*.txt"] } (* within a segment, ** across, {a,b}; a pattern without / matches a file name anywhere). An input over 100,000 characters is saved to a file under the run directory and the prompt gets its path and a file list.'
+    },
     output: { type: 'string', description: 'Output schema: a name from "schemas" or a built-in (implementerReport, reviewVerdict, commitPrep, commitReview).' },
     timeoutMin: { type: 'number' },
     repeatIf: { ...CONDITION, description: `Inside a loop: when true, the loop starts its next iteration with this step's output as feedback. ${CONDITION.description}` },

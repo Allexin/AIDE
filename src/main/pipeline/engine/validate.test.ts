@@ -34,6 +34,14 @@ describe('validateMachine', () => {
     expect(text).toMatch(/invalid "id" \("bad id"\)/)
   })
 
+  it('accepts path filters on the run.* file inputs only', () => {
+    expect(errorsOf(machine([agent('a', { inputs: [{ ref: 'run.diff', exclude: ['golden/**'] }, { ref: 'run.changedFiles', include: ['src/**'] }] })]))).toBe('')
+    const text = errorsOf(machine([agent('a', { inputs: [{ ref: 'outputs.a.summary', exclude: ['x'] }, { ref: 'run.diff', include: 'src/**' }, { exclude: ['x'] }] })]))
+    expect(text).toMatch(/"exclude" filters only run.diff/)
+    expect(text).toMatch(/"include" must be a list of globs/)
+    expect(text).toMatch(/an input must be a reference string/)
+  })
+
   it('checks the refs of check commands: params and outputs only', () => {
     const text = errorsOf(machine([
       agent('a'),

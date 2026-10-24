@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { HistoryEntry } from '../../pty/cliTools/types'
+import type { AgentInputRecord } from '../../../shared/pipelineMachine'
 import type { MachineDefinition, RunState } from './types'
 
 /**
@@ -13,6 +14,7 @@ import type { MachineDefinition, RunState } from './types'
  *   events.jsonl      append-only event log
  *   nodes/<node>-<visit>/        run dir handed to the agent CLI (schema, last message)
  *   nodes/<node>-<visit>.jsonl   normalized transcript of that visit
+ *   nodes/<node>-<visit>.input.jsonl  what the agent was sent, per CLI invocation
  *   outputs/<node>-<visit>.json  output of that visit (agent JSON, check exit code + log tail, commit result)
  *   checks/<node>-<visit>.log    output of a check node
  *   report.json
@@ -38,6 +40,11 @@ export class RunStore {
     writeFileSync(join(dir, 'machine.json'), JSON.stringify(stored, null, 2), 'utf8')
     writeFileSync(join(dir, 'params.json'), JSON.stringify(params, null, 2), 'utf8')
     this.saveState(state)
+  }
+
+  /** Params changed by an escalation answer. */
+  writeParams(runId: string, params: Record<string, unknown>): void {
+    writeFileSync(join(this.dir(runId), 'params.json'), JSON.stringify(params, null, 2), 'utf8')
   }
 
   /** Replace the machine snapshot (`pipeline_reload`). */
@@ -71,6 +78,28 @@ export class RunStore {
     const dir = join(this.dir(runId), 'nodes', `${node}-${visit}`)
     mkdirSync(dir, { recursive: true })
     return dir
+  }
+
+  /** An input too large for the prompt, saved for the agent to read; returns its path. */
+  writeInputFile(runId: string, node: string, visit: number, name: string, text: string): string {
+    const dir = join(this.nodeRunDir(runId, node, visit), 'inputs')
+    mkdirSync(dir, { recursive: true })
+    const path = join(dir, `${name}.txt`)
+    writeFileSync(path, text, 'utf8')
+    return path
+  }
+
+  /** What an agent was sent, one record per CLI invocation of the visit. */
+  appendAgentInput(runId: string, node: string, visit: number, input: AgentInputRecord): void {
+    appendFileSync(join(this.dir(runId), 'nodes', `${node}-${visit}.input.jsonl`), JSON.stringify(input) + '\n', 'utf8')
+  }
+
+  readAgentInputs(runId: string, node: string, visit: number): AgentInputRecord[] {
+    const path = join(this.dir(runId), 'nodes', `${node}-${visit}.input.jsonl`)
+    if (!existsSync(path)) return []
+    return readFileSync(path, 'utf8').split('\n').filter(Boolean).flatMap((line) => {
+      try { return [JSON.parse(line) as AgentInputRecord] } catch { return [] }
+    })
   }
 
   appendTranscript(runId: string, node: string, visit: number, entry: HistoryEntry): void {

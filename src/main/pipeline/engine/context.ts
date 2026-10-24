@@ -1,6 +1,7 @@
 import type { AgentStep, MachineDefinition, Step } from '../../../shared/pipelineMachine'
 import type { LoopFeedback, RunState } from './types'
-import { parseCondition, renderTemplate, resolveRef, stringifyValue, type Scope } from './expressions'
+import { evaluateCondition, parseCondition, renderTemplate, resolveRef, type Scope } from './expressions'
+import { renderInputs } from './inputs'
 import { MachineTree, blockLimit, blockName, type LeafStep, type TreeBlock, type TreeNode } from './tree'
 
 /**
@@ -60,10 +61,39 @@ function repeatNote(tree: MachineTree, id: string): string {
   return notes.length ? `; ${notes.join('; ')}` : ''
 }
 
+/**
+ * The branch an `if` takes when its condition depends only on params, which are
+ * fixed for the run: the context then shows only that branch (an implementer
+ * was told the next check is `ciFull` while the run took the `else` with `ci`).
+ */
+function fixedBranch(node: TreeBlock, params: Record<string, unknown> | undefined): { list: 0 | 1; ref: string; value: unknown } | undefined {
+  const step = node.step
+  if (!params || node.kind !== 'if' || step?.type !== 'if') return undefined
+  const parsed = parseCondition(step.condition)
+  if ('error' in parsed || !parsed.ref.startsWith('params.')) return undefined
+  const scope: Scope = { params, outputs: {}, run: {} }
+  return { list: evaluateCondition(step.condition, scope) ? 0 : 1, ref: parsed.ref, value: resolveRef(parsed.ref, scope) }
+}
+
+/** Leaves in `if` branches that the params rule out for this run. */
+function skippedLeaves(tree: MachineTree, params: Record<string, unknown> | undefined): Set<string> {
+  const skipped = new Set<string>()
+  const collect = (nodes: TreeNode[]): void => { for (const n of nodes) n.kind === 'leaf' ? skipped.add(n.id) : n.lists.forEach(collect) }
+  const visit = (nodes: TreeNode[]): void => {
+    for (const n of nodes) {
+      if (n.kind === 'leaf') continue
+      const fixed = fixedBranch(n, params)
+      n.lists.forEach((list, i) => (fixed && i !== fixed.list ? collect(list) : visit(list)))
+    }
+  }
+  visit(tree.root.lists[0] ?? [])
+  return skipped
+}
+
 /** The step tree as an indented outline with numbered leaves. */
-function outline(tree: MachineTree, current: string, state: RunState): string[] {
+function outline(tree: MachineTree, current: string, state: RunState, params: Record<string, unknown> | undefined, skipped: Set<string>): string[] {
   const lines: string[] = []
-  const numbers = new Map(tree.order.map((id, i) => [id, i + 1]))
+  const numbers = new Map(tree.order.filter((id) => !skipped.has(id)).map((id, i) => [id, i + 1]))
   const currentLeaf = tree.leaves.get(current)
   const enclosing = new Set(currentLeaf ? tree.repeatable(currentLeaf).map((b) => b.id) : [])
   const walk = (nodes: TreeNode[], depth: number): void => {
@@ -87,6 +117,15 @@ function outline(tree: MachineTree, current: string, state: RunState): string[] 
         lines.push(`${pad}- ${blockName(node)}${step.summary ? `: ${step.summary}` : ''}`)
         walk(node.lists[0] ?? [], depth + 1)
       } else if (node.kind === 'if' && step.type === 'if') {
+        const fixed = fixedBranch(node, params)
+        if (fixed) {
+          const chosen = node.lists[fixed.list] ?? []
+          if (chosen.length) {
+            lines.push(`${pad}- ${fixed.ref.split('.').slice(-1)[0]} is ${JSON.stringify(fixed.value ?? null)} in this run, so:`)
+            walk(chosen, depth + 1)
+          }
+          continue
+        }
         lines.push(`${pad}- if ${describeCondition(step.condition)}:`)
         walk(node.lists[0] ?? [], depth + 1)
         if ((node.lists[1] ?? []).length) {
@@ -100,26 +139,29 @@ function outline(tree: MachineTree, current: string, state: RunState): string[] 
   return lines
 }
 
-export function buildPipelineContext(machine: MachineDefinition, current: string, state: RunState): string {
+export function buildPipelineContext(machine: MachineDefinition, current: string, state: RunState, params?: Record<string, unknown>): string {
   const tree = new MachineTree(machine)
   const leaf = tree.leaves.get(current)
+  // Params changed by an answer can rule out the branch the run is already in: show all branches then.
+  if (skippedLeaves(tree, params).has(current)) params = undefined
+  const skipped = skippedLeaves(tree, params)
   const lines: string[] = []
   lines.push(`You are one step of the AIDE pipeline "${machine.name}". AIDE runs the steps top to bottom; each step is done by its own performer. Loops start over when a step inside asks for another iteration. The pipeline:`)
-  lines.push(...outline(tree, current, state))
+  lines.push(...outline(tree, current, state, params, skipped))
   if (!leaf) return lines.join('\n')
 
   // Steps that can run after this one: everything later in document order, plus
   // the whole body of every enclosing loop (it runs again on a repeat).
   const loops = tree.repeatable(leaf)
-  const later = new Set(tree.order.slice(leaf.order + 1))
-  for (const loop of loops) for (const id of tree.leavesIn(loop)) if (id !== current) later.add(id)
+  const later = new Set(tree.order.slice(leaf.order + 1).filter((id) => !skipped.has(id)))
+  for (const loop of loops) for (const id of tree.leavesIn(loop)) if (id !== current && !skipped.has(id)) later.add(id)
   const laterSteps = [...later].map((id) => tree.leaves.get(id)!.step)
   const checks = laterSteps.filter((s): s is Extract<Step, { type: 'check' }> => s.type === 'check')
   const isCommitPrep = leaf.parent.kind === 'commit' && leaf.step.type === 'agent'
   const commitLater = laterSteps.some((s) => s.type === 'commit')
 
   lines.push('', 'What happens after you — do not do this work yourself:')
-  const next = tree.order[leaf.order + 1]
+  const next = tree.order.slice(leaf.order + 1).find((id) => !skipped.has(id))
   if (next) lines.push(`- Next in order: ${next} — ${stepSummary(tree.leaves.get(next)!.step)}.`)
   else lines.push('- You are the last step; the run ends after you.')
   if (checks.length) lines.push(`- AIDE itself runs these checks later: ${checks.map((c) => `\`${c.command}\``).join(', ')}. You need not run them: if they fail, the failure output comes back to the steps that must fix it. Run one yourself only when your task or a decision explicitly asks for it.`)
@@ -143,8 +185,11 @@ export function buildPipelineContext(machine: MachineDefinition, current: string
   const previous = [...state.history].reverse().find((h) => h.finishedAt && !(h.node === current && h.visit === visit))
   if (previous) lines.push(`- The previous step was "${previous.node}" (visit ${previous.visit}), outcome: ${previous.outcome ?? 'unknown'}.`)
   else lines.push('- You are the first step of this run.')
-  const decisions = state.escalations.filter((e) => e.answer && e.answer.text.trim())
-  for (const e of decisions) lines.push(`- Decision by the ${e.answer!.by} at "${e.node}" (${e.answer!.action}): ${e.answer!.text.trim()}`)
+  for (const e of state.escalations) {
+    const changed = Object.entries(e.answer?.params ?? {}).map(([k, v]) => `${k} = ${JSON.stringify(v)}`)
+    if (!e.answer || (!e.answer.text.trim() && !changed.length)) continue
+    lines.push(`- Decision by the ${e.answer.by} at "${e.node}" (${e.answer.action}): ${e.answer.text.trim()}${changed.length ? `${e.answer.text.trim() ? ' ' : ''}(params changed for the rest of the run: ${changed.join(', ')})` : ''}`)
+  }
   for (const a of state.amendments ?? []) lines.push(`- Instruction from the ${a.by}${a.node ? ` (given during "${a.node}")` : ''}: ${a.text.trim()}`)
   return lines.join('\n')
 }
@@ -205,15 +250,15 @@ export function feedbackSections(machine: MachineDefinition, current: string, st
   })
 }
 
-/** The user message for an agent step: its task, the loop feedback and the declared inputs. */
-export function buildTaskPrompt(step: AgentStep, scope: Scope, feedback: string[] = []): string {
+/**
+ * The user message for an agent step: its task, the loop feedback and the
+ * declared inputs. `save` writes an input too large for the prompt to a file.
+ */
+export function buildTaskPrompt(step: AgentStep, scope: Scope, feedback: string[] = [], save: (name: string, text: string) => string = () => '(not saved)'): string {
   const parts: string[] = []
   parts.push(step.task ? renderTemplate(step.task, scope) : 'Do the work of your role for this pipeline step.')
   parts.push(...feedback)
-  for (const ref of step.inputs ?? []) {
-    const value = stringifyValue(resolveRef(ref, scope))
-    parts.push(`## ${ref}\n\n${value || '(empty)'}`)
-  }
+  parts.push(...renderInputs(step.inputs ?? [], scope, save))
   return parts.join('\n\n')
 }
 

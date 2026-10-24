@@ -217,13 +217,13 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     {
       name: 'pipeline_answer',
       description: 'Answer a pending escalation. action: continue (go on after the step; approve a gate; leave an exhausted loop as if it passed), reject (reject a gate: repeats its loop; outside loops the run holds at the gate — pipeline_resume asks again), retry (run the step again — after an engine failure it continues the failed session; for an exhausted loop: one more iteration), stop (end the run for good; it cannot be resumed). To hold the run without deciding, do not answer: a run waiting on an escalation does nothing and survives AIDE restarts. Your text is shown to every later agent of the run.',
-      inputSchema: OBJECT({ escalationId: { type: 'string' }, action: { type: 'string', enum: ['continue', 'retry', 'reject', 'stop'] }, text: { type: 'string', description: 'Your answer; shown to the later agents of the run.' }, runId: RUN_ID, wait: WAIT_ARG }, ['escalationId', 'action']),
+      inputSchema: OBJECT({ escalationId: { type: 'string' }, action: { type: 'string', enum: ['continue', 'retry', 'reject', 'stop'] }, text: { type: 'string', description: 'Your answer; shown to the later agents of the run.' }, params: { type: 'object', description: 'Change machine params for the rest of the run, e.g. {"stageId": "S5.7a"} after approving a split. Validated against the machine params; later templates, inputs and conditions use the new values.' }, runId: RUN_ID, wait: WAIT_ARG }, ['escalationId', 'action']),
       handler: async (args, { projectPath, tabId }) => {
         try {
           const m = manager()
           const runId = typeof args.runId === 'string' ? args.runId : m.activeRun(projectPath)?.runId
           const since = runId ? lastEventId(projectPath, runId) : 0
-          await m.answer(projectPath, String(args.escalationId), { action: args.action as 'continue' | 'retry' | 'reject' | 'stop', text: String(args.text ?? ''), by: 'orchestrator' }, typeof args.runId === 'string' ? args.runId : undefined)
+          await m.answer(projectPath, String(args.escalationId), { action: args.action as 'continue' | 'retry' | 'reject' | 'stop', text: String(args.text ?? ''), by: 'orchestrator', ...(args.params && typeof args.params === 'object' && !Array.isArray(args.params) ? { params: args.params as Record<string, unknown> } : {}) }, typeof args.runId === 'string' ? args.runId : undefined)
           if (args.wait !== undefined && runId) return ok(`Answer recorded.\n${waitText(await waitForEvent(projectPath, runId, since, waitSeconds(args.wait, DEFAULT_WAIT_SEC), tabId))}`)
           return ok('Answer recorded; the run continues.')
         } catch (err) {
