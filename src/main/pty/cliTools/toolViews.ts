@@ -93,3 +93,25 @@ export function codexToolView(name: string, input: unknown): ToolView | undefine
   if (name === 'exec_command' && str(args.cmd)) return { kind: 'shell', command: String(args.cmd) }
   return undefined
 }
+
+/** OpenCode 2 tools. Older sessions name the path `filePath`; current `read` takes `path`. */
+export function openCodeToolView(name: string, input: unknown): ToolView | undefined {
+  const args = obj(input)
+  const path = str(args.path) ?? str(args.filePath) ?? ''
+  switch (name) {
+    case 'edit':
+      return { kind: 'edit', path, edits: [{ oldText: String(args.oldString ?? ''), newText: String(args.newString ?? '') }] }
+    case 'write':
+      return { kind: 'write', path, content: String(args.content ?? '') }
+    case 'read':
+      return { kind: 'read', path, range: lineRange(args.offset, args.limit) }
+    case 'shell':
+    case 'bash':
+      return str(args.command) ? { kind: 'shell', command: String(args.command) } : undefined
+    case 'grep':
+    case 'glob':
+      return str(args.pattern) ? { kind: 'search', pattern: String(args.pattern), path: str(args.path) } : undefined
+    default:
+      return undefined
+  }
+}

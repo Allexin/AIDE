@@ -106,6 +106,11 @@ describe('validateMachine', () => {
     expect(text).toMatch(/Step "a": effort "ultra" is not one of/)
   })
 
+  it('accepts any effort for OpenCode, whose variants depend on the model', () => {
+    const openCodeEnv = { ...env, headlessClis: [...env.headlessClis, 'open-code'] }
+    expect(validateMachine(machine([agent('a', { cli: 'open-code', effort: 'max' })]), openCodeEnv).errors).toEqual([])
+  })
+
   it('requires a strict schema for Codex steps', () => {
     const text = errorsOf(machine([agent('a', { cli: 'codex', output: 'loose' })], { schemas: { loose: { type: 'object', properties: { a: { type: 'string' } } } } }))
     expect(text).toMatch(/not strict enough for Codex/)

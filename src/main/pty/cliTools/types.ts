@@ -27,6 +27,10 @@ export interface CliTool {
   /** Returns true if the CLI binary is present on the system. */
   isInstalled(): Promise<boolean>
 
+  /** Why the CLI cannot be used (e.g. an unsupported version), or null when it can.
+   *  Without it, a CLI that is not installed is reported as "Not found in PATH". */
+  installProblem?(): Promise<string | null>
+
   /** Declares configurable fields rendered in Settings UI. */
   settingsFields?(): SettingsField[]
 

@@ -1,23 +1,28 @@
 /**
- * OpenCode session scanner — reads the OpenCode SQLite database directly.
+ * OpenCode 2 session scanner — reads the OpenCode SQLite database directly.
  *
- * Database location (Windows): ~/.local/share/opencode/opencode.db
- * Database location (Unix):    ~/.local/share/opencode/opencode.db
+ * Database location: ~/.local/share/opencode/opencode.db (XDG_DATA_HOME / OPENCODE_DATA_DIR override)
  *
- * The ProjectID stored in the session table is the first git root-commit hash,
- * also cached in <projectRoot>/.git/opencode. We read this file to filter
- * sessions belonging to the current project.
+ * OpenCode 2 keeps sessions in its v2 tables (it migrated the 1.x `session` /
+ * `message` / `part` tables into them and no longer writes those):
+ *   session_v2:      id, project_id, parent_id, directory, title, slug, cost,
+ *                    time_created, time_updated, time_archived
+ *   session_message: id, session_id, type (user | assistant | system | synthetic |
+ *                    compaction | idle | …), seq, time_created, time_updated,
+ *                    data (JSON; user: { text }, assistant: { content[], cost, time.completed })
  *
- * Schema (relevant tables):
- *   session: id, project_id, directory, title, slug, time_created, time_updated
- *   message: id, session_id, data (JSON with role), time_created
- *   part:    id, message_id, session_id, data (JSON with type/text), time_created
+ * An assistant row is inserted when the turn starts and updated as it streams;
+ * it is complete once `data.time.completed` is set.
+ *
+ * The project id of a git project is its first root-commit hash, also cached in
+ * <projectRoot>/.git/opencode; sessions are matched by it or by directory.
  */
 
 import { existsSync, readFileSync, watch } from 'fs'
 import { join } from 'path'
 import type { HistoryBlock, HistoryEntry } from './types'
 import { cliLog } from './cliLogger'
+import { openCodePartBlocks } from './openCodeParts'
 
 const LOG_CH = 'OpenCode'
 
@@ -25,18 +30,8 @@ const LOG_CH = 'OpenCode'
 
 export function getOpenCodeDataDir(): string {
   if (process.env.OPENCODE_DATA_DIR) return process.env.OPENCODE_DATA_DIR
-
-  // OpenCode uses XDG_DATA_HOME style path on all platforms
-  // Windows: ~/.local/share/opencode
-  // Unix: ~/.local/share/opencode
+  if (process.env.XDG_DATA_HOME) return join(process.env.XDG_DATA_HOME, 'opencode')
   const { homedir } = require('os') as typeof import('os')
-
-  // Check XDG_DATA_HOME first (Unix standard)
-  if (process.env.XDG_DATA_HOME) {
-    return join(process.env.XDG_DATA_HOME, 'opencode')
-  }
-
-  // Default to ~/.local/share/opencode
   return join(homedir(), '.local', 'share', 'opencode')
 }
 
@@ -46,11 +41,7 @@ export function getDbPath(): string {
 
 // ── ProjectID resolution ──────────────────────────────────────────────────────
 
-/**
- * Returns the OpenCode project ID for the given project directory.
- * OpenCode stores it as the first git root-commit hash in .git/opencode.
- * Returns null if the file doesn't exist or the project is not a git repo.
- */
+/** The OpenCode project id cached in <project>/.git/opencode, or null. */
 export function readProjectId(projectPath: string): string | null {
   const cacheFile = join(projectPath, '.git', 'opencode')
   if (!existsSync(cacheFile)) return null
@@ -64,11 +55,8 @@ export function readProjectId(projectPath: string): string | null {
 // ── Database access ───────────────────────────────────────────────────────────
 
 /**
- * Open the OpenCode SQLite database in read-only mode.
- * Returns null if the database doesn't exist or can't be opened.
- *
- * Uses lazy require() so the module load fails gracefully if better-sqlite3
- * is not installed or fails to load (e.g. wrong ABI during dev).
+ * Open the OpenCode SQLite database in read-only mode, or null.
+ * Lazy require() so a missing or wrong-ABI better-sqlite3 degrades gracefully.
  */
 function openDb(): import('better-sqlite3').Database | null {
   const dbPath = getDbPath()
@@ -83,19 +71,30 @@ function openDb(): import('better-sqlite3').Database | null {
   }
 }
 
-// ── Session row type ──────────────────────────────────────────────────────────
+function withDb<T>(what: string, fallback: T, fn: (db: import('better-sqlite3').Database) => T): T {
+  const db = openDb()
+  if (!db) return fallback
+  try {
+    return fn(db)
+  } catch (e) {
+    cliLog(LOG_CH, `[${what}] query failed: ${e}`)
+    return fallback
+  } finally {
+    db.close()
+  }
+}
+
+// ── Sessions ──────────────────────────────────────────────────────────────────
 
 interface SessionRow {
   id: string
   project_id: string
   directory: string
-  title: string
-  slug: string
+  title: string | null
+  slug: string | null
   time_created: number
   time_updated: number
 }
-
-// ── Public session scanner ────────────────────────────────────────────────────
 
 export interface OpenCodeSession {
   sessionId: string
@@ -106,239 +105,140 @@ export interface OpenCodeSession {
   timeCreated: number
 }
 
-/**
- * Scan the OpenCode database for sessions belonging to the given project.
- * Returns sessions sorted newest first.
- */
+function normalizeDir(path: string): string {
+  const slashed = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  return process.platform === 'win32' ? slashed.toLowerCase() : slashed
+}
+
+/** The project's top-level sessions (no subagent children, no archived ones), newest first. */
 export function scanOpenCodeSessions(projectPath: string): OpenCodeSession[] {
   const projectId = readProjectId(projectPath)
-  const db = openDb()
-  if (!db) return []
-
-  try {
-    let rows: SessionRow[]
-    if (projectId) {
-      rows = db
-        .prepare('SELECT id, project_id, directory, title, slug, time_created, time_updated FROM session WHERE project_id = ? ORDER BY time_updated DESC')
-        .all(projectId) as SessionRow[]
-    } else {
-      // No .git/opencode cache — match by directory prefix
-      const normalized = projectPath.replace(/\\/g, '/')
-      rows = db
-        .prepare('SELECT id, project_id, directory, title, slug, time_created, time_updated FROM session ORDER BY time_updated DESC')
-        .all() as SessionRow[]
-      rows = rows.filter((r) => {
-        const dir = (r.directory ?? '').replace(/\\/g, '/')
-        return dir.startsWith(normalized) || normalized.startsWith(dir)
+  const root = normalizeDir(projectPath)
+  return withDb('scanSessions', [], (db) => {
+    const rows = db
+      .prepare('SELECT id, project_id, directory, title, slug, time_created, time_updated FROM session_v2 WHERE parent_id IS NULL AND time_archived IS NULL ORDER BY time_updated DESC')
+      .all() as SessionRow[]
+    return rows
+      .filter((r) => {
+        if (projectId && r.project_id === projectId) return true
+        const dir = normalizeDir(r.directory ?? '')
+        return dir === root || dir.startsWith(root + '/')
       })
-    }
-
-    return rows.map((r) => ({
-      sessionId: r.id,
-      title: r.title ?? '',
-      slug: r.slug ?? '',
-      directory: r.directory ?? '',
-      timeUpdated: r.time_updated ?? 0,
-      timeCreated: r.time_created ?? 0
-    }))
-  } catch (e) {
-    cliLog(LOG_CH, `[scanSessions] query failed: ${e}`)
-    return []
-  } finally {
-    db.close()
-  }
+      .map((r) => ({
+        sessionId: r.id,
+        title: r.title ?? '',
+        slug: r.slug ?? '',
+        directory: r.directory ?? '',
+        timeUpdated: r.time_updated ?? 0,
+        timeCreated: r.time_created ?? 0
+      }))
+  })
 }
 
-// ── Message / part row types ──────────────────────────────────────────────────
-
-interface MessageData {
-  role?: 'user' | 'assistant'
-  [key: string]: unknown
-}
+// ── Messages ──────────────────────────────────────────────────────────────────
 
 interface MessageRow {
   id: string
-  session_id: string
-  time_created: number
+  type: string
+  data: string
+  time_updated: number
 }
 
-interface PartData {
-  type?: string
-  text?: string
-  content?: string
-  toolCallId?: string
-  toolName?: string
-  input?: unknown
-  args?: unknown
-  tool?: string
-  callID?: string
-  state?: {
-    status?: string
-    input?: unknown
-    output?: unknown
-    [key: string]: unknown
+const MESSAGE_COLUMNS = "SELECT id, type, data, time_updated FROM session_message WHERE session_id = ? AND type IN ('user', 'assistant')"
+
+/** A user message, or an assistant message that has finished streaming; null otherwise. */
+function messageEntry(row: MessageRow): { entry: HistoryEntry | null; complete: boolean } {
+  let data: Record<string, unknown>
+  try { data = JSON.parse(row.data) as Record<string, unknown> } catch { return { entry: null, complete: true } }
+  if (row.type === 'user') {
+    const text = typeof data.text === 'string' ? data.text : ''
+    return { entry: text.trim() ? { role: 'user', blocks: [{ type: 'text', text }] } : null, complete: true }
   }
+  const time = (data.time ?? {}) as Record<string, unknown>
+  if (typeof time.completed !== 'number') return { entry: null, complete: false }
+  const blocks: HistoryBlock[] = []
+  for (const part of Array.isArray(data.content) ? data.content : []) blocks.push(...openCodePartBlocks(part))
+  return { entry: blocks.length > 0 ? { role: 'assistant', blocks } : null, complete: true }
 }
 
-interface PartRow {
-  id: string
-  message_id: string
-  session_id: string
-  data: string   // JSON serialised PartData
-  time_created: number
-}
-
-// ── History parsing ───────────────────────────────────────────────────────────
-
-function parsePartData(partData: PartData): HistoryBlock[] {
-  const text = partData.text ?? partData.content ?? ''
-
-  switch (partData.type) {
-    case 'text':
-      if (typeof text === 'string' && text.trim()) return [{ type: 'text', text }]
-      break
-
-    case 'reasoning':
-      if (typeof text === 'string' && text.trim()) return [{ type: 'thinking', thinking: text }]
-      break
-
-    case 'tool': {
-      // Only emit tool blocks when output is available
-      if (partData.callID && partData.tool && partData.state?.output) {
-        const input = partData.state?.input
-        return [
-          {
-            type: 'tool_use',
-            id: partData.callID,
-            name: partData.tool,
-            input: typeof input === 'object' && input !== null ? input as Record<string, unknown> : {}
-          },
-          {
-            type: 'tool_result',
-            tool_use_id: partData.callID,
-            content: String(partData.state.output)
-          }
-        ]
-      }
-      break
-    }
-
-    // step-start, step-finish, patch etc. — skip (metadata only)
-    default:
-      break
-  }
-
-  return []
-}
-
-// ── Session history reader ────────────────────────────────────────────────────
-
-/**
- * Read the full conversation history for a session from the database.
- * Messages are in the `message` table; their content parts are in `part`.
- */
+/** The session's conversation; an assistant turn still streaming is left to the live watcher. */
 export function readOpenCodeSessionHistory(sessionId: string): HistoryEntry[] {
-  const db = openDb()
-  if (!db) return []
-
-  try {
-    const msgRows = db
-      .prepare('SELECT id, session_id, data, time_created FROM message WHERE session_id = ? ORDER BY time_created ASC')
-      .all(sessionId) as Array<{ id: string; session_id: string; data: string; time_created: number }>
-
+  return withDb('history', [], (db) => {
+    const rows = db.prepare(`${MESSAGE_COLUMNS} ORDER BY seq ASC`).all(sessionId) as MessageRow[]
     const entries: HistoryEntry[] = []
-
-    for (const msgRow of msgRows) {
-      let msgData: MessageData
-      try { msgData = JSON.parse(msgRow.data) as MessageData } catch { continue }
-
-      const role = msgData.role
-      if (role !== 'user' && role !== 'assistant') continue
-
-      const partRows = db
-        .prepare('SELECT id, message_id, session_id, data, time_created FROM part WHERE message_id = ? ORDER BY time_created ASC')
-        .all(msgRow.id) as PartRow[]
-
-      const blocks: HistoryBlock[] = []
-      for (const partRow of partRows) {
-        let partData: PartData
-        try { partData = JSON.parse(partRow.data) as PartData } catch { continue }
-        blocks.push(...parsePartData(partData))
-      }
-
-      if (blocks.length > 0) entries.push({ role, blocks })
+    for (const row of rows) {
+      const { entry } = messageEntry(row)
+      if (entry) entries.push(entry)
     }
-
     return entries
-  } catch (e) {
-    cliLog(LOG_CH, `[history] query failed: ${e}`)
-    return []
-  } finally {
-    db.close()
-  }
+  })
+}
+
+/** The last few text messages for the session preview (hover card in Session Picker). */
+export function readOpenCodeSessionPreview(sessionId: string): Array<{ role: 'user' | 'assistant'; text: string }> {
+  return withDb('preview', [], (db) => {
+    const rows = (db.prepare(`${MESSAGE_COLUMNS} ORDER BY seq DESC LIMIT 10`).all(sessionId) as MessageRow[]).reverse()
+    const result: Array<{ role: 'user' | 'assistant'; text: string }> = []
+    for (const row of rows) {
+      const { entry } = messageEntry(row)
+      if (!entry) continue
+      const text = entry.blocks.map((b) => (b.type === 'text' ? b.text : '')).filter(Boolean).join('\n').trim()
+      if (text) result.push({ role: entry.role, text: text.slice(0, 200) })
+    }
+    return result.slice(-3)
+  })
 }
 
 /**
- * Read the last few messages for session preview (hover card in Session Picker).
+ * Cost in USD of the session's assistant turns that started at or after `sinceMs`
+ * — one headless run. `opencode run` exits before streaming the last step's cost,
+ * so the stream alone undercounts. Null when nothing is recorded.
  */
-export function readOpenCodeSessionPreview(sessionId: string): Array<{ role: 'user' | 'assistant'; text: string }> {
-  const db = openDb()
-  if (!db) return []
-
-  try {
-    const msgRows = db
-      .prepare('SELECT id, session_id, data, time_created FROM message WHERE session_id = ? ORDER BY time_created DESC LIMIT 10')
-      .all(sessionId) as Array<{ id: string; session_id: string; data: string; time_created: number }>
-
-    // Reverse so oldest first
-    msgRows.reverse()
-
-    const result: Array<{ role: 'user' | 'assistant'; text: string }> = []
-
-    for (const msgRow of msgRows) {
-      let msgData: MessageData
-      try { msgData = JSON.parse(msgRow.data) as MessageData } catch { continue }
-
-      const role = msgData.role
-      if (role !== 'user' && role !== 'assistant') continue
-
-      const partRows = db
-        .prepare('SELECT data FROM part WHERE message_id = ? ORDER BY time_created ASC')
-        .all(msgRow.id) as Array<{ data: string }>
-
-      const textParts: string[] = []
-      for (const partRow of partRows) {
-        let partData: PartData
-        try { partData = JSON.parse(partRow.data) as PartData } catch { continue }
-        if (partData.type === 'text') {
-          const t = partData.text ?? partData.content ?? ''
-          if (typeof t === 'string' && t.trim()) textParts.push(t)
-        }
-      }
-
-      const text = textParts.join('\n').trim()
-      if (text) result.push({ role, text: text.slice(0, 200) })
+export function readOpenCodeRunCost(sessionId: string, sinceMs: number): number | null {
+  return withDb('runCost', null, (db) => {
+    const rows = db
+      .prepare("SELECT data FROM session_message WHERE session_id = ? AND type = 'assistant' AND time_created >= ?")
+      .all(sessionId, sinceMs) as Array<{ data: string }>
+    let total: number | null = null
+    for (const row of rows) {
+      try {
+        const cost = (JSON.parse(row.data) as { cost?: unknown }).cost
+        if (typeof cost === 'number') total = (total ?? 0) + cost
+      } catch { /* skip */ }
     }
-
-    return result.slice(-3)
-  } catch (e) {
-    cliLog(LOG_CH, `[preview] query failed: ${e}`)
-    return []
-  } finally {
-    db.close()
-  }
+    return total
+  })
 }
 
 // ── Live session / message watching ──────────────────────────────────────────
 
+/** Polling backstop: a watch on the data directory still misses some SQLite writes (docs/timers.md). */
+const POLL_INTERVAL_MS = 5000
+
 /**
- * Watch the OpenCode database for new sessions.
- *
- * Strategy: watch the DB file for changes (writes appear in WAL mode as
- * changes to the -wal file or the main DB). On change, re-query and emit
- * any newly discovered sessions via onNew.
- *
- * Returns a cleanup function.
+ * Watch the data directory for changes to the database or its WAL / shared-memory
+ * files — the directory reports more of them than a watch on the WAL file alone,
+ * and survives the WAL being recreated. Returns a cleanup function.
+ */
+function watchDb(onChange: () => void): () => void {
+  let watcher: ReturnType<typeof watch> | null = null
+  try {
+    watcher = watch(getOpenCodeDataDir(), (_event, name) => {
+      if (!name || String(name).startsWith('opencode.db')) onChange()
+    })
+  } catch (e) {
+    cliLog(LOG_CH, `[watch] failed to watch the data directory: ${e}`)
+  }
+  const poll = setInterval(onChange, POLL_INTERVAL_MS)
+  return () => {
+    clearInterval(poll)
+    watcher?.close()
+  }
+}
+
+/**
+ * Watch the OpenCode database for new sessions of the project. On a database
+ * change, re-query and emit sessions not in `knownIds`. Returns a cleanup function.
  */
 export function watchOpenCodeSessions(
   projectPath: string,
@@ -354,8 +254,7 @@ export function watchOpenCodeSessions(
       if (stopped) { clearInterval(interval); return }
       if (existsSync(dbPath)) {
         clearInterval(interval)
-        const unsub = watchOpenCodeSessions(projectPath, knownIds, onNew)
-        cleanupFns.push(unsub)
+        cleanupFns.push(watchOpenCodeSessions(projectPath, knownIds, onNew))
       }
     }, 2000)
     return () => {
@@ -368,10 +267,9 @@ export function watchOpenCodeSessions(
   let stopped = false
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
-  const checkForNew = () => {
+  const checkForNew = (): void => {
     if (stopped) return
-    const sessions = scanOpenCodeSessions(projectPath)
-    for (const s of sessions) {
+    for (const s of scanOpenCodeSessions(projectPath)) {
       if (!knownIds.has(s.sessionId)) {
         knownIds.add(s.sessionId)
         onNew(s)
@@ -379,120 +277,62 @@ export function watchOpenCodeSessions(
     }
   }
 
-  const scheduleCheck = () => {
+  const unwatch = watchDb(() => {
     if (debounceTimer) clearTimeout(debounceTimer)
     debounceTimer = setTimeout(checkForNew, 500)
-  }
-
-  // Watch the WAL file (most activity happens there in WAL mode)
-  const walPath = dbPath + '-wal'
-  let watcher: ReturnType<typeof watch> | null = null
-  try {
-    // Watch whichever exists: prefer WAL, fall back to main DB
-    const watchTarget = existsSync(walPath) ? walPath : dbPath
-    watcher = watch(watchTarget, scheduleCheck)
-  } catch (e) {
-    cliLog(LOG_CH, `[watch] failed to watch db: ${e}`)
-  }
+  })
 
   return () => {
     stopped = true
     if (debounceTimer) clearTimeout(debounceTimer)
-    watcher?.close()
+    unwatch()
   }
 }
 
 /**
- * Watch the OpenCode database for new messages in a session.
- * Polls the message count; on increase, reads new parts and calls onEntry.
+ * Watch a session for messages that complete after the watch starts (history
+ * up to then comes from readOpenCodeSessionHistory) and emit each once.
  * Returns a cleanup function.
  */
 export function watchOpenCodeMessages(
   sessionId: string,
   onEntry: (entry: HistoryEntry) => void
 ): () => void {
-  const dbPath = getDbPath()
-  if (!existsSync(dbPath)) return () => {}
+  if (!existsSync(getDbPath())) return () => {}
 
   let stopped = false
-  let lastCount = 0
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
+  const done = new Set<string>()
+  // Rows are rescanned from the latest update seen: an assistant row is updated in place.
+  let since = 0
 
-  // Seed initial message count (skip existing messages — they're loaded via getSessionHistory)
-  try {
-    const db = openDb()
-    if (db) {
-      const row = db.prepare('SELECT COUNT(*) as cnt FROM message WHERE session_id = ?').get(sessionId) as { cnt: number }
-      lastCount = row?.cnt ?? 0
-      db.close()
-    }
-  } catch { /* ignore */ }
-
-  const checkForNew = () => {
-    if (stopped) return
-    const db = openDb()
-    if (!db) return
-    try {
-      const row = db.prepare('SELECT COUNT(*) as cnt FROM message WHERE session_id = ?').get(sessionId) as { cnt: number }
-      const currentCount = row?.cnt ?? 0
-      if (currentCount > lastCount) {
-        // Read only the newly added messages
-        const msgRows = db
-          .prepare('SELECT id, session_id, data, time_created FROM message WHERE session_id = ? ORDER BY time_created ASC LIMIT ?')
-          .all(sessionId, currentCount) as Array<{ id: string; session_id: string; data: string; time_created: number }>
-        const newMsgRows = msgRows.slice(lastCount)
-        lastCount = currentCount
-
-        for (const msgRow of newMsgRows) {
-          if (stopped) break
-          let msgData: MessageData
-          try { msgData = JSON.parse(msgRow.data) as MessageData } catch { continue }
-
-          const role = msgData.role
-          if (role !== 'user' && role !== 'assistant') continue
-
-          const partRows = db
-            .prepare('SELECT data FROM part WHERE message_id = ? ORDER BY time_created ASC')
-            .all(msgRow.id) as Array<{ data: string }>
-
-          const blocks: HistoryBlock[] = []
-          for (const partRow of partRows) {
-            let partData: PartData
-            try { partData = JSON.parse(partRow.data) as PartData } catch { continue }
-            blocks.push(...parsePartData(partData))
-          }
-
-          if (blocks.length > 0 && !stopped) onEntry({ role, blocks })
-        }
+  const scan = (emit: boolean): void => {
+    withDb('watchMessages', undefined, (db) => {
+      const rows = db.prepare(`${MESSAGE_COLUMNS} AND time_updated >= ? ORDER BY seq ASC`).all(sessionId, since) as MessageRow[]
+      for (const row of rows) {
+        if (stopped) return
+        since = Math.max(since, row.time_updated)
+        if (done.has(row.id)) continue
+        const { entry, complete } = messageEntry(row)
+        if (!complete) continue
+        done.add(row.id)
+        if (emit && entry) onEntry(entry)
       }
-    } catch (e) {
-      cliLog(LOG_CH, `[watchMessages] query failed: ${e}`)
-    } finally {
-      db.close()
-    }
+    })
   }
 
-  const scheduleCheck = () => {
+  scan(false)
+
+  const scheduleCheck = (): void => {
     if (debounceTimer) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(checkForNew, 300)
+    debounceTimer = setTimeout(() => { if (!stopped) scan(true) }, 300)
   }
 
-  // Watch WAL for changes
-  const walPath = dbPath + '-wal'
-  let watcher: ReturnType<typeof watch> | null = null
-  try {
-    const watchTarget = existsSync(walPath) ? walPath : dbPath
-    watcher = watch(watchTarget, scheduleCheck)
-  } catch { /* ignore */ }
-
-  // Polling fallback (SQLite WAL watching can miss changes)
-  const POLL_INTERVAL = 5000
-  const pollInterval = setInterval(scheduleCheck, POLL_INTERVAL)
+  const unwatch = watchDb(scheduleCheck)
 
   return () => {
     stopped = true
     if (debounceTimer) clearTimeout(debounceTimer)
-    clearInterval(pollInterval)
-    watcher?.close()
+    unwatch()
   }
 }

@@ -36,7 +36,8 @@ export async function smokeTestMachine(manager: PipelineManager, projectPath: st
     const tool = getToolById(cli)
     if (!tool) { lines.push(`✗ CLI "${cli}" is not registered in AIDE`); continue }
     if (!tool.headless) { lines.push(`✗ ${tool.name} has no headless support`); continue }
-    if (!(await tool.isInstalled())) { lines.push(`✗ ${tool.name} is not installed`); continue }
+    const problem = tool.installProblem ? await tool.installProblem() : (await tool.isInstalled() ? null : 'not installed')
+    if (problem) { lines.push(`✗ ${tool.name}: ${problem}`); continue }
     if (!pingAgents) { lines.push(`✓ ${tool.name} installed`); continue }
     const runDir = mkdtempSync(join(tmpdir(), 'aide-smoke-'))
     try {

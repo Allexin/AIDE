@@ -104,17 +104,12 @@ function deployOrchestrationDoc(projectPath: string): void {
   writeFileSync(destination, content, 'utf8')
 }
 
-/** Wire a newly opened project: discovery file, doc, orchestrator notifications to its window. */
+/** Wire a newly opened project: discovery file, doc, run notifications to its window. */
 export function attachPipelineProject(projectPath: string, win: BrowserWindow): () => void {
   pipelineServer.registerProject(projectPath)
   try { deployOrchestrationDoc(projectPath) } catch (err) {
     logEvent('orchestration-doc-deploy-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn')
   }
-  const onConnected = (connection: OrchestratorConnection): void => {
-    if (connection.projectPath === projectPath && !win.isDestroyed()) win.webContents.send('pipeline:orchestrator-connected', connection)
-  }
-  orchestrators.on('connected', onConnected)
-
   const send = (channel: string, payload: unknown): void => { if (!win.isDestroyed()) win.webContents.send(channel, payload) }
   const onState = (path: string, snapshot: RunSnapshot): void => { if (path === projectPath) send('pipeline:run-state', snapshot) }
   const onTranscript = (path: string, runId: string, node: string, visit: number, entry: HistoryEntry): void => {
@@ -127,7 +122,6 @@ export function attachPipelineProject(projectPath: string, win: BrowserWindow): 
   }
 
   return () => {
-    orchestrators.off('connected', onConnected)
     pipelineManager.off('state', onState)
     pipelineManager.off('transcript', onTranscript)
     pipelineManager.forget(projectPath)

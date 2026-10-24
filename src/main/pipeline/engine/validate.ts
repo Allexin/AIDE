@@ -24,17 +24,19 @@ export interface ValidationResult {
 
 const PARAM_TYPES = new Set(['string', 'string[]', 'path', 'glob[]', 'number', 'boolean'])
 
-/** Effort levels each headless CLI accepts (Claude Code `--effort`; Codex `model_reasoning_effort`, the exact set depends on the model). */
-const EFFORTS: Record<string, string[]> = {
+/** Effort levels each headless CLI accepts (Claude Code `--effort`; Codex `model_reasoning_effort`, the exact set depends on the model).
+ *  `null`: any value — OpenCode's effort is the model variant, whose set is per model and checked by OpenCode at run time. */
+const EFFORTS: Record<string, string[] | null> = {
   'claude-code': ['low', 'medium', 'high', 'xhigh', 'max'],
-  codex: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+  codex: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'open-code': null
 }
 
 function checkEffort(effort: string | undefined, cli: string | undefined, where: string, err: (m: string) => void): void {
   if (effort === undefined || !cli) return
   const allowed = EFFORTS[cli]
-  if (!allowed) err(`${where}: "effort" is not supported for CLI "${cli}".`)
-  else if (!allowed.includes(effort)) err(`${where}: effort "${effort}" is not one of ${allowed.join(', ')} for ${cli}.`)
+  if (allowed === undefined) err(`${where}: "effort" is not supported for CLI "${cli}".`)
+  else if (allowed && !allowed.includes(effort)) err(`${where}: effort "${effort}" is not one of ${allowed.join(', ')} for ${cli}.`)
 }
 const ID = /^[A-Za-z_][A-Za-z0-9_-]*$/
 

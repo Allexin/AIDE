@@ -29,6 +29,7 @@ import {
 import { getCodexUsageInfo } from './codexUsage'
 import { codexHeadless } from '../../pipeline/headless/codexHeadless'
 import { cliLog } from './cliLogger'
+import { tuiReadyForInput } from './startupHealth'
 
 const TOOL_ID = 'codex'
 const TOOL_NAME = 'Codex'
@@ -234,14 +235,7 @@ export const codexTool: CliTool = {
       accumulated.includes('Cannot find module')
     ) return 'dead'
 
-    // Codex renders its TUI with ANSI escape sequences immediately on start.
-    if (
-      accumulated.includes('\x1b[') ||
-      accumulated.includes('codex') ||
-      accumulated.includes('Codex')
-    ) return 'ok'
-
-    return 'pending'
+    return tuiReadyForInput(accumulated) ? 'ok' : 'pending'
   },
 
   // ── Project setup ─────────────────────────────────────────────────────────

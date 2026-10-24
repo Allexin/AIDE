@@ -506,6 +506,9 @@ export class PtyManager {
     const env = { ...process.env } as Record<string, string>
     // Lets the pipeline MCP shim, started by the agent in this tab, identify the tab.
     env.AIDE_TAB_ID = tabId
+    // AIDE's own PWD (inherited from whatever started it) would win over the PTY's cwd
+    // for CLIs that read PWD, such as OpenCode; PowerShell does not set it.
+    env.PWD = this.projectPath
     if (tool?.getEnvOverrides) {
       Object.assign(env, tool.getEnvOverrides())
     }

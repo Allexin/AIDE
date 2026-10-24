@@ -7,24 +7,26 @@
 > verified here).
 
 Installed versions at the time of the spike: Claude Code **2.1.295**, Codex **0.160.1**.
+OpenCode column verified 2026-10-24 against OpenCode **2.1.4** (1.x is not supported).
 
 ## Summary
 
-| | Claude Code | Codex | Devin | Cursor | OpenCode |
+| | Claude Code | Codex | Devin | Cursor | OpenCode 2 |
 |---|---|---|---|---|---|
-| Headless invocation | `-p` (**live**) | `exec` (**prod**) | `-p --prompt-file` (**prod**) | `--print` (**prod**) | `run` (docs/memory) |
-| Event stream | `--output-format stream-json --verbose` (**live**) | `--json` JSONL (**prod**) | none (text) | none (text) | ? |
-| Structured final answer | `--json-schema <inline JSON>` → `result.structured_output` (**live**) | `--output-schema <file>` + `-o <file>` (**prod**) | agent writes a file | agent writes a file | ? |
-| Session id | pre-assign `--session-id <uuid>` (**live**) | `thread.started.thread_id` (**prod**) | ? | ? | ? |
-| Resume headless | `--resume <id>` keeps context (**live**) | `exec resume <id>` keeps context (**live**) | ? | ? | ? |
-| System prompt append | `--append-system-prompt-file` (**live**) | none that appends; prepend to prompt | — | — | ? |
-| Read-only profile | `--permission-mode dontAsk --allowedTools … --disallowedTools Edit Write NotebookEdit` blocks writes (**live**) | `--sandbox read-only` + on Windows `-c windows.sandbox='elevated'`: reads allowed, writes denied (**live**) | — | — | ? |
-| Write profile | `--permission-mode bypassPermissions` (**live**) | `--dangerously-bypass-approvals-and-sandbox` (**prod**) | `--permission-mode accept-edits` (**prod**) | `--sandbox disabled --trust` (**prod**) | ? |
-| Spending / turn cap | `--max-budget-usd` (**help**); no `--max-turns` in help | none; wall-clock timeout only | — | — | ? |
-| Executable on this machine | `~/.local/bin/claude.exe` (native) | `%LOCALAPPDATA%/Programs/OpenAI/Codex/bin/codex.exe` (native) | `%LOCALAPPDATA%/devin/cli/bin/devin` | `%LOCALAPPDATA%/cursor-agent` | npm shim `opencode.cmd` (needs a shell) |
+| Headless invocation | `-p` (**live**) | `exec` (**prod**) | `-p --prompt-file` (**prod**) | `--print` (**prod**) | `run --standalone`, prompt on stdin (**live**) |
+| Event stream | `--output-format stream-json --verbose` (**live**) | `--json` JSONL (**prod**) | none (text) | none (text) | `--format json` JSONL: `step_start` / `text` / `tool_use` / `step_finish` / `error` (**live**) |
+| Structured final answer | `--json-schema <inline JSON>` → `result.structured_output` (**live**) | `--output-schema <file>` + `-o <file>` (**prod**) | agent writes a file | agent writes a file | none; schema as a prompt instruction, final message parsed (**live**) |
+| Session id | pre-assign `--session-id <uuid>` (**live**) | `thread.started.thread_id` (**prod**) | ? | ? | `sessionID` on every event (**live**) |
+| Resume headless | `--resume <id>` keeps context (**live**) | `exec resume <id>` keeps context (**live**) | ? | ? | `--session <id>` keeps context (**live**) |
+| System prompt append | `--append-system-prompt-file` (**live**) | none that appends; prepend to prompt | — | — | none; prepend to prompt |
+| Read-only profile | `--permission-mode dontAsk --allowedTools … --disallowedTools Edit Write NotebookEdit` blocks writes (**live**) | `--sandbox read-only` + on Windows `-c windows.sandbox='elevated'`: reads allowed, writes denied (**live**) | — | — | own agent via `OPENCODE_CONFIG_CONTENT` (`edit: deny`, shell only `git status/diff/log/show`): writes denied (**live**) |
+| Write profile | `--permission-mode bypassPermissions` (**live**) | `--dangerously-bypass-approvals-and-sandbox` (**prod**) | `--permission-mode accept-edits` (**prod**) | `--sandbox disabled --trust` (**prod**) | `--auto` (**live**) |
+| Spending / turn cap | `--max-budget-usd` (**help**); no `--max-turns` in help | none; wall-clock timeout only | — | — | none; wall-clock timeout only |
+| Executable on this machine | `~/.local/bin/claude.exe` (native) | `%LOCALAPPDATA%/Programs/OpenAI/Codex/bin/codex.exe` (native) | `%LOCALAPPDATA%/devin/cli/bin/devin` | `%LOCALAPPDATA%/cursor-agent` | npm shim `opencode.cmd` → native `node_modules/@opencode/cli/bin/opencode.exe`, resolved from the shim |
 
 Adapters implemented: **Claude Code** (`src/main/pipeline/headless/claudeHeadless.ts`,
-verified live) and **Codex** (`codexHeadless.ts`, verified live).
+verified live), **Codex** (`codexHeadless.ts`, verified live) and **OpenCode 2**
+(`openCodeHeadless.ts`, verified live).
 
 ## Claude Code
 
@@ -108,7 +110,37 @@ codex exec resume --json --skip-git-repo-check --ignore-user-config [--model M]
 - `model_instructions_file` (`-c`) replaces Codex's base instructions, so role
   instructions are prepended to the prompt instead.
 
-## Devin, Cursor, OpenCode
+## OpenCode 2
+
+Verified live against 2.1.4 (`AIDE_LIVE_OPENCODE=1 npx vitest run opencode.live`).
+
+- `opencode run --standalone --format json --thinking --auto [--agent aide-read-only]
+  [--model provider/model#variant] [--session <id>]`, prompt on stdin (multi-line is kept).
+- `--standalone` is required: without it the run attaches to the shared background
+  service (`opencode serve --service`), which has its own config and environment — the
+  per-run config would not apply, and MCP servers would inherit the environment of
+  whichever process started the service (the same reason PTY tabs use it).
+- OpenCode takes its working directory from `PWD` when it is set, over the real cwd
+  of the process: the adapter (and the PTY) set `PWD` to the project.
+- Per-run config through `OPENCODE_CONFIG_CONTENT`, merged over the user's and project's:
+  - the read-only agent `aide-read-only` (`edit: deny`, `webfetch: deny`, shell `*: deny`
+    except `git status/diff/log/show`). `--auto` approves what is not denied; denied
+    calls come back as `Permission denied: shell`. The built-in `plan` agent is not
+    enough: it allows arbitrary shell commands.
+  - every MCP server named in the user, `OPENCODE_CONFIG` and project configs switched off.
+    The override must be a complete entry (`{ type, command, enabled: false }`); a bare
+    `{ enabled: false }` is ignored.
+- Effort is the model variant (`#high`); an unknown variant fails the run with
+  `provider.no-route` "Variant unavailable".
+- Events: `text` parts belong to a `messageID`; the final answer is the text of the
+  last message. `tool_use` carries the finished call (`part.tool`, `state.input`,
+  `state.output` or `state.error`). `error` (`error.type`, `error.message`) comes
+  with exit code 1.
+- The stream ends before the last step's `step_finish`, so its cost is missing from
+  the stream; the adapter reads the run's cost from the database
+  (`session_message.data.cost` of the assistant turns of the run).
+
+## Devin, Cursor
 
 Recipes from the rutracker pipeline (**prod**); no adapters yet.
 
@@ -119,8 +151,6 @@ Recipes from the rutracker pipeline (**prod**); no adapters yet.
 - Neither emits structured output: the agent writes a result file which the
   caller validates. Live transcripts would come from their session files via the
   existing AIDE scanners.
-- OpenCode is an npm `.cmd` shim; spawning it without a shell needs resolving the
-  underlying script. Not investigated.
 
 ## Environment and proxy
 
@@ -135,9 +165,10 @@ loopback so local MCP servers keep working).
 ```
 AIDE_LIVE_CLAUDE=1 npx vitest run claude.live   # a few cents on haiku; cleans up its sessions
 AIDE_LIVE_CODEX=1  npx vitest run codex.live    # run only when no interactive Codex session matters
+AIDE_LIVE_OPENCODE=1 npx vitest run opencode.live  # on the model of the user's OpenCode config; deletes its sessions
 ```
 
 ## Open items
 
 - Devin and Cursor: resume support, session-id discovery.
-- OpenCode: everything.
+- OpenCode 2: no structured-output mode; a schema is an instruction only.

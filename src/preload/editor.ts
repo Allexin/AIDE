@@ -177,7 +177,6 @@ export interface EditorAPI {
   // Pipeline orchestration setup
   pipelineGetSetup: () => Promise<OrchestrationSetup | null>
   onPipelineOpenSetup: (cb: () => void) => () => void
-  onOrchestratorConnected: (cb: (connection: OrchestratorConnection) => void) => () => void
 
   // Pipeline runs (overlay)
   pipelineGetRun: () => Promise<unknown>
@@ -447,11 +446,6 @@ const editorApi: EditorAPI = {
     const handler = (): void => cb()
     ipcRenderer.on('pipeline:open-setup', handler)
     return () => ipcRenderer.removeListener('pipeline:open-setup', handler)
-  },
-  onOrchestratorConnected: (cb: (connection: OrchestratorConnection) => void): (() => void) => {
-    const handler = (_: unknown, connection: OrchestratorConnection): void => cb(connection)
-    ipcRenderer.on('pipeline:orchestrator-connected', handler)
-    return () => ipcRenderer.removeListener('pipeline:orchestrator-connected', handler)
   },
 
   pipelineGetRun: () => ipcRenderer.invoke('pipeline:get-run'),

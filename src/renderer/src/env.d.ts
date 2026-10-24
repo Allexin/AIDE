@@ -260,7 +260,6 @@ interface EditorAPI {
   // Pipeline orchestration setup
   pipelineGetSetup: () => Promise<OrchestrationSetup | null>
   onPipelineOpenSetup: (cb: () => void) => () => void
-  onOrchestratorConnected: (cb: (connection: OrchestratorConnection) => void) => () => void
 
   // Pipeline runs (overlay)
   pipelineGetRun: () => Promise<PipelineRunSnapshot | null>

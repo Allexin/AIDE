@@ -509,8 +509,8 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const tool = getToolById(toolId)
     if (!tool) return { ok: false, error: 'Unknown tool' }
     try {
-      const installed = await tool.isInstalled()
-      if (!installed) return { ok: false, error: 'Not found in PATH' }
+      const problem = tool.installProblem ? await tool.installProblem() : (await tool.isInstalled() ? null : 'Not found in PATH')
+      if (problem) return { ok: false, error: problem }
       const current = getActivatedTools()
       if (!current.includes(toolId)) setActivatedTools([...current, toolId])
       return { ok: true }

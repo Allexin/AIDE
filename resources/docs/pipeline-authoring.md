@@ -174,7 +174,10 @@ AIDE composes the prompt; you only write the role file and the step fields.
   get the same.
 
   Custom schemas go into `schemas`; for Codex they must be strict
-  (`additionalProperties: false`, every property in `required`).
+  (`additionalProperties: false`, every property in `required`). OpenCode 2 has
+  no structured-output mode: the schema is sent as an instruction and the
+  answer is parsed from the final message, so a malformed answer fails the
+  visit at validation more often than with Claude Code or Codex.
 
 **Sessions** (`session`):
 
@@ -190,7 +193,9 @@ AIDE composes the prompt; you only write the role file and the step fields.
 
 **MCP servers**: step agents start without any. Claude Code steps get neither
 the user's MCP servers nor claude.ai connectors (their tools and server
-instructions contradicted roles); Codex steps run without the user config.
+instructions contradicted roles); Codex steps run without the user config;
+OpenCode 2 steps run with every MCP server of the user and project configs
+switched off.
 
 **What an agent was sent** is kept per visit (`nodes/<step>-<visit>.input.jsonl`:
 the message and the system prompt append of every CLI invocation, including
@@ -200,9 +205,12 @@ retries and continuations). The run view in AIDE shows it on the step's
 **Model and effort** (`model`, `effort` on a step, or in `defaults`; `effort` and
 `model` also on a commit `reviewer`). Effort levels: Claude Code `low`, `medium`,
 `high`, `xhigh`, `max`; Codex `low` … `ultra` (the exact set depends on the
-model). Without one, Claude Code uses its own default, and Codex uses the
-model and effort of the user's Codex config — not the model's built-in default,
-which can be as low as `low`. Set effort per step deliberately: an implementer
+model); OpenCode 2 (`open-code`) takes the model's variant name (`model#variant`),
+whose set is per model and checked by OpenCode when the step runs. Without one,
+Claude Code uses its own default, Codex uses the model and effort of the user's
+Codex config — not the model's built-in default, which can be as low as `low` —
+and OpenCode uses its configured model. An OpenCode `effort` without a step
+`model` applies to that configured model. Set effort per step deliberately: an implementer
 of large stages usually needs more than a commit preparer.
 
 ## 4. The commit step

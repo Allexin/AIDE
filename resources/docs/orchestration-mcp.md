@@ -44,6 +44,8 @@ For reference:
 - **Codex**: `codex mcp add aide --env ELECTRON_RUN_AS_NODE=1 --env AIDE_RUNTIME_DIR=<dir> -- "<aide.exe>" "<aide-mcp.cjs>" mcp`
   (writes `[mcp_servers.aide]` into the user config; this is fine — the shim
   serves whichever AIDE project the session runs in).
+- **OpenCode 2**: `opencode mcp add aide --env ELECTRON_RUN_AS_NODE=1 --env AIDE_RUNTIME_DIR=<dir> -- "<aide.exe>" "<aide-mcp.cjs>" mcp`
+  (writes `mcp.aide` into the project's `opencode.json`; `--global` for the user config).
 - **Other CLIs**: the stdio server entry of their MCP configuration with the same command, args and env.
 
 Because the shim finds the project from the session's working directory, a
@@ -63,8 +65,8 @@ the project.
 - Otherwise pass a smaller `timeoutSec` / `wait` than your client's limit.
 
 Most CLIs load MCP servers only when a session starts. If yours does, tell the
-user that the session must be restarted (AIDE offers a **Restart tab** button)
-and stop there; after the restart, continue with step 3.
+user to restart your terminal tab and stop there; after the restart, continue
+with step 3.
 
 ## 3. Verify
 

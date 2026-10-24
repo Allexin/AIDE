@@ -83,7 +83,7 @@ How long something stays on screen is a design choice, not a synchronisation.
 - **Inactivity as "waiting for input"** — Qwen Code, OpenCode, Devin and Cursor Agent emit
   `completeAndWait` after 5 s without PTY output. These CLIs give no other signal that a turn
   has ended. Replace per CLI when it gains hooks (as Claude Code and Devin's session binding have).
-- **Startup health markers** — `checkStartupHealth` in Codex, OpenCode and Cursor Agent accepts
-  any ANSI escape (`\x1b[`) as "ready". ConPTY and PowerShell emit escape sequences before the
-  CLI starts, so for these tools `ok` can come early. Not a timer, but the same kind of guess;
-  a CLI-specific marker would fix it.
+- **Startup health markers** — `checkStartupHealth` in Cursor Agent accepts any ANSI escape
+  (`\x1b[`) as "ready". ConPTY and PowerShell emit escape sequences before the CLI starts, so
+  `ok` can come early. Not a timer, but the same kind of guess. Codex and OpenCode use the
+  TUI-specific marker (`tuiReadyForInput`: alternate screen entered, then the cursor shown).

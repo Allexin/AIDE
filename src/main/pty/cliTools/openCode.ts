@@ -1,31 +1,35 @@
 /**
- * OpenCode CLI tool integration.
+ * OpenCode 2 CLI tool integration. OpenCode 1.x is not supported: its session
+ * storage, background service and tool shapes differ, so it is reported as an
+ * install problem instead of being launched.
  *
  * OpenCode (https://opencode.ai) is a TUI-based AI coding assistant.
  *
- * Session storage: SQLite database at ~/.local/share/opencode/opencode.db
+ * Session storage: SQLite database at ~/.local/share/opencode/opencode.db (v2 tables)
  * ProjectID: first git root-commit hash, cached in <project>/.git/opencode.
  * Active model: read from ~/.config/opencode/opencode.json and shown in status bar.
  */
 
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { findExecutable, listProcesses } from '../../platform'
+import { listProcesses } from '../../platform'
 import { resolveOwnerPidFromSnapshot } from '../../platform/processTree'
 import type { CliTool, CliSession, UsageInfo, SettingsField, HistoryEntry } from './types'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
+import { tuiReadyForInput } from './startupHealth'
 import {
-  getOpenCodeDataDir,
   scanOpenCodeSessions,
   readOpenCodeSessionHistory,
   readOpenCodeSessionPreview,
   watchOpenCodeSessions,
   watchOpenCodeMessages
 } from './openCodeScanner'
+import { openCodeHeadless, openCodeMajorVersion, resolveOpenCodeExecutable } from '../../pipeline/headless/openCodeHeadless'
 
 const TOOL_ID = 'open-code'
-const TOOL_NAME = 'OpenCode'
+const TOOL_NAME = 'OpenCode 2'
+const REQUIRED_MAJOR = 2
 const LOG_CH = 'OpenCode'
 
 const INACTIVITY_THRESHOLD = 5 // seconds of silence → signal "waiting for input"
@@ -95,6 +99,17 @@ function readConfig(): OpenCodeConfig | null {
   }
 }
 
+// ── Install check ─────────────────────────────────────────────────────────────
+
+async function installProblem(): Promise<string | null> {
+  const executable = resolveOpenCodeExecutable()
+  if (!executable) return 'Not found in PATH'
+  const found = await openCodeMajorVersion(executable)
+  if (!found) return `Could not read the version of ${executable}`
+  if (found.major < REQUIRED_MAJOR) return `OpenCode ${found.version} is installed; AIDE requires OpenCode ${REQUIRED_MAJOR}`
+  return null
+}
+
 // ── Tool implementation ───────────────────────────────────────────────────────
 
 export const openCodeTool: CliTool = {
@@ -102,20 +117,29 @@ export const openCodeTool: CliTool = {
   name: TOOL_NAME,
   installUrl: 'https://opencode.ai',
 
+  headless: openCodeHeadless,
+
   // ── Install check ─────────────────────────────────────────────────────────
 
   async isInstalled(): Promise<boolean> {
-    return findExecutable('opencode')
+    return (await installProblem()) === null
   },
+
+  installProblem,
 
   // ── Commands ──────────────────────────────────────────────────────────────
 
+  // --standalone: by default the TUI attaches to a shared background service
+  // (`opencode serve --service`), which spawns the MCP servers itself — with the
+  // environment of whichever tab started the service. AIDE's pipeline shim would
+  // then report another tab's AIDE_TAB_ID. A private server inherits this tab's.
+
   newSessionCommand(): string {
-    return 'opencode'
+    return 'opencode --standalone'
   },
 
   resumeCommand(sessionId: string): string {
-    return `opencode --session ${sessionId}`
+    return `opencode --standalone --session ${sessionId}`
   },
 
   // ── Startup health ────────────────────────────────────────────────────────
@@ -127,15 +151,7 @@ export const openCodeTool: CliTool = {
       accumulated.includes('Cannot find module')
     ) return 'dead'
 
-    // OpenCode renders its TUI with ANSI escape sequences immediately on start.
-    // Detecting CSI (ESC + "[") or the product name confirms the TUI is live.
-    if (
-      accumulated.includes('\x1b[') ||
-      accumulated.includes('opencode') ||
-      accumulated.includes('OpenCode')
-    ) return 'ok'
-
-    return 'pending'
+    return tuiReadyForInput(accumulated) ? 'ok' : 'pending'
   },
 
   // ── Sessions (SQLite) ─────────────────────────────────────────────────────
@@ -264,7 +280,7 @@ export const openCodeTool: CliTool = {
   // OpenCode has a built-in /auth menu for account switching — no AIDE-level management needed.
 
   async getLoginIdentifier(): Promise<string | null> {
-    return 'OpenCode CLI'
+    return TOOL_NAME
   },
 
   hasAccountSystem(): boolean {

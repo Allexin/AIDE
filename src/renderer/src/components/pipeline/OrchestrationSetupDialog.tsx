@@ -1,13 +1,10 @@
 import React, { useEffect, useState } from 'react'
-import { useSessionStore } from '../../store/useSessionStore'
 
 /**
  * Orchestration setup wizard (main menu → Orchestration): opens a terminal tab with a ready-made prompt
- * asking the chosen agent to connect AIDE's MCP server to itself, then waits
- * for the agent's `pipeline_hello` handshake. Opened from the CLI menu.
+ * asking the chosen agent to connect AIDE's MCP server to itself, and closes. The rest happens in that
+ * tab: the agent says when its session must be restarted, and confirms the connection via pipeline_hello.
  */
-
-type Phase = 'choose' | 'waiting' | 'connected'
 
 function buildPrompt(setup: OrchestrationSetup, notes: string): string {
   const env = Object.entries(setup.mcp.env).map(([key, value]) => `${key}=${value}`).join('\n     ')
@@ -21,7 +18,7 @@ function buildPrompt(setup: OrchestrationSetup, notes: string): string {
     `   command: ${setup.mcp.command}`,
     `   args: ${JSON.stringify(setup.mcp.args)}`,
     `   env: ${env}`,
-    '3. If your CLI loads MCP servers only when a session starts, tell me that this session must be restarted and stop here.',
+    '3. If your CLI loads MCP servers only when a session starts, tell me to restart this terminal tab and stop here. After the restart I will ask you to call pipeline_hello.',
     '4. Otherwise call the pipeline_hello tool and summarize what it returned.',
     ...(notes.trim() ? ['', 'Additional notes from the user:', notes.trim()] : [])
   ].join('\n')
@@ -32,11 +29,6 @@ export default function OrchestrationSetupDialog({ onClose }: { onClose: () => v
   const [tools, setTools] = useState<Array<{ id: string; name: string }>>([])
   const [toolId, setToolId] = useState('')
   const [notes, setNotes] = useState('')
-  const [phase, setPhase] = useState<Phase>('choose')
-  const [tabId, setTabId] = useState<string | null>(null)
-  const [connection, setConnection] = useState<OrchestratorConnection | null>(null)
-  const [restartMessage, setRestartMessage] = useState<string | null>(null)
-  const tab = useSessionStore((s) => s.tabs.find((t) => t.tabId === tabId) ?? null)
 
   useEffect(() => {
     void window.editorApi.pipelineGetSetup().then(setSetup)
@@ -46,39 +38,10 @@ export default function OrchestrationSetupDialog({ onClose }: { onClose: () => v
     })
   }, [])
 
-  useEffect(() => window.editorApi.onOrchestratorConnected((c) => {
-    // Accept the tab we opened; an unknown tab id still means some agent here connected.
-    if (phase === 'waiting' && (c.tabId === null || c.tabId === tabId)) {
-      setConnection(c)
-      setPhase('connected')
-    }
-  }), [phase, tabId])
-
-  const start = async (): Promise<void> => {
+  const start = (): void => {
     if (!setup || !toolId) return
-    const info = await window.editorApi.terminalCreateWithPrompt(toolId, buildPrompt(setup, notes))
-    if (!info) return
-    setTabId(info.tabId)
-    setPhase('waiting')
-  }
-
-  // Close the tab and resume the same CLI session in a new one, so the CLI reloads its MCP servers.
-  const restartTab = async (): Promise<void> => {
-    if (!tab) return
-    if (!tab.sessionId) {
-      setRestartMessage('The session id of this tab is not known yet. Restart the session in the tab manually.')
-      return
-    }
-    const resumed = await window.editorApi.terminalResumeSession(tab.sessionId, tab.toolId)
-    if (!resumed) {
-      setRestartMessage('Could not resume the session. Restart it in the tab manually.')
-      return
-    }
-    useSessionStore.getState().addTab(resumed)
-    window.editorApi.terminalCloseTab(tab.tabId)
-    useSessionStore.getState().closeTab(tab.tabId)
-    setTabId(resumed.tabId)
-    setRestartMessage('Session restarted. Ask the agent to call pipeline_hello.')
+    void window.editorApi.terminalCreateWithPrompt(toolId, buildPrompt(setup, notes))
+    onClose()
   }
 
   const loading = setup === undefined
@@ -89,50 +52,27 @@ export default function OrchestrationSetupDialog({ onClose }: { onClose: () => v
       <div style={{ fontSize: 14, fontWeight: 600, color: '#e0e0e0', marginBottom: 6 }}>Set Up Orchestration</div>
       <div style={{ fontSize: 12, color: '#999', marginBottom: 14, lineHeight: 1.5 }}>
         An agent with MCP support connects AIDE&apos;s pipeline server to itself and becomes the orchestrator of pipeline runs in this project.
+        The agent works in a new terminal tab and tells you there if the tab must be restarted.
       </div>
 
       {loading && <div style={MUTED}>Loading…</div>}
       {!loading && unavailable && <div style={{ ...MUTED, color: '#f48771' }}>The pipeline server is not running. Check the diagnostics log.</div>}
 
       {!loading && !unavailable && setup && <>
-        {setup.connected.length > 0 && phase === 'choose' && <div style={{ ...MUTED, marginBottom: 12 }}>
+        {setup.connected.length > 0 && <div style={{ ...MUTED, marginBottom: 12 }}>
           Already connected: {setup.connected.map((c) => c.client?.name ?? 'unknown agent').join(', ')}
         </div>}
 
-        {phase === 'choose' && <>
-          <label style={LABEL}>Agent</label>
-          <select value={toolId} onChange={(e) => setToolId(e.target.value)} style={INPUT}>
-            {tools.map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}
-          </select>
-          <label style={{ ...LABEL, marginTop: 12 }}>Notes for the agent (optional)</label>
-          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. register the server with user scope" style={{ ...INPUT, height: 60, resize: 'vertical', fontFamily: 'inherit' }} />
-          <div style={BUTTONS}>
-            <button style={SECONDARY} onClick={onClose}>Cancel</button>
-            <button style={PRIMARY} disabled={!toolId} onClick={() => void start()}>Ask {tools.find((t) => t.id === toolId)?.name ?? 'agent'}</button>
-          </div>
-        </>}
-
-        {phase === 'waiting' && <>
-          <div style={{ fontSize: 12, color: '#cccccc', lineHeight: 1.6 }}>
-            <div>⏳ Waiting for the agent to connect…</div>
-            <div style={MUTED}>The agent is configuring the MCP server in its terminal tab. If it says the session must be restarted, use <b>Restart tab</b>, then ask it to call <code>pipeline_hello</code>.</div>
-          </div>
-          {restartMessage && <div style={{ ...MUTED, marginTop: 8, color: '#dcdcaa' }}>{restartMessage}</div>}
-          <div style={BUTTONS}>
-            <button style={SECONDARY} onClick={onClose}>Close</button>
-            <button style={SECONDARY} disabled={!tab} onClick={() => void restartTab()}>Restart tab</button>
-          </div>
-        </>}
-
-        {phase === 'connected' && connection && <>
-          <div style={{ fontSize: 12, color: '#4ec9b0', lineHeight: 1.6 }}>
-            ✓ Connected: {connection.client ? `${connection.client.name} ${connection.client.version}` : 'agent'}
-          </div>
-          <div style={{ ...MUTED, marginTop: 6 }}>This agent can now orchestrate pipelines in this project. Next step: ask it to prepare pipelines for the project.</div>
-          <div style={BUTTONS}>
-            <button style={PRIMARY} onClick={onClose}>Done</button>
-          </div>
-        </>}
+        <label style={LABEL}>Agent</label>
+        <select value={toolId} onChange={(e) => setToolId(e.target.value)} style={INPUT}>
+          {tools.map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}
+        </select>
+        <label style={{ ...LABEL, marginTop: 12 }}>Notes for the agent (optional)</label>
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. register the server with user scope" style={{ ...INPUT, height: 60, resize: 'vertical', fontFamily: 'inherit' }} />
+        <div style={BUTTONS}>
+          <button style={SECONDARY} onClick={onClose}>Cancel</button>
+          <button style={PRIMARY} disabled={!toolId} onClick={start}>Ask {tools.find((t) => t.id === toolId)?.name ?? 'agent'}</button>
+        </div>
       </>}
     </div>
   </div>

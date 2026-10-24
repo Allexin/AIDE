@@ -78,7 +78,7 @@ export const MACHINE_FILE_SCHEMA = {
     defaults: {
       type: 'object',
       properties: {
-        cli: { type: 'string', description: 'CLI tool id for agent steps without their own, e.g. "claude-code" or "codex".' },
+        cli: { type: 'string', description: 'CLI tool id for agent steps without their own: "claude-code", "codex" or "open-code".' },
         model: { type: 'string' },
         effort: { type: 'string', description: 'Reasoning effort for agent steps without their own.' },
         timeoutMin: { type: 'number' }
