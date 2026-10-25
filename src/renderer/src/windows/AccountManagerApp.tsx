@@ -5,6 +5,9 @@ interface CliAccountInfo {
   name: string
   identifier: string
   savedAt: string
+  inPool: boolean
+  exhausted: boolean
+  exhaustedUntil: string | null
 }
 
 interface ToolInfo {
@@ -26,6 +29,9 @@ interface AccountManagerAPI {
   saveCurrent: (toolId: string, name: string) => Promise<CliAccountInfo | null>
   deleteAccount: (toolId: string, accountId: string) => Promise<void>
   updateAccount: (toolId: string, accountId: string) => Promise<CliAccountInfo | null>
+  getActiveAccount: (toolId: string) => Promise<string | null>
+  setInPool: (toolId: string, accountId: string, inPool: boolean) => Promise<void>
+  moveAccount: (toolId: string, accountId: string, delta: -1 | 1) => Promise<void>
   loadAccount: (toolId: string, accountId: string, autoSaveMode?: 'check' | 'force' | 'skip') => Promise<true | false | { conflict: AccountSwitchConflict }>
 }
 
@@ -37,6 +43,7 @@ export default function AccountManagerApp(): React.ReactElement {
   const [loggedIn, setLoggedIn] = useState(false)
   const [loginIdentifier, setLoginIdentifier] = useState<string | null>(null)
   const [accounts, setAccounts] = useState<CliAccountInfo[]>([])
+  const [activeAccountId, setActiveAccountId] = useState<string | null>(null)
   const [saveName, setSaveName] = useState('')
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
@@ -56,18 +63,24 @@ export default function AccountManagerApp(): React.ReactElement {
 
   const refresh = useCallback(async (toolId: string) => {
     if (!toolId) return
-    const [loggedInResult, identifier, accs] = await Promise.all([
+    const [loggedInResult, identifier, accs, active] = await Promise.all([
       api().isLoggedIn(toolId),
       api().getLoginIdentifier(toolId),
-      api().listAccounts(toolId)
+      api().listAccounts(toolId),
+      api().getActiveAccount(toolId)
     ])
     setLoggedIn(loggedInResult)
     setLoginIdentifier(identifier)
     setAccounts(accs)
+    setActiveAccountId(active)
   }, [])
 
   useEffect(() => {
     refresh(activeToolId)
+    // The pipeline account pool switches accounts and marks them exhausted while the window is open.
+    const onFocus = (): void => { void refresh(activeToolId) }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
   }, [activeToolId, refresh])
 
   const handleSaveCurrent = async (): Promise<void> => {
@@ -99,6 +112,16 @@ export default function AccountManagerApp(): React.ReactElement {
     } else {
       showToast('Not logged in — cannot update')
     }
+  }
+
+  const handleInPool = async (accountId: string, inPool: boolean): Promise<void> => {
+    await api().setInPool(activeToolId, accountId, inPool)
+    refresh(activeToolId)
+  }
+
+  const handleMove = async (accountId: string, delta: -1 | 1): Promise<void> => {
+    await api().moveAccount(activeToolId, accountId, delta)
+    refresh(activeToolId)
   }
 
   const handleLoad = async (accountId: string, autoSaveMode: 'check' | 'force' | 'skip' = 'check'): Promise<void> => {
@@ -151,16 +174,39 @@ export default function AccountManagerApp(): React.ReactElement {
           <div style={styles.empty}>No saved accounts</div>
         ) : (
           <div style={styles.accountList}>
-            {accounts.map((acc) => (
+            {accounts.map((acc, index) => (
               <div key={acc.id} style={styles.accountRow}>
+                <input
+                  type="checkbox"
+                  style={styles.poolCheck}
+                  checked={acc.inPool}
+                  onChange={(e) => handleInPool(acc.id, e.target.checked)}
+                  title="Switch to this account automatically when a pipeline step hits a usage limit"
+                />
                 <div style={styles.accountInfo}>
-                  <div style={styles.accountName}>{acc.name}</div>
+                  <div style={styles.accountName}>
+                    {acc.name}
+                    {acc.id === activeAccountId && <span style={styles.activeBadge}>active</span>}
+                  </div>
                   <div style={styles.accountMeta}>
                     {acc.identifier} &middot; saved{' '}
                     {new Date(acc.savedAt).toLocaleDateString()}
                   </div>
+                  {acc.exhausted && (
+                    <div style={styles.exhausted}>
+                      {acc.exhaustedUntil
+                        ? `Usage limit reached — available again at ${new Date(acc.exhaustedUntil).toLocaleString()}`
+                        : 'Usage limit reached — reset time unknown; load it by hand to use it again'}
+                    </div>
+                  )}
                 </div>
                 <div style={styles.accountActions}>
+                  <button style={styles.smallBtn} disabled={index === 0} onClick={() => handleMove(acc.id, -1)} title="Move up (switching order)">
+                    &uarr;
+                  </button>
+                  <button style={styles.smallBtn} disabled={index === accounts.length - 1} onClick={() => handleMove(acc.id, 1)} title="Move down (switching order)">
+                    &darr;
+                  </button>
                   <button style={styles.smallBtn} onClick={() => handleLoad(acc.id)} title="Load this account's credentials">
                     Load
                   </button>
@@ -179,6 +225,7 @@ export default function AccountManagerApp(): React.ReactElement {
             ))}
           </div>
         )}
+        <PoolHint accounts={accounts} activeAccountId={activeAccountId} />
       </div>
 
       {/* Save current */}
@@ -240,6 +287,21 @@ export default function AccountManagerApp(): React.ReactElement {
       {toast && <div style={styles.toast}>{toast}</div>}
     </div>
   )
+}
+
+/** What the checked accounts mean for pipelines, and the one setup that cannot switch anywhere. */
+function PoolHint({ accounts, activeAccountId }: { accounts: CliAccountInfo[]; activeAccountId: string | null }): React.ReactElement | null {
+  if (accounts.length === 0) return null
+  const checked = accounts.filter((acc) => acc.inPool)
+  let text = 'Check accounts to switch to them automatically, top to bottom, when a pipeline step hits a usage limit.'
+  let color = '#888'
+  if (checked.length === 1 && checked[0].id === activeAccountId) {
+    text = 'The only checked account is the active one — check another account to switch to when a pipeline step hits a usage limit.'
+    color = '#dcdcaa'
+  } else if (checked.length > 0) {
+    text = 'When a pipeline step hits a usage limit, AIDE switches to the next checked account, top to bottom, restarts this CLI\'s tabs and resumes the run.'
+  }
+  return <div style={{ ...styles.hint, color }}>{text}</div>
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -316,6 +378,30 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     color: '#888',
     marginTop: 2
+  },
+  poolCheck: {
+    marginRight: 10,
+    cursor: 'pointer',
+    flexShrink: 0
+  },
+  activeBadge: {
+    marginLeft: 8,
+    fontSize: 10,
+    color: '#4ec9b0',
+    border: '1px solid #4ec9b0',
+    borderRadius: 3,
+    padding: '0 4px',
+    fontWeight: 400
+  },
+  exhausted: {
+    fontSize: 11,
+    color: '#dcdcaa',
+    marginTop: 2
+  },
+  hint: {
+    fontSize: 11,
+    marginTop: 8,
+    lineHeight: 1.4
   },
   accountActions: {
     display: 'flex',

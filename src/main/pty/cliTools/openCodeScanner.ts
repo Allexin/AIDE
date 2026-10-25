@@ -210,6 +210,76 @@ export function readOpenCodeRunCost(sessionId: string, sinceMs: number): number 
   })
 }
 
+/** A provider credential (`credential` table), in the shape `opencode auth export` prints and `auth import` reads. */
+export interface OpenCodeCredential {
+  id: string
+  integrationID: string
+  label: string
+  active: boolean
+  value: Record<string, unknown>
+}
+
+export function readOpenCodeCredentials(): OpenCodeCredential[] {
+  return withDb('credentials', [], (db) => {
+    const rows = db.prepare('SELECT id, integration_id, label, value, active FROM credential ORDER BY time_created').all() as Array<{
+      id: string; integration_id: string; label: string | null; value: string; active: number
+    }>
+    const credentials: OpenCodeCredential[] = []
+    for (const row of rows) {
+      try {
+        const value = JSON.parse(row.value) as Record<string, unknown>
+        credentials.push({ id: row.id, integrationID: row.integration_id, label: row.label ?? row.integration_id, active: row.active === 1, value })
+      } catch { /* unreadable value */ }
+    }
+    return credentials
+  })
+}
+
+export interface OpenCodeRetry {
+  attempt: number
+  errorType: string
+  message: string
+  retryAfterMs: number | null
+}
+
+/**
+ * The retry OpenCode is in for the session's latest assistant turn, if any: it
+ * retries provider errors such as a rate limit (429) by itself, indefinitely,
+ * and the stream shows only a new `step_start` per attempt.
+ */
+export function readOpenCodeRetry(sessionId: string): OpenCodeRetry | null {
+  return withDb('retry', null, (db) => {
+    const row = db.prepare("SELECT data FROM session_message WHERE session_id = ? AND type = 'assistant' ORDER BY seq DESC LIMIT 1")
+      .get(sessionId) as { data: string } | undefined
+    if (!row) return null
+    const retry = (JSON.parse(row.data) as { retry?: Record<string, unknown> }).retry
+    if (!retry || typeof retry !== 'object') return null
+    const error = (retry.error ?? {}) as Record<string, unknown>
+    return {
+      attempt: typeof retry.attempt === 'number' ? retry.attempt : 0,
+      errorType: typeof error.type === 'string' ? error.type : '',
+      message: typeof error.message === 'string' ? error.message : '',
+      retryAfterMs: typeof error.retryAfterMs === 'number' ? error.retryAfterMs : null
+    }
+  })
+}
+
+/** `provider/model` of the assistant turns that started at or after `sinceMs` — what actually answered. */
+export function readOpenCodeRunModels(sessionId: string, sinceMs: number): string[] {
+  return withDb('runModels', [], (db) => {
+    const rows = db.prepare("SELECT data FROM session_message WHERE session_id = ? AND type = 'assistant' AND time_created >= ?")
+      .all(sessionId, sinceMs) as Array<{ data: string }>
+    const models = new Set<string>()
+    for (const row of rows) {
+      try {
+        const model = (JSON.parse(row.data) as { model?: { id?: unknown; providerID?: unknown } }).model
+        if (model && typeof model.providerID === 'string' && typeof model.id === 'string') models.add(`${model.providerID}/${model.id}`)
+      } catch { /* skip */ }
+    }
+    return [...models]
+  })
+}
+
 // ── Live session / message watching ──────────────────────────────────────────
 
 /** Polling backstop: a watch on the data directory still misses some SQLite writes (docs/timers.md). */

@@ -5,7 +5,7 @@ import { homedir } from 'os'
 import { runProcess } from '../processRunner'
 import { classifyFailure, failedRun, parseFinalJson, parseJsonLine, processError, promptWithRoleAndSchema, resolveExecutable } from './common'
 import { openCodePartBlocks } from '../../pty/cliTools/openCodeParts'
-import { readOpenCodeRunCost } from '../../pty/cliTools/openCodeScanner'
+import { readOpenCodeRetry, readOpenCodeRunCost, readOpenCodeRunModels, type OpenCodeRetry } from '../../pty/cliTools/openCodeScanner'
 import type { HeadlessCapability, HeadlessResult, HeadlessRunOptions, HeadlessRun } from './types'
 
 /**
@@ -147,6 +147,23 @@ function str(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
+/** Provider errors that mean the account (key) is out of quota or rate-limited. */
+const LIMIT_ERROR_TYPES = new Set(['provider.quota', 'provider.rate-limit'])
+
+/** Empty attempts in a row after which a retry OpenCode is in is treated as a usage limit (it would retry forever). */
+export const RETRIES_BEFORE_LIMIT = 3
+
+/** The limit message for a retry, with its retry time in a form the engine reads ("try again in N minutes"). */
+export function retryLimitMessage(retry: OpenCodeRetry): string {
+  const minutes = retry.retryAfterMs !== null ? Math.max(1, Math.ceil(retry.retryAfterMs / 60_000)) : null
+  return `${retry.message || retry.errorType} (OpenCode retried ${retry.attempt} times${minutes !== null ? `; try again in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}` : ''})`
+}
+
+/** "provider/model" without the variant, to compare with what answered. */
+function baseModel(model: string): string {
+  return model.split('#')[0]
+}
+
 export const openCodeHeadless: HeadlessCapability = {
   run(options: HeadlessRunOptions): HeadlessRun {
     const resolved = options.executable ? null : resolveOpenCodeExecutable(options.env)
@@ -164,6 +181,8 @@ export const openCodeHeadless: HeadlessCapability = {
     let finalText = ''
     let streamedCost: number | null = null
     let fatal: string | null = null
+    let limit: string | null = null
+    let emptySteps = 0
     const startedAt = Date.now()
 
     const handle = runProcess({
@@ -185,8 +204,22 @@ export const openCodeHeadless: HeadlessCapability = {
         if (event.type === 'error') {
           const error = (event.error ?? {}) as Record<string, unknown>
           fatal = str(error.message) || str(error.type) || 'error'
+          if (LIMIT_ERROR_TYPES.has(str(error.type))) limit = fatal
           return
         }
+        // Each retry of a failing provider call is a new step_start with nothing after it.
+        if (event.type === 'step_start') {
+          emptySteps++
+          if (emptySteps >= RETRIES_BEFORE_LIMIT && sessionId && !limit) {
+            const retry = readOpenCodeRetry(sessionId)
+            if (retry && LIMIT_ERROR_TYPES.has(retry.errorType)) {
+              limit = retryLimitMessage(retry)
+              void handle.cancel()
+            }
+          }
+          return
+        }
+        emptySteps = 0
         const part = (event.part ?? {}) as Record<string, unknown>
         if (event.type === 'step_finish' && typeof part.cost === 'number') streamedCost = (streamedCost ?? 0) + part.cost
         if (event.type === 'text') {
@@ -202,10 +235,16 @@ export const openCodeHeadless: HeadlessCapability = {
     const result = handle.done.then((exit): HeadlessResult => {
       const costUsd = (sessionId ? readOpenCodeRunCost(sessionId, startedAt) : null) ?? streamedCost
       const base: HeadlessResult = { ok: false, sessionId, structured: null, finalText: finalText || null, costUsd, warnings, error: null }
+      if (limit) return { ...base, error: { code: 'limit', message: limit } }
       const exitError = processError(exit, 'OpenCode')
       if (exitError && exitError.code !== 'failed' && exitError.code !== 'limit') return { ...base, error: exitError }
       if (fatal) return { ...base, error: { code: classifyFailure(fatal), message: fatal } }
       if (exitError) return { ...base, error: exitError }
+      // OpenCode silently answers with another model (its free one) when the requested one is unavailable.
+      const expected = model ?? config.model
+      const answered = sessionId && expected ? readOpenCodeRunModels(sessionId, startedAt) : []
+      const other = answered.filter((m) => m !== baseModel(expected ?? ''))
+      if (other.length > 0) return { ...base, error: { code: 'failed', message: `OpenCode answered with ${other.join(', ')} instead of ${baseModel(expected ?? '')}; is the model available to the configured provider?` } }
       if (!finalText) return { ...base, error: { code: 'no_output', message: 'OpenCode returned no final message' } }
       if (options.outputSchema) {
         try {

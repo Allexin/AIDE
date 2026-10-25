@@ -405,6 +405,30 @@ describe('PipelineRun', () => {
     expect(implement[1].prompt).toContain('was interrupted')
   })
 
+  it('names the limited CLI and the visit start, and lets the account pool move the resume time', async () => {
+    let first = true
+    const h = harness({ agent: (req) => {
+      if (req.label.endsWith(':implement') && first) { first = false; return { ok: false, error: { code: 'limit', message: 'usage limit reached' } } }
+      return happy(req)
+    } })
+    await h.run.run()
+    const stopped = h.events.find((e) => e.type === 'run_stopped')!.data
+    expect(stopped).toMatchObject({ reason: 'usage_limit', cli: 'claude-code', resumeAt: null })
+    expect(Number.isNaN(Date.parse(String(stopped.visitStartedAt)))).toBe(false)
+    expect(h.state().limitCli).toBe('claude-code')
+
+    const at = new Date(Date.now() + 3_600_000).toISOString()
+    expect(h.run.setLimitResume(at, 'every checked account hit its limit')).toBe(true)
+    expect(h.state().limitResumeAt).toBe(at)
+    const rescheduled = h.events.filter((e) => e.type === 'run_stopped').at(-1)!.data
+    expect(rescheduled).toMatchObject({ reason: 'usage_limit', cli: 'claude-code', resumeAt: at, rescheduled: true })
+
+    await h.run.run()
+    expect(h.state().result).toBe('success')
+    expect(h.state().limitCli).toBeNull()
+    expect(h.run.setLimitResume(at, 'too late')).toBe(false)
+  })
+
   it('amending a running agent step restarts it in its session with the new instruction; later steps see it', async () => {
     let hang = true
     const h = harness({ agent: (req) => req.label.endsWith(':implement') && hang ? 'hang' : happy(req) })

@@ -15,6 +15,7 @@ import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
 import { listAccounts, updateAccount as updateStoredAccount, getActiveAccount, setActiveAccount } from '../config/accountStorage'
 import { offerRestartAfterAccountChange } from '../pty/registry'
 import { getCommandLineArgumentsHelp } from '../startupArgs'
+import { accountLoadedByUser } from '../accounts/accountSwitch'
 
 // Injected by setupMenu — avoids circular dep with windows/editor.ts
 type OpenProjectFn = (path: string) => { success: boolean; error?: string }
@@ -313,6 +314,7 @@ export function rebuildMenu(): void {
             if (!proceed) return
             await t.importCredentials(stored.credentials)
             setActiveAccount(tool.id, acc.id)
+            accountLoadedByUser(tool.id, acc.id)
             broadcastAccountsChanged()
             await offerRestartAfterAccountChange(tool.id, getEditorWindow())
           }

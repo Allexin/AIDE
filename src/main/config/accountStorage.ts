@@ -22,6 +22,12 @@ export interface CliAccountInfo {
   name: string
   identifier: string
   savedAt: string
+  /** Checked for automatic switching when a pipeline step hits a usage limit. */
+  inPool: boolean
+  /** Set while the account is out of the pool's rotation after hitting a limit;
+   *  `exhaustedUntil` is when it resets, null when that is not known. */
+  exhausted: boolean
+  exhaustedUntil: string | null
 }
 
 export interface SubscriptionUsageCache {
@@ -37,6 +43,9 @@ interface AccountRow {
   saved_at: string
   credentials_json: string
   revision: number
+  in_pool: number
+  exhausted_at_ms: number | null
+  exhausted_until_ms: number | null
 }
 
 interface LegacyAccount {
@@ -179,6 +188,22 @@ export function initAccountStorage(): void {
     join(userData, 'aide-accounts.json'),
     join(userData, 'aide-active-accounts.json')
   )
+  addPoolColumns()
+}
+
+/** Account pool columns, added to databases created before the pool existed. */
+function addPoolColumns(): void {
+  const storage = db()
+  const columns = new Set((storage.prepare('PRAGMA table_info(accounts)').all() as Array<{ name: string }>).map((c) => c.name))
+  storage.transaction(() => {
+    if (!columns.has('sort_order')) {
+      storage.exec('ALTER TABLE accounts ADD COLUMN sort_order INTEGER')
+      storage.exec('UPDATE accounts SET sort_order = rowid')
+    }
+    if (!columns.has('in_pool')) storage.exec('ALTER TABLE accounts ADD COLUMN in_pool INTEGER NOT NULL DEFAULT 0')
+    if (!columns.has('exhausted_at_ms')) storage.exec('ALTER TABLE accounts ADD COLUMN exhausted_at_ms INTEGER')
+    if (!columns.has('exhausted_until_ms')) storage.exec('ALTER TABLE accounts ADD COLUMN exhausted_until_ms INTEGER')
+  })()
 }
 
 function accountFromRow(row: AccountRow): CliAccount {
@@ -210,21 +235,73 @@ export function setActiveAccount(toolId: string, accountId: string | null): void
   `).run(toolId, accountId)
 }
 
-export function listAccounts(toolId: string): CliAccount[] {
-  const rows = db().prepare(`
-    SELECT id, name, identifier, saved_at, credentials_json, revision
+const ACCOUNT_COLUMNS = 'id, name, identifier, saved_at, credentials_json, revision, in_pool, exhausted_at_ms, exhausted_until_ms'
+
+function accountRows(toolId: string): AccountRow[] {
+  return db().prepare(`
+    SELECT ${ACCOUNT_COLUMNS}
     FROM accounts
     WHERE tool_id = ?
-    ORDER BY rowid
+    ORDER BY sort_order, rowid
   `).all(toolId) as AccountRow[]
-  return rows.map(accountFromRow)
+}
+
+export function listAccounts(toolId: string): CliAccount[] {
+  return accountRows(toolId).map(accountFromRow)
+}
+
+/** Whether an exhausted mark still applies at `nowMs`: until its reset time, or indefinitely when that is unknown. */
+function isExhausted(row: Pick<AccountRow, 'exhausted_at_ms' | 'exhausted_until_ms'>, nowMs: number): boolean {
+  if (row.exhausted_at_ms === null) return false
+  return row.exhausted_until_ms === null || row.exhausted_until_ms > nowMs
+}
+
+function infoFromRow(row: AccountRow, nowMs: number): CliAccountInfo {
+  const exhausted = isExhausted(row, nowMs)
+  return {
+    id: row.id,
+    name: row.name,
+    identifier: row.identifier,
+    savedAt: row.saved_at,
+    inPool: row.in_pool === 1,
+    exhausted,
+    exhaustedUntil: exhausted && row.exhausted_until_ms !== null ? new Date(row.exhausted_until_ms).toISOString() : null
+  }
 }
 
 /** Return account list without credentials — safe for renderer. */
-export function listAccountInfos(toolId: string): CliAccountInfo[] {
-  return listAccounts(toolId).map(({ id, name, identifier, savedAt }) => ({
-    id, name, identifier, savedAt
-  }))
+export function listAccountInfos(toolId: string, nowMs: number = Date.now()): CliAccountInfo[] {
+  return accountRows(toolId).map((row) => infoFromRow(row, nowMs))
+}
+
+/** Check or uncheck an account for automatic switching in pipelines. */
+export function setAccountInPool(toolId: string, accountId: string, inPool: boolean): void {
+  db().prepare('UPDATE accounts SET in_pool = ? WHERE tool_id = ? AND id = ?').run(inPool ? 1 : 0, toolId, accountId)
+}
+
+/** Move an account one place up (-1) or down (+1) in its tool's list — the pool's switching order. */
+export function moveAccount(toolId: string, accountId: string, delta: -1 | 1): void {
+  const storage = db()
+  storage.transaction(() => {
+    const ids = accountRows(toolId).map((row) => row.id)
+    const from = ids.indexOf(accountId)
+    const to = from + delta
+    if (from < 0 || to < 0 || to >= ids.length) return
+    ;[ids[from], ids[to]] = [ids[to], ids[from]]
+    const update = storage.prepare('UPDATE accounts SET sort_order = ? WHERE tool_id = ? AND id = ?')
+    ids.forEach((id, index) => update.run(index + 1, toolId, id))
+  })()
+}
+
+/** Take an account out of the pool's rotation until `untilMs` (null: until it is cleared). */
+export function markAccountExhausted(toolId: string, accountId: string, untilMs: number | null, nowMs: number = Date.now()): void {
+  db().prepare('UPDATE accounts SET exhausted_at_ms = ?, exhausted_until_ms = ? WHERE tool_id = ? AND id = ?')
+    .run(nowMs, untilMs, toolId, accountId)
+}
+
+export function clearAccountExhausted(toolId: string, accountId: string): void {
+  db().prepare('UPDATE accounts SET exhausted_at_ms = NULL, exhausted_until_ms = NULL WHERE tool_id = ? AND id = ?')
+    .run(toolId, accountId)
 }
 
 export function saveAccount(
@@ -243,8 +320,9 @@ export function saveAccount(
   }
   db().prepare(`
     INSERT INTO accounts
-      (tool_id, id, name, identifier, saved_at, credentials_json, revision)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+      (tool_id, id, name, identifier, saved_at, credentials_json, revision, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?,
+      (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM accounts WHERE tool_id = ?))
   `).run(
     toolId,
     account.id,
@@ -252,9 +330,10 @@ export function saveAccount(
     account.identifier,
     account.savedAt,
     JSON.stringify(account.credentials),
-    account.revision
+    account.revision,
+    toolId
   )
-  return { id: account.id, name: account.name, identifier: account.identifier, savedAt: account.savedAt }
+  return { id: account.id, name: account.name, identifier: account.identifier, savedAt: account.savedAt, inPool: false, exhausted: false, exhaustedUntil: null }
 }
 
 export function deleteAccount(toolId: string, accountId: string): void {
@@ -283,10 +362,10 @@ export function updateAccount(
   `).run(identifier, JSON.stringify(credentials), savedAt, toolId, accountId, expectedRevision)
   if (result.changes !== 1) return null
 
-  const row = db().prepare('SELECT name FROM accounts WHERE tool_id = ? AND id = ?')
-    .get(toolId, accountId) as { name: string } | undefined
+  const row = db().prepare(`SELECT ${ACCOUNT_COLUMNS} FROM accounts WHERE tool_id = ? AND id = ?`)
+    .get(toolId, accountId) as AccountRow | undefined
   if (!row) return null
-  return { id: accountId, name: row.name, identifier, savedAt }
+  return infoFromRow(row, Date.now())
 }
 
 export function getSubscriptionUsageCache(

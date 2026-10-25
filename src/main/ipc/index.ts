@@ -27,6 +27,8 @@ import { getRegisteredTools, getToolById, getDefaultTool } from '../pty/cliTools
 import {
   listAccounts,
   listAccountInfos,
+  setAccountInPool,
+  moveAccount,
   saveAccount,
   deleteAccount as deleteStoredAccount,
   updateAccount as updateStoredAccount,
@@ -49,6 +51,7 @@ import {
 import { setEditorFileOpen, rebuildMenu } from '../menu'
 import { createSettingsWindow } from '../windows/settings'
 import { thinkingRegistry } from '../thinking/thinkingRegistry'
+import { accountLoadedByUser } from '../accounts/accountSwitch'
 
 // Helper: spawn one git subcommand, stream stdout/stderr lines, return success/error.
 function runGitSubcommand(
@@ -1186,6 +1189,16 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     return result
   })
 
+  // ── Accounts: pipeline account pool (checked accounts, their order) ─────────
+  ipcMain.handle('accounts:get-active', (_event, toolId: string) => getActiveAccount(toolId))
+  ipcMain.handle('accounts:set-in-pool', (_event, toolId: string, accountId: string, inPool: boolean) => {
+    setAccountInPool(toolId, accountId, inPool)
+  })
+  ipcMain.handle('accounts:move', (_event, toolId: string, accountId: string, delta: -1 | 1) => {
+    moveAccount(toolId, accountId, delta === -1 ? -1 : 1)
+    rebuildMenu()
+  })
+
   // ── Accounts: delete saved account ─────────────────────────────────────────
   ipcMain.handle('accounts:delete', (_event, toolId: string, accountId: string) => {
     deleteStoredAccount(toolId, accountId)
@@ -1231,6 +1244,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
 
     await tool.importCredentials(stored.credentials)
     setActiveAccount(toolId, accountId)
+    accountLoadedByUser(toolId, accountId)
     broadcastAccountsChanged()
     await offerRestartAfterAccountChange(toolId, BrowserWindow.fromWebContents(event.sender))
     return true

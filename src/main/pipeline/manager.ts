@@ -17,7 +17,7 @@ import { pipelineEvents, type PipelineEventType } from './events'
  * Emits:
  *   'state'      (projectPath, snapshot)                 on every run state change
  *   'transcript' (projectPath, runId, node, visit, entry) streamed agent transcript entries
- *   'event'      (projectPath, runId, type, data)        pipeline events
+ *   'event'      (projectPath, runId, type, data, id)    pipeline events (id: the event id in the feed)
  */
 
 export interface ManagerEnvironment {
@@ -104,7 +104,7 @@ export class PipelineManager extends EventEmitter {
       emit: (runId: string, type: PipelineEventType, data: Record<string, unknown>) => {
         const event = pipelineEvents.emit(projectPath, runId, type, data)
         try { store.appendEvent(runId, event as unknown as Record<string, unknown>) } catch { /* run dir removed */ }
-        this.emit('event', projectPath, runId, type, data)
+        this.emit('event', projectPath, runId, type, data, event.id)
       },
       onStateChange: (state: RunState) => {
         const run = this.active.get(projectPath)
@@ -172,7 +172,7 @@ export class PipelineManager extends EventEmitter {
       if (pending) deps.emit(runId, 'escalation', { ...compactEscalation(pending), summary: `AIDE restarted; still waiting for a decision at ${pending.node}` })
       else if (state.status === 'stopped' && state.limitResumeAt) {
         run.scheduleLimitResume()
-        deps.emit(runId, 'run_stopped', { next: state.current, reason: 'usage_limit', resumeAt: state.limitResumeAt, summary: `AIDE restarted; the run waits for a CLI usage limit and resumes by itself at ${state.limitResumeAt} (or pipeline_resume)` })
+        deps.emit(runId, 'run_stopped', { next: state.current, reason: 'usage_limit', cli: state.limitCli ?? null, resumeAt: state.limitResumeAt, summary: `AIDE restarted; the run waits for a CLI usage limit and resumes by itself at ${state.limitResumeAt} (or pipeline_resume)` })
       } else if (state.status === 'paused' || state.status === 'stopped') {
         deps.emit(runId, state.status === 'paused' ? 'run_paused' : 'run_stopped', {
           next: state.current,
@@ -213,6 +213,16 @@ export class PipelineManager extends EventEmitter {
     if (run.state.status === 'waiting') throw new Error('The run is waiting for an escalation answer; use pipeline_answer.')
     if (run.isFinal()) throw new Error('The run has already ended.')
     void run.run()
+  }
+
+  /** Record an event that happened to the run from outside the engine (the account pool). */
+  announce(projectPath: string, type: PipelineEventType, data: Record<string, unknown>, runId?: string): void {
+    this.require(projectPath, runId).announce(type, data)
+  }
+
+  /** Move the automatic resume of a run that waits for a usage limit; false when it does not wait for one. */
+  setLimitResume(projectPath: string, at: string, summary: string, runId?: string): boolean {
+    return this.require(projectPath, runId).setLimitResume(at, summary)
   }
 
   /** End a run for good. Returns the uncommitted changes left in the working tree (the run's partial work, and anything else uncommitted). */

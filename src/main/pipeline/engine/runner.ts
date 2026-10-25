@@ -55,7 +55,7 @@ type NodeResult =
   | { kind: 'escalate'; message: string }
   | { kind: 'interrupted' }
   /** The CLI hit its usage limit: the run holds and resumes later, keeping the session. */
-  | { kind: 'limited'; message: string }
+  | { kind: 'limited'; message: string; cli: string }
 
 export interface RunReport {
   runId: string
@@ -184,6 +184,7 @@ export class PipelineRun {
     }
     this.clearLimitTimer()
     this.state.limitResumeAt = null
+    this.state.limitCli = null
     if (this.state.startCommit === null && this.state.history.length === 0) {
       this.state.startCommit = await this.deps.git.headSha(this.state.projectPath).catch(() => null)
     }
@@ -270,6 +271,25 @@ export class PipelineRun {
     this.store.writeMachine(this.runId, stored)
     this.save()
     return []
+  }
+
+  /** Record an event that happened to the run from outside the engine (the account pool). */
+  announce(type: PipelineEventType, data: Record<string, unknown>): void {
+    this.deps.emit(this.runId, type, data)
+  }
+
+  /**
+   * Move the automatic resume of a run that waits for a usage limit — the account
+   * pool switched the CLI to the account that is available soonest. Returns false
+   * when the run is not waiting for a limit.
+   */
+  setLimitResume(at: string, summary: string): boolean {
+    if (this.state.status !== 'stopped' || !this.state.limitCli) return false
+    this.state.limitResumeAt = at
+    this.save()
+    this.scheduleLimitResume()
+    this.deps.emit(this.runId, 'run_stopped', { next: this.state.current, reason: 'usage_limit', cli: this.state.limitCli, resumeAt: at, rescheduled: true, summary })
+    return true
   }
 
   /** Re-arm the automatic resume after a usage limit (after an AIDE restart). */
@@ -418,7 +438,7 @@ export class PipelineRun {
         visit.outcome = 'interrupted'
         visit.error = result.message
         this.state.visits[id] = visits - 1
-        this.holdForLimit(id, result.message)
+        this.holdForLimit(id, result.message, result.cli, visit.startedAt)
         return
       }
       if (result.kind === 'escalate') {
@@ -628,7 +648,7 @@ export class PipelineRun {
     this.active = handle
     let result = await handle.result
     if (result.error?.code === 'cancelled' || this.interruptRequested) return { kind: 'interrupted' }
-    if (result.error?.code === 'limit') return { kind: 'limited', message: `${cli}: ${result.error.message}` }
+    if (result.error?.code === 'limit') return { kind: 'limited', message: `${cli}: ${result.error.message}`, cli: String(cli) }
     if (!result.ok) return { kind: 'escalate', message: `${cli} failed (${result.error?.code}): ${result.error?.message}` }
 
     let errors = validateAgainstSchema(result.structured, schema)
@@ -637,7 +657,7 @@ export class PipelineRun {
       this.active = handle
       result = await handle.result
       if (result.error?.code === 'cancelled' || this.interruptRequested) return { kind: 'interrupted' }
-      if (result.error?.code === 'limit') return { kind: 'limited', message: `${cli}: ${result.error.message}` }
+      if (result.error?.code === 'limit') return { kind: 'limited', message: `${cli}: ${result.error.message}`, cli: String(cli) }
       if (!result.ok) return { kind: 'escalate', message: `${cli} failed (${result.error?.code}): ${result.error?.message}` }
       errors = validateAgainstSchema(result.structured, schema)
     }
@@ -733,7 +753,7 @@ export class PipelineRun {
       this.active = handle
       const result = await handle.result
       if (result.error?.code === 'cancelled' || this.interruptRequested) return { kind: 'interrupted' }
-      if (result.error?.code === 'limit') return { kind: 'limited', message: `${cli}: ${result.error.message}` }
+      if (result.error?.code === 'limit') return { kind: 'limited', message: `${cli}: ${result.error.message}`, cli: String(cli) }
       if (!result.ok) return { kind: 'escalate', message: `Commit reviewer failed (${result.error?.code}): ${result.error?.message}` }
       const errors = validateAgainstSchema(result.structured, BUILTIN_SCHEMAS.commitReview)
       if (errors.length) return { kind: 'escalate', message: `Commit review output invalid: ${errors.join('; ')}` }
@@ -750,13 +770,16 @@ export class PipelineRun {
   // ── State transitions ─────────────────────────────────────────────────────
 
   /** A CLI usage limit: hold the run, keep the session, resume by itself when the limit resets (if the message says when). */
-  private holdForLimit(node: string, message: string): void {
+  private holdForLimit(node: string, message: string, cli: string, visitStartedAt: string): void {
     const resumeAt = limitResetTime(message, new Date())
     this.state.limitResumeAt = resumeAt?.toISOString() ?? null
+    this.state.limitCli = cli
     this.setStatus('stopped')
     this.deps.emit(this.runId, 'run_stopped', {
       node,
       reason: 'usage_limit',
+      cli,
+      visitStartedAt,
       resumeAt: this.state.limitResumeAt,
       message: clip(message, 400),
       summary: resumeAt

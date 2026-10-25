@@ -429,6 +429,9 @@ interface CliAccountInfo {
   name: string
   identifier: string // human-readable login identifier (e.g. email)
   savedAt: string
+  inPool: boolean
+  exhausted: boolean
+  exhaustedUntil: string | null
 }
 
 interface AccountManagerAPI {
@@ -439,6 +442,9 @@ interface AccountManagerAPI {
   saveCurrent: (toolId: string, name: string) => Promise<CliAccountInfo | null>
   deleteAccount: (toolId: string, accountId: string) => Promise<void>
   updateAccount: (toolId: string, accountId: string) => Promise<CliAccountInfo | null>
+  getActiveAccount: (toolId: string) => Promise<string | null>
+  setInPool: (toolId: string, accountId: string, inPool: boolean) => Promise<void>
+  moveAccount: (toolId: string, accountId: string, delta: -1 | 1) => Promise<void>
   loadAccount: (toolId: string, accountId: string, autoSaveMode?: 'check' | 'force' | 'skip') => Promise<true | false | { conflict: AccountSwitchConflict }>
 }
 

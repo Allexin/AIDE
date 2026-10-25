@@ -25,6 +25,8 @@ import {
   watchOpenCodeSessions,
   watchOpenCodeMessages
 } from './openCodeScanner'
+import type { OpenCodeCredential } from './openCodeScanner'
+import { activeOpenCodeCredentials, describeOpenCodeCredentials, importOpenCodeAccount } from './openCodeAuth'
 import { openCodeHeadless, openCodeMajorVersion, resolveOpenCodeExecutable } from '../../pipeline/headless/openCodeHeadless'
 
 const TOOL_ID = 'open-code'
@@ -275,16 +277,31 @@ export const openCodeTool: CliTool = {
     }
   },
 
-  // ── Login identifier ─────────────────────────────────────────────────────
+  // ── Accounts ─────────────────────────────────────────────────────────────
   //
-  // OpenCode has a built-in /auth menu for account switching — no AIDE-level management needed.
+  // An AIDE account is the set of active provider credentials (see openCodeAuth.ts);
+  // AIDE stores and switches them like any CLI's, not through OpenCode's own accounts.
+
+  async isLoggedIn(): Promise<boolean> {
+    return activeOpenCodeCredentials().length > 0
+  },
 
   async getLoginIdentifier(): Promise<string | null> {
-    return TOOL_NAME
+    return describeOpenCodeCredentials(activeOpenCodeCredentials())
   },
 
   hasAccountSystem(): boolean {
-    return false
+    return true
+  },
+
+  async exportCredentials(): Promise<Record<string, unknown> | null> {
+    const credentials = activeOpenCodeCredentials()
+    return credentials.length > 0 ? { credentials } : null
+  },
+
+  async importCredentials(saved: Record<string, unknown>): Promise<void> {
+    if (!Array.isArray(saved.credentials)) return
+    await importOpenCodeAccount({ credentials: saved.credentials as OpenCodeCredential[] })
   },
 
   // ── Usage info ───────────────────────────────────────────────────────────

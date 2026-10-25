@@ -6,7 +6,7 @@ import type { HistoryEntry } from '../../pty/cliTools/types'
 import { openCodePartBlocks } from '../../pty/cliTools/openCodeParts'
 import {
   buildOpenCodeArgs, buildOpenCodeConfigContent, openCodeHeadless, openCodeModel,
-  readOpenCodeConfig, READ_ONLY_AGENT
+  readOpenCodeConfig, READ_ONLY_AGENT, retryLimitMessage
 } from './openCodeHeadless'
 import { parseFinalJson, promptWithRoleAndSchema } from './common'
 import type { HeadlessRunOptions } from './types'
@@ -152,6 +152,21 @@ describe('opencode headless adapter', () => {
     ])).result
     expect(result.ok).toBe(false)
     expect(result.error).toEqual({ code: 'failed', message: 'Model unavailable: nosuch/model' })
+  })
+
+  it('reports a provider quota or rate-limit error as a usage limit', async () => {
+    const result = await openCodeHeadless.run(options([
+      line({ type: 'error', sessionID: SID, error: { type: 'provider.quota', message: 'Insufficient Balance', status: 402 } }),
+      { exit: 1 }
+    ])).result
+    expect(result.error).toEqual({ code: 'limit', message: 'Insufficient Balance' })
+  })
+
+  it('words a long retry so the engine reads when to try again', () => {
+    expect(retryLimitMessage({ attempt: 4, errorType: 'provider.rate-limit', message: 'Rate limit reached', retryAfterMs: 20_000 }))
+      .toBe('Rate limit reached (OpenCode retried 4 times; try again in 1 minute)')
+    expect(retryLimitMessage({ attempt: 3, errorType: 'provider.rate-limit', message: '', retryAfterMs: 150_000 }))
+      .toBe('provider.rate-limit (OpenCode retried 3 times; try again in 3 minutes)')
   })
 
   it('fails without a final message, and on a non-JSON answer when a schema was asked', async () => {

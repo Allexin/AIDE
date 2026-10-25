@@ -11,6 +11,7 @@ import { sharedPipelinesDir } from './engine/library'
 import { getProjectUserPath } from '../config/projectUserData'
 import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
 import { startHeadless } from './headless'
+import { AccountPool } from './accountPool'
 import { failedRun } from './headless/common'
 import { killAllProcessTreesSync, runShellCommand } from './processRunner'
 import { commitIndex, headSha, stagedDiff, status, workingDiff } from './git'
@@ -59,6 +60,7 @@ function shimPath(): string {
 }
 
 export async function startPipelineServer(): Promise<void> {
+  new AccountPool(pipelineManager).attach()
   try {
     launcherPath = writeLauncher(runtimeDir(), process.execPath, shimPath())
     await pipelineServer.start({

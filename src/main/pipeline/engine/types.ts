@@ -94,6 +94,8 @@ export interface RunState {
   amendments?: Amendment[]
   /** Set while the run waits for a CLI usage limit to reset; the run resumes by itself then. */
   limitResumeAt?: string | null
+  /** The CLI whose usage limit the run waits for (set with limitResumeAt). */
+  limitCli?: string | null
   outputs: Record<string, unknown>
   history: NodeVisit[]
   escalations: Escalation[]

@@ -315,13 +315,14 @@ export class PtyManager {
   /** Restart the tool's tabs the way a user would — close the tab, then open its session again —
    *  leaving other tools' tabs untouched. The renderer is told about the replacement before the
    *  old tab goes, because it never drops its last tab. */
-  async restartToolTabs(toolId: string): Promise<void> {
+  async restartToolTabs(toolId: string): Promise<Array<{ oldTabId: string; newTabId: string }>> {
     const old = [...this.tabs.values()].filter((t) => t.tool.id === toolId)
-    if (old.length === 0) return
+    if (old.length === 0) return []
 
     const tool = old[0].tool
     await tool.prepareProject?.(this.projectPath)
 
+    const replaced: Array<{ oldTabId: string; newTabId: string }> = []
     for (const tab of old) {
       const title = this.titleCache.get(tab.tabId)
       if (!(await this.closeTabAndWaitExit(tab.tabId))) {
@@ -332,7 +333,16 @@ export class PtyManager {
         : this.spawnNewSessionTab(tool)
       this.send('terminal:new-tab', { ...info, title })
       this.send('terminal:tab-closed', { tabId: tab.tabId })
+      replaced.push({ oldTabId: tab.tabId, newTabId: info.tabId })
     }
+    return replaced
+  }
+
+  /** Submit a message to a tab's CLI once it reports ready; false if it never did. */
+  async submitWhenReady(tabId: string, text: string): Promise<boolean> {
+    if ((await this.waitForReady(tabId)) !== 'ok' || !this.tabs.has(tabId)) return false
+    await this.submitPastedInput(tabId, text.replace(/\n+/g, ' ').trim())
+    return true
   }
 
   subscribeToOutput(tabId: string, cb: (data: string) => void): () => void {
