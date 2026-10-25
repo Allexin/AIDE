@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'fs'
 import { delimiter, dirname, join } from 'path'
 import { homedir } from 'os'
 import { runProcess } from '../processRunner'
-import { classifyFailure, failedRun, parseJsonLine, processError, resolveExecutable } from './common'
+import { classifyFailure, failedRun, parseFinalJson, parseJsonLine, processError, promptWithRoleAndSchema, resolveExecutable } from './common'
 import { openCodePartBlocks } from '../../pty/cliTools/openCodeParts'
 import { readOpenCodeRunCost } from '../../pty/cliTools/openCodeScanner'
 import type { HeadlessCapability, HeadlessResult, HeadlessRunOptions, HeadlessRun } from './types'
@@ -143,31 +143,6 @@ export function buildOpenCodeArgs(options: HeadlessRunOptions, model: string | u
   return args
 }
 
-export function buildOpenCodePrompt(options: HeadlessRunOptions): string {
-  let prompt = options.systemAppend ? `${options.systemAppend}\n\n---\n\n${options.prompt}` : options.prompt
-  if (options.outputSchema) {
-    prompt += '\n\n---\n\nEnd your turn with your final answer as one JSON object that conforms to this JSON Schema. '
-      + 'The final message must contain only that JSON object: no other text, no code fence.\n\n'
-      + JSON.stringify(options.outputSchema, null, 2)
-  }
-  return prompt
-}
-
-/** The JSON object in a final message, tolerating a code fence or text around it. */
-export function parseFinalJson(text: string): unknown {
-  const trimmed = text.trim()
-  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed)
-  const body = fenced ? fenced[1] : trimmed
-  try {
-    return JSON.parse(body)
-  } catch {
-    const start = body.indexOf('{')
-    const end = body.lastIndexOf('}')
-    if (start === -1 || end <= start) throw new Error('no JSON object')
-    return JSON.parse(body.slice(start, end + 1))
-  }
-}
-
 function str(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
@@ -197,7 +172,7 @@ export const openCodeHeadless: HeadlessCapability = {
       cwd: options.cwd,
       // OpenCode takes its working directory from PWD when set, over the real cwd.
       env: { ...options.env, PWD: options.cwd, OPENCODE_CONFIG_CONTENT: buildOpenCodeConfigContent(config.mcpServers) },
-      stdin: buildOpenCodePrompt(options),
+      stdin: promptWithRoleAndSchema(options),
       timeoutMs: options.timeoutMs,
       label: options.label,
       onStdoutLine: (line) => {

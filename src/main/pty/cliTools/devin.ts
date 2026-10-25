@@ -16,6 +16,7 @@ import { dirname, join, resolve } from 'path'
 import type { CliTool, CliSession, SettingsField, HistoryEntry, HookLaunchContext } from './types'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { findExecutable, listProcesses } from '../../platform'
+import { devinHeadless } from '../../pipeline/headless/devinHeadless'
 import { resolveOwnerPidFromSnapshot } from '../../platform/processTree'
 import {
   getDevinCliDir,
@@ -161,6 +162,8 @@ export const devinTool: CliTool = {
   name: TOOL_NAME,
 
   installUrl: 'https://docs.devin.ai/cli',
+
+  headless: devinHeadless,
 
   async isInstalled(): Promise<boolean> {
     return findExecutable('devin')

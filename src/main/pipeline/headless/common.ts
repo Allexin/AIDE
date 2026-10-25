@@ -1,7 +1,7 @@
 import { existsSync } from 'fs'
 import { delimiter, join } from 'path'
 import { homedir } from 'os'
-import type { HeadlessErrorCode, HeadlessResult, HeadlessRun } from './types'
+import type { HeadlessErrorCode, HeadlessResult, HeadlessRun, HeadlessRunOptions } from './types'
 import type { ProcessResult } from '../processRunner'
 
 /**
@@ -48,6 +48,36 @@ export function failedRun(code: HeadlessErrorCode, message: string): HeadlessRun
   return {
     result: Promise.resolve({ ok: false, sessionId: null, structured: null, finalText: null, costUsd: null, warnings: [], error: { code, message } }),
     cancel: () => Promise.resolve()
+  }
+}
+
+/**
+ * The prompt for a CLI without a system-prompt append or a structured-output
+ * mode: role instructions prepended, the output schema appended as an
+ * instruction (the engine validates the parsed answer).
+ */
+export function promptWithRoleAndSchema(options: Pick<HeadlessRunOptions, 'prompt' | 'systemAppend' | 'outputSchema'>): string {
+  let prompt = options.systemAppend ? `${options.systemAppend}\n\n---\n\n${options.prompt}` : options.prompt
+  if (options.outputSchema) {
+    prompt += '\n\n---\n\nEnd your turn with your final answer as one JSON object that conforms to this JSON Schema. '
+      + 'The final message must contain only that JSON object: no other text, no code fence.\n\n'
+      + JSON.stringify(options.outputSchema, null, 2)
+  }
+  return prompt
+}
+
+/** The JSON object in a final message, tolerating a code fence or text around it. */
+export function parseFinalJson(text: string): unknown {
+  const trimmed = text.trim()
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed)
+  const body = fenced ? fenced[1] : trimmed
+  try {
+    return JSON.parse(body)
+  } catch {
+    const start = body.indexOf('{')
+    const end = body.lastIndexOf('}')
+    if (start === -1 || end <= start) throw new Error('no JSON object')
+    return JSON.parse(body.slice(start, end + 1))
   }
 }
 

@@ -5,9 +5,10 @@ import { tmpdir } from 'os'
 import type { HistoryEntry } from '../../pty/cliTools/types'
 import { openCodePartBlocks } from '../../pty/cliTools/openCodeParts'
 import {
-  buildOpenCodeArgs, buildOpenCodeConfigContent, buildOpenCodePrompt, openCodeHeadless, openCodeModel,
-  parseFinalJson, readOpenCodeConfig, READ_ONLY_AGENT
+  buildOpenCodeArgs, buildOpenCodeConfigContent, openCodeHeadless, openCodeModel,
+  readOpenCodeConfig, READ_ONLY_AGENT
 } from './openCodeHeadless'
+import { parseFinalJson, promptWithRoleAndSchema } from './common'
 import type { HeadlessRunOptions } from './types'
 
 const FAKE_CLI = join(__dirname, '..', 'testing', 'fakeCli.cjs')
@@ -107,7 +108,7 @@ describe('opencode headless adapter', () => {
   })
 
   it('prepends role instructions and appends the output schema', () => {
-    const prompt = buildOpenCodePrompt({ ...options([]), systemAppend: 'You are a reviewer.', outputSchema: { type: 'object' } })
+    const prompt = promptWithRoleAndSchema({ ...options([]), systemAppend: 'You are a reviewer.', outputSchema: { type: 'object' } })
     expect(prompt.startsWith('You are a reviewer.\n\n---\n\ndo the thing\n\n---\n\nEnd your turn')).toBe(true)
     expect(prompt).toContain('"type": "object"')
   })

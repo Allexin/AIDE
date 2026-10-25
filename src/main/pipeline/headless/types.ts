@@ -31,6 +31,9 @@ export interface HeadlessRunOptions {
   maxBudgetUsd?: number
   /** Full environment for the child, including the tool's proxy overrides. */
   env: NodeJS.ProcessEnv
+  /** A persistent directory AIDE owns for this CLI, for adapters that keep their
+   *  own config home across runs (Cursor). Set by `startHeadless`. */
+  stateDir?: string
   /** Override of the resolved executable (tests: `node fakeCli.cjs`). */
   executable?: { command: string; args?: string[] }
   /** Short label for diagnostics. */

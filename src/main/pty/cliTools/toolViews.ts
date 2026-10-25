@@ -115,3 +115,43 @@ export function openCodeToolView(name: string, input: unknown): ToolView | undef
       return undefined
   }
 }
+
+/** Cursor Agent tool calls of `--output-format stream-json` (`readToolCall`, `shellToolCall`, …). */
+export function cursorToolView(kind: string, input: unknown): ToolView | undefined {
+  const args = obj(input)
+  switch (kind) {
+    case 'readToolCall':
+      return str(args.path) ? { kind: 'read', path: String(args.path), range: lineRange(args.offset, args.limit) } : undefined
+    case 'editToolCall':
+      return str(args.path) ? { kind: 'write', path: String(args.path), content: String(args.streamContent ?? '') } : undefined
+    case 'shellToolCall':
+      return str(args.command) ? { kind: 'shell', command: String(args.command) } : undefined
+    case 'grepToolCall':
+      return str(args.pattern) ? { kind: 'search', pattern: String(args.pattern), path: str(args.path) } : undefined
+    case 'globToolCall':
+      return str(args.globPattern) ? { kind: 'search', pattern: String(args.globPattern), path: str(args.targetDirectory) } : undefined
+    default:
+      return undefined
+  }
+}
+
+/** Devin CLI tools (`exec`, `read`, `write`, `edit`, `grep`, `find_file_by_name`). */
+export function devinToolView(name: string, input: unknown): ToolView | undefined {
+  const args = obj(input)
+  const path = str(args.file_path) ?? ''
+  switch (name) {
+    case 'exec':
+      return str(args.command) ? { kind: 'shell', command: String(args.command) } : undefined
+    case 'read':
+      return path ? { kind: 'read', path, range: lineRange(args.offset, args.limit) } : undefined
+    case 'write':
+      return path ? { kind: 'write', path, content: String(args.content ?? '') } : undefined
+    case 'edit':
+      return path ? { kind: 'edit', path, edits: [{ oldText: String(args.old_string ?? ''), newText: String(args.new_string ?? '') }] } : undefined
+    case 'grep':
+    case 'find_file_by_name':
+      return str(args.pattern) ? { kind: 'search', pattern: String(args.pattern), path: str(args.path) } : undefined
+    default:
+      return undefined
+  }
+}

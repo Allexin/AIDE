@@ -5,6 +5,7 @@ import { findExecutable, isMac, isWindows, listProcesses } from '../../platform'
 import { resolveOwnerPidFromSnapshot } from '../../platform/processTree'
 import { randomUUID } from 'crypto'
 import { session } from 'electron'
+import { cursorHeadless } from '../../pipeline/headless/cursorHeadless'
 import type { CliTool, SettingsField, UsageInfo } from './types'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
@@ -713,6 +714,8 @@ export const cursorAgentTool: CliTool = {
   id: TOOL_ID,
   name: TOOL_NAME,
   installUrl: 'https://cursor.com/docs/cli/installation',
+
+  headless: cursorHeadless,
 
   async isInstalled(): Promise<boolean> {
     return findExecutable('agent')
