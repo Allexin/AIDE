@@ -26,7 +26,7 @@ import {
   watchOpenCodeMessages
 } from './openCodeScanner'
 import type { OpenCodeCredential } from './openCodeScanner'
-import { activeOpenCodeCredentials, configKeyProviders, describeOpenCodeCredentials, importOpenCodeAccount, openCodeAccountHint } from './openCodeAuth'
+import { activeOpenCodeCredentials, clearOpenCodeCredentials, configKeyProviders, describeOpenCodeCredentials, exportOpenCodeCredentials, importOpenCodeAccount, openCodeAccountHint } from './openCodeAuth'
 import { openCodeHeadless, openCodeMajorVersion, resolveOpenCodeExecutable } from '../../pipeline/headless/openCodeHeadless'
 
 const TOOL_ID = 'open-code'
@@ -299,8 +299,12 @@ export const openCodeTool: CliTool = {
   },
 
   async exportCredentials(): Promise<Record<string, unknown> | null> {
-    const credentials = activeOpenCodeCredentials()
+    const credentials = await exportOpenCodeCredentials()
     return credentials.length > 0 ? { credentials } : null
+  },
+
+  async clearCredentials(): Promise<void> {
+    await clearOpenCodeCredentials()
   },
 
   async importCredentials(saved: Record<string, unknown>): Promise<void> {

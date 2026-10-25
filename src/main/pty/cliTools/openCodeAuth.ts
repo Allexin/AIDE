@@ -27,28 +27,56 @@ export interface OpenCodeAccount {
   credentials: OpenCodeCredential[]
 }
 
-function run(args: string[]): Promise<void> {
+function run(args: string[]): Promise<string> {
   const executable = resolveOpenCodeExecutable()
   if (!executable) return Promise.reject(new Error('OpenCode 2 executable was not found'))
   return new Promise((resolve, reject) => {
-    execFile(executable, [...args, '--standalone'], { timeout: 60_000, windowsHide: true }, (err, _stdout, stderr) => {
-      if (err) reject(new Error(`opencode ${args.slice(0, 2).join(' ')} failed: ${String(stderr || err.message).trim().slice(0, 300)}`))
-      else resolve()
+    execFile(executable, [...args, '--standalone'], { timeout: 60_000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+      // eslint-disable-next-line no-control-regex
+      const detail = String(stderr || stdout || err?.message || '').replace(/\x1b\[[0-9;]*m/g, '').replace(/[│└■◇◆┌]/g, ' ').replace(/\s+/g, ' ').trim()
+      if (err) reject(new Error(`opencode ${args.slice(0, 2).join(' ')} failed: ${detail.slice(0, 300)}`))
+      else resolve(String(stdout))
     })
   })
+}
+
+/**
+ * Providers OpenCode knows (`auth list`). A stored credential of any other provider —
+ * e.g. a custom provider migrated from 1.x and no longer configured — is invisible to
+ * OpenCode: it is never sent, and `auth logout` refuses it ("Integration not found").
+ * AIDE leaves such credentials out. Cached; refreshed by every account operation.
+ */
+let knownIntegrations: Set<string> | null = null
+
+export async function refreshKnownIntegrations(): Promise<Set<string>> {
+  const listed: unknown = JSON.parse(await run(['auth', 'list', '--format', 'json']))
+  knownIntegrations = new Set((Array.isArray(listed) ? listed : []).map((entry) => String((entry as { id?: unknown }).id ?? '')).filter(Boolean))
+  return knownIntegrations
 }
 
 /**
  * The credentials OpenCode sends, one set per provider: the active ones, or — for a
  * provider without an active one — those with `active` unset (migrated from 1.x).
  */
-export function effectiveOpenCodeCredentials(all: OpenCodeCredential[]): OpenCodeCredential[] {
-  const withActive = new Set(all.filter((c) => c.active === true).map((c) => c.integrationID))
-  return all.filter((c) => c.active === true || (c.active === null && !withActive.has(c.integrationID)))
+export function effectiveOpenCodeCredentials(all: OpenCodeCredential[], known: Set<string> | null = null): OpenCodeCredential[] {
+  const usable = known ? all.filter((c) => known.has(c.integrationID)) : all
+  const withActive = new Set(usable.filter((c) => c.active === true).map((c) => c.integrationID))
+  return usable.filter((c) => c.active === true || (c.active === null && !withActive.has(c.integrationID)))
 }
 
+/**
+ * The credentials in effect, as far as the cache of known providers allows without
+ * starting OpenCode (the status bar asks often). Until the cache is filled, credentials
+ * of unknown providers are counted too; the first call fills it in the background.
+ */
 export function activeOpenCodeCredentials(): OpenCodeCredential[] {
-  return effectiveOpenCodeCredentials(readOpenCodeCredentials())
+  if (!knownIntegrations) refreshKnownIntegrations().catch((err) => cliLog(LOG_CH, `[auth] ${err instanceof Error ? err.message : String(err)}`))
+  return effectiveOpenCodeCredentials(readOpenCodeCredentials(), knownIntegrations)
+}
+
+/** The credentials in effect, after asking OpenCode which providers it knows — for saving an account. */
+export async function exportOpenCodeCredentials(): Promise<OpenCodeCredential[]> {
+  return effectiveOpenCodeCredentials(readOpenCodeCredentials(), await refreshKnownIntegrations())
 }
 
 /**
@@ -96,11 +124,24 @@ export function openCodeAccountHint(credentials: OpenCodeCredential[], keyedProv
   return null
 }
 
+/**
+ * Remove every stored credential, so OpenCode asks for a new login. `auth logout`
+ * (Credential.remove) only deletes the local record — tokens are not revoked, so
+ * accounts saved in AIDE stay usable.
+ */
+export async function clearOpenCodeCredentials(): Promise<void> {
+  const known = await refreshKnownIntegrations()
+  for (const credential of readOpenCodeCredentials().filter((c) => known.has(c.integrationID))) {
+    await run(['auth', 'logout', credential.integrationID, credential.id])
+  }
+}
+
 export async function importOpenCodeAccount(account: OpenCodeAccount): Promise<void> {
-  const current = readOpenCodeCredentials()
+  const known = await refreshKnownIntegrations()
+  const current = readOpenCodeCredentials().filter((c) => known.has(c.integrationID))
   const dir = mkdtempSync(join(tmpdir(), 'aide-opencode-auth-'))
   try {
-    for (const saved of account.credentials) {
+    for (const saved of account.credentials.filter((c) => known.has(c.integrationID))) {
       for (const existing of current.filter((c) => c.integrationID === saved.integrationID)) {
         await run(['auth', 'logout', saved.integrationID, existing.id])
       }

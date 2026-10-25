@@ -446,7 +446,7 @@ interface AccountManagerAPI {
   getHint: (toolId: string) => Promise<string | null>
   setInPool: (toolId: string, accountId: string, inPool: boolean) => Promise<void>
   moveAccount: (toolId: string, accountId: string, delta: -1 | 1) => Promise<void>
-  loadAccount: (toolId: string, accountId: string, autoSaveMode?: 'check' | 'force' | 'skip') => Promise<true | false | { conflict: AccountSwitchConflict }>
+  loadAccount: (toolId: string, accountId: string, autoSaveMode?: 'check' | 'force' | 'skip') => Promise<true | false | { conflict: AccountSwitchConflict } | { error: string }>
 }
 
 interface RemoteCustomButton {

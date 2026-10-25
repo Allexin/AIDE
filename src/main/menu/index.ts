@@ -291,8 +291,15 @@ export function rebuildMenu(): void {
       toolSubmenu.push({
         label: 'Logout',
         click: async (): Promise<void> => {
-          await cliTool.clearCredentials!()
+          try {
+            await cliTool.clearCredentials!()
+          } catch (err) {
+            dialog.showErrorBox(`${tool.name}: logout failed`, err instanceof Error ? err.message : String(err))
+            return
+          }
+          setActiveAccount(tool.id, null)
           broadcastAccountsChanged()
+          rebuildMenu()
           await offerRestartAfterAccountChange(tool.id, getEditorWindow())
         }
       })
@@ -312,7 +319,12 @@ export function rebuildMenu(): void {
             if (!stored) return
             const proceed = await autoSaveCurrentCredentials(tool.id)
             if (!proceed) return
-            await t.importCredentials(stored.credentials)
+            try {
+              await t.importCredentials(stored.credentials)
+            } catch (err) {
+              dialog.showErrorBox(`${tool.name}: loading "${acc.name}" failed`, err instanceof Error ? err.message : String(err))
+              return
+            }
             setActiveAccount(tool.id, acc.id)
             accountLoadedByUser(tool.id, acc.id)
             broadcastAccountsChanged()

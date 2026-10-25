@@ -186,6 +186,11 @@ describe('opencode accounts', () => {
     expect(effectiveOpenCodeCredentials(all).map((c) => c.id)).toEqual(['legacy', 'b'])
   })
 
+  it('leaves out credentials of providers OpenCode does not know (it never sends them, logout refuses them)', () => {
+    const all = [cred('orphan', 'local_qwen', null), cred('b', 'deepseek', true)]
+    expect(effectiveOpenCodeCredentials(all, new Set(['deepseek', 'opencode'])).map((c) => c.id)).toEqual(['b'])
+  })
+
   it('tells accounts apart by the end of an API key or the email of an OAuth login', () => {
     const oauth: OpenCodeCredential = { id: 'z', integrationID: 'opencode', label: 'Personal', active: true, value: { type: 'oauth', access: 'a', refresh: 'r', metadata: { email: 'me@example.com' } } }
     expect(describeOpenCodeCredentials([cred('k', 'deepseek', true), oauth])).toBe('deepseek: k …0000, opencode: Personal (me@example.com)')

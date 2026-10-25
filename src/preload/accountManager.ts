@@ -16,7 +16,7 @@ interface AccountSwitchConflict {
   currentIdentifier: string
 }
 
-type LoadAccountResult = true | false | { conflict: AccountSwitchConflict }
+type LoadAccountResult = true | false | { conflict: AccountSwitchConflict } | { error: string }
 
 interface AccountManagerAPI {
   getTools: () => Promise<{ id: string; name: string }[]>

@@ -1202,7 +1202,12 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   })
 
   // ── Accounts: pipeline account pool (checked accounts, their order) ─────────
-  ipcMain.handle('accounts:get-active', (_event, toolId: string) => getActiveAccount(toolId))
+  ipcMain.handle('accounts:get-active', async (_event, toolId: string) => {
+    // Logged out (in AIDE or in the CLI itself): no saved account is active, whatever was loaded last.
+    const tool = getToolById(toolId)
+    if (tool?.isLoggedIn && !(await tool.isLoggedIn())) return null
+    return getActiveAccount(toolId)
+  })
   ipcMain.handle('accounts:set-in-pool', (_event, toolId: string, accountId: string, inPool: boolean) => {
     setAccountInPool(toolId, accountId, inPool)
   })
@@ -1254,7 +1259,11 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
       if (conflict) return { conflict }
     }
 
-    await tool.importCredentials(stored.credentials)
+    try {
+      await tool.importCredentials(stored.credentials)
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) }
+    }
     setActiveAccount(toolId, accountId)
     accountLoadedByUser(toolId, accountId)
     broadcastAccountsChanged()
