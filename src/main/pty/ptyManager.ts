@@ -1,4 +1,5 @@
 import * as nodePty from 'node-pty'
+import { tabActivity } from './tabActivity'
 import { BrowserWindow } from 'electron'
 import { join } from 'path'
 import { appendFileSync } from 'fs'
@@ -253,6 +254,7 @@ export class PtyManager {
   private async submitPastedInput(tabId: string, text: string): Promise<void> {
     const tab = this.tabs.get(tabId)
     if (!tab) return
+    tabActivity.markBusy(tabId)
     const echoed = this.nextOutput(tabId, ECHO_TIMEOUT_MS)
     tab.pty.write(`\x1b[200~${text}\x1b[201~`)
     if (!(await echoed)) {
@@ -292,6 +294,7 @@ export class PtyManager {
     this.prevTitleCache.delete(tabId)
     this.healthChecks.delete(tabId)
     this.outputListeners.delete(tabId)
+    tabActivity.forget(tabId)
     try {
       tab.pty.kill()
     } catch {}
@@ -524,9 +527,10 @@ export class PtyManager {
     }
 
     // Register per-tab signal handler so the tool can emit events (e.g. 'completeAndWait')
-    tool?.registerSignalHandler?.(tabId, (event) =>
+    tool?.registerSignalHandler?.(tabId, (event) => {
+      if (event === 'completeAndWait') tabActivity.markIdle(tabId)
       this.send('terminal:tab-event', { tabId, event })
-    )
+    })
 
     const { file: shellFile, args: shellArgs } = defaultShell(command)
     const pty = nodePty.spawn(shellFile, shellArgs, {

@@ -87,6 +87,7 @@ type WaitResult = PipelineEvent | { type: 'user_input'; summary: string } | null
  * does not hold the user's message until the next event.
  */
 function waitForEvent(projectPath: string, runId: string | null, since: number, timeoutSec: number, tabId: string | null): Promise<WaitResult> {
+  pipelineEvents.noteObserver(projectPath)
   const pending = pipelineEvents.since(projectPath, runId, since).find((e) => SIGNIFICANT_EVENTS.has(e.type))
   if (pending) return Promise.resolve(pending)
   return new Promise((resolve) => {

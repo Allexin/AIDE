@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, statSync, promise
 import { join } from 'path'
 import { spawn } from 'child_process'
 import { removeRecentProject, getAppState, loadOpenSessions, getActivatedTools, setActivatedTools } from '../config/appState'
-import { getAppConfig, updateAppConfig } from '../config/appConfig'
+import { getAppConfig, getToolConfig, updateAppConfig, updateToolConfig } from '../config/appConfig'
 import type { ReasoningConfig, SessionsConfig, UpdatesConfig } from '../config/appConfig'
 import { getUpdateStatus, skipVersion, dismissNotification, RELEASES_URL } from '../updater/updater'
 import { readProjectSettings, writeProjectSettings } from '../config/projectConfig'
@@ -52,6 +52,8 @@ import { setEditorFileOpen, rebuildMenu } from '../menu'
 import { createSettingsWindow } from '../windows/settings'
 import { thinkingRegistry } from '../thinking/thinkingRegistry'
 import { accountLoadedByUser } from '../accounts/accountSwitch'
+import { tabActivity } from '../pty/tabActivity'
+import { EVENT_MESSAGES_FIELD, EVENT_MESSAGES_KEY, eventMessagesEnabled } from '../pipeline/eventRelay'
 
 // Helper: spawn one git subcommand, stream stdout/stderr lines, return success/error.
 function runGitSubcommand(
@@ -405,6 +407,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     if (!senderWin) return
     ptyRegistry.get(senderWin)?.write(tabId, data)
     orchestrators.userInput(tabId, data)
+    tabActivity.input(tabId, data)
   })
 
   // ── Terminal: resize PTY (fire-and-forget) ────────────────────────────────────
@@ -533,9 +536,9 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const results = []
     for (const tool of getRegisteredTools()) {
       if (!activated.includes(tool.id)) continue
-      if (!tool.settingsFields) continue
-      const fields = tool.settingsFields()
-      const values = tool.getSettings ? await tool.getSettings() : {}
+      // Every CLI can be an orchestrator: the pipeline event messages setting is common to all.
+      const fields = [...(tool.settingsFields?.() ?? []), EVENT_MESSAGES_FIELD]
+      const values = { ...(tool.getSettings ? await tool.getSettings() : {}), [EVENT_MESSAGES_KEY]: eventMessagesEnabled(tool.id) }
       results.push({ toolId: tool.id, name: tool.name, fields, values })
     }
     return results
@@ -544,7 +547,10 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   // ── Tool settings: update ─────────────────────────────────────────────────────
   ipcMain.handle('tool-settings:update', async (_e, toolId: string, values: Record<string, unknown>) => {
     const tool = getToolById(toolId)
-    if (tool?.updateSettings) await tool.updateSettings(values)
+    const { [EVENT_MESSAGES_KEY]: eventMessages, ...own } = values
+    if (tool?.updateSettings) await tool.updateSettings(own)
+    // Tools replace their config with what they are given, so the common setting is written after them.
+    if (eventMessages !== undefined) updateToolConfig(toolId, { ...getToolConfig(toolId), [EVENT_MESSAGES_KEY]: eventMessages === true })
   })
 
   // ── Project settings: get default tool ───────────────────────────────────────

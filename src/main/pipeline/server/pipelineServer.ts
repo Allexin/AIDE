@@ -2,6 +2,8 @@ import http from 'http'
 import { randomBytes, timingSafeEqual } from 'crypto'
 import { logEvent } from '../../diagnostics'
 import { McpServer, type ToolDefinition } from '../mcp/protocol'
+import { orchestrators } from '../orchestrators'
+import { tabActivity } from '../../pty/tabActivity'
 import { pipelineEvents, SIGNIFICANT_EVENTS, type PipelineEvent } from '../events'
 import { pruneStaleRuntimes, removeAllProjectRuntimes, removeProjectRuntime, writeProjectRuntime } from './runtimeFiles'
 
@@ -112,6 +114,13 @@ export class PipelineServer {
         res.writeHead(403, { 'content-type': 'text/plain' }).end('Forbidden')
         return
       }
+      const tabId = req.headers['x-aide-tab'] ? String(req.headers['x-aide-tab']) : null
+      if (tabId) {
+        // An agent calling the pipeline is working, whatever its PTY shows.
+        orchestrators.touch(projectPath, tabId)
+        tabActivity.markBusy(tabId)
+      }
+      if (url.pathname === '/events' || url.pathname === '/wait') pipelineEvents.noteObserver(projectPath)
       if (req.method === 'POST' && url.pathname === '/mcp') await this.handleMcp(req, res, projectPath)
       else if (req.method === 'GET' && url.pathname === '/events') this.handleEvents(url, res, projectPath)
       else if (req.method === 'GET' && url.pathname === '/wait') this.handleWait(url, res, projectPath)

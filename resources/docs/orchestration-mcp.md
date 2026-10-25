@@ -162,6 +162,12 @@ deciding yet, do not answer: a run waiting on an escalation does nothing and
 survives AIDE restarts. A run stopped with `pipeline_stop` while an escalation is
 open asks for the answer again on resume.
 
+**Events as messages.** If an event that needs you arrives while you are not
+waiting (no `pipeline_wait` or event stream open) and your session is idle, AIDE
+types it into your terminal as a message starting with "AIDE pipeline:" — act on
+it as on a waited event, then wait again with the `since` it gives. Waiting
+yourself is still the way: it delivers the event at once and nothing is typed.
+
 **Changing course mid-step.** A new requirement or a ruling while a step works:
 `pipeline_amend` with the text. A running agent step is interrupted and
 continues at once in its own session with the instruction; every later step

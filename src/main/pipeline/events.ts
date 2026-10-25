@@ -53,6 +53,7 @@ class ProjectEvents {
   private readonly events: PipelineEvent[] = []
   private readonly listeners = new Set<Listener>()
   private nextId = 1
+  private observed = 0
 
   emit(runId: string, type: PipelineEventType, data: Record<string, unknown> = {}): PipelineEvent {
     const event: PipelineEvent = { id: this.nextId++, runId, type, at: new Date().toISOString(), data }
@@ -69,6 +70,20 @@ class ProjectEvents {
   /** Continue numbering after ids already handed out (by an AIDE instance that has since restarted). */
   seed(nextId: number): void {
     if (nextId > this.nextId) this.nextId = nextId
+  }
+
+  /** An orchestrator asked for events (a wait, an event stream); counts observer activity. */
+  noteObserver(): void {
+    this.observed++
+  }
+
+  observerActivity(): number {
+    return this.observed
+  }
+
+  /** Whether an orchestrator is subscribed right now — the only subscribers are waits and event streams. */
+  hasObserver(): boolean {
+    return this.listeners.size > 0
   }
 
   subscribe(listener: Listener): () => void {
@@ -96,6 +111,9 @@ export const pipelineEvents = {
   subscribe: (projectPath: string, listener: Listener): (() => void) =>
     forProject(projectPath).subscribe(listener),
   seed: (projectPath: string, nextId: number): void => forProject(projectPath).seed(nextId),
+  noteObserver: (projectPath: string): void => forProject(projectPath).noteObserver(),
+  observerActivity: (projectPath: string): number => forProject(projectPath).observerActivity(),
+  hasObserver: (projectPath: string): boolean => forProject(projectPath).hasObserver(),
   /** Test helper: forget all events of a project. */
   reset: (projectPath: string): void => { projects.delete(projectPath) }
 }

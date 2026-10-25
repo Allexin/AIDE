@@ -16,6 +16,8 @@ export interface OrchestratorConnection {
 
 class OrchestratorRegistry extends EventEmitter {
   private readonly connections = new Map<string, OrchestratorConnection>()
+  /** The tab that last called the pipeline server, per project — where an orchestrator lives now. */
+  private readonly lastTabs = new Map<string, string>()
 
   /** Record a handshake; emits 'connected' with the connection. */
   hello(connection: Omit<OrchestratorConnection, 'connectedAt'>): OrchestratorConnection {
@@ -35,12 +37,22 @@ class OrchestratorRegistry extends EventEmitter {
     this.emit('input', tabId)
   }
 
+  /** A request from a tab reached the pipeline server. */
+  touch(projectPath: string, tabId: string): void {
+    this.lastTabs.set(projectPath, tabId)
+  }
+
+  lastTab(projectPath: string): string | null {
+    return this.lastTabs.get(projectPath) ?? null
+  }
+
   forProject(projectPath: string): OrchestratorConnection[] {
     return [...this.connections.values()].filter((c) => c.projectPath === projectPath)
   }
 
   forgetProject(projectPath: string): void {
     for (const [id, c] of this.connections) if (c.projectPath === projectPath) this.connections.delete(id)
+    this.lastTabs.delete(projectPath)
   }
 }
 

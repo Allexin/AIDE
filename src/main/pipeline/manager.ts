@@ -17,7 +17,8 @@ import { pipelineEvents, type PipelineEventType } from './events'
  * Emits:
  *   'state'      (projectPath, snapshot)                 on every run state change
  *   'transcript' (projectPath, runId, node, visit, entry) streamed agent transcript entries
- *   'event'      (projectPath, runId, type, data, id)    pipeline events (id: the event id in the feed)
+ *   'event'      (projectPath, runId, type, data, id, observed)  pipeline events (id: the event id in the feed;
+ *                observed: an orchestrator was waiting for events when it was emitted)
  */
 
 export interface ManagerEnvironment {
@@ -102,9 +103,10 @@ export class PipelineManager extends EventEmitter {
       ...this.env.deps(projectPath),
       readRole,
       emit: (runId: string, type: PipelineEventType, data: Record<string, unknown>) => {
+        const observed = pipelineEvents.hasObserver(projectPath)
         const event = pipelineEvents.emit(projectPath, runId, type, data)
         try { store.appendEvent(runId, event as unknown as Record<string, unknown>) } catch { /* run dir removed */ }
-        this.emit('event', projectPath, runId, type, data, event.id)
+        this.emit('event', projectPath, runId, type, data, event.id, observed)
       },
       onStateChange: (state: RunState) => {
         const run = this.active.get(projectPath)
