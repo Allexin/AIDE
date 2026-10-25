@@ -31,6 +31,7 @@ interface AccountManagerAPI {
   updateAccount: (toolId: string, accountId: string) => Promise<CliAccountInfo | null>
   getActiveAccount: (toolId: string) => Promise<string | null>
   getHint: (toolId: string) => Promise<string | null>
+  refreshState: (toolId: string) => Promise<void>
   setInPool: (toolId: string, accountId: string, inPool: boolean) => Promise<void>
   moveAccount: (toolId: string, accountId: string, delta: -1 | 1) => Promise<void>
   loadAccount: (toolId: string, accountId: string, autoSaveMode?: 'check' | 'force' | 'skip') => Promise<true | false | { conflict: AccountSwitchConflict } | { error: string }>
@@ -65,6 +66,7 @@ export default function AccountManagerApp(): React.ReactElement {
 
   const refresh = useCallback(async (toolId: string) => {
     if (!toolId) return
+    await api().refreshState(toolId)
     const [loggedInResult, identifier, accs, active, toolHint] = await Promise.all([
       api().isLoggedIn(toolId),
       api().getLoginIdentifier(toolId),

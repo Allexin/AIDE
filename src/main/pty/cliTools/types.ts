@@ -145,6 +145,10 @@ export interface CliTool {
    *  why there is nothing to save although the CLI works. Null when there is nothing to add. */
   accountHint?(): Promise<string | null>
 
+  /** Re-read what the account state depends on but is cached (the Account Manager calls it
+   *  whenever it shows the tool, so what it shows is current). */
+  refreshAccountState?(): Promise<void>
+
   /** Whether running sessions must be restarted to pick up credentials written
    *  by importCredentials/clearCredentials. Omitted means true. Return false
    *  when live sessions re-read credentials on their own.

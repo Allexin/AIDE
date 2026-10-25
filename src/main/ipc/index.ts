@@ -35,7 +35,7 @@ import {
   getActiveAccount,
   setActiveAccount
 } from '../config/accountStorage'
-import { initCliLogger } from '../pty/cliTools/cliLogger'
+import { cliLog, initCliLogger } from '../pty/cliTools/cliLogger'
 import { createSessionPickerWindow } from '../windows/sessionPicker'
 import { createHistoryViewerWindow, historyViewerDataMap } from '../windows/historyViewer'
 import {
@@ -1113,6 +1113,15 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const tool = getToolById(toolId)
     if (!tool?.isLoggedIn) return false
     return tool.isLoggedIn()
+  })
+
+  // ── Accounts: bring the tool's cached account state up to date (Account Manager shows it) ──
+  ipcMain.handle('accounts:refresh-state', async (_event, toolId: string) => {
+    try {
+      await getToolById(toolId)?.refreshAccountState?.()
+    } catch (err) {
+      cliLog('Accounts', `${toolId}: refreshing the account state failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
   })
 
   // ── Accounts: what to tell about the current login (why there may be nothing to save) ──

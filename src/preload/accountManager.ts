@@ -28,6 +28,7 @@ interface AccountManagerAPI {
   updateAccount: (toolId: string, accountId: string) => Promise<CliAccountInfo | null>
   getActiveAccount: (toolId: string) => Promise<string | null>
   getHint: (toolId: string) => Promise<string | null>
+  refreshState: (toolId: string) => Promise<void>
   setInPool: (toolId: string, accountId: string, inPool: boolean) => Promise<void>
   moveAccount: (toolId: string, accountId: string, delta: -1 | 1) => Promise<void>
   loadAccount: (toolId: string, accountId: string, autoSaveMode?: 'check' | 'force' | 'skip') => Promise<LoadAccountResult>
@@ -43,6 +44,7 @@ const accountManagerApi: AccountManagerAPI = {
   updateAccount: (toolId, accountId) => ipcRenderer.invoke('accounts:update', toolId, accountId),
   getActiveAccount: (toolId) => ipcRenderer.invoke('accounts:get-active', toolId),
   getHint: (toolId) => ipcRenderer.invoke('accounts:get-hint', toolId),
+  refreshState: (toolId) => ipcRenderer.invoke('accounts:refresh-state', toolId),
   setInPool: (toolId, accountId, inPool) => ipcRenderer.invoke('accounts:set-in-pool', toolId, accountId, inPool),
   moveAccount: (toolId, accountId, delta) => ipcRenderer.invoke('accounts:move', toolId, accountId, delta),
   loadAccount: (toolId, accountId, autoSaveMode) => ipcRenderer.invoke('accounts:load', toolId, accountId, autoSaveMode)
