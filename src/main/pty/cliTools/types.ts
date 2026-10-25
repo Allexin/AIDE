@@ -141,6 +141,10 @@ export interface CliTool {
    */
   hasAccountSystem(): boolean
 
+  /** What the Account Manager should tell about the current login beyond logged in / not, e.g.
+   *  why there is nothing to save although the CLI works. Null when there is nothing to add. */
+  accountHint?(): Promise<string | null>
+
   /** Whether running sessions must be restarted to pick up credentials written
    *  by importCredentials/clearCredentials. Omitted means true. Return false
    *  when live sessions re-read credentials on their own.

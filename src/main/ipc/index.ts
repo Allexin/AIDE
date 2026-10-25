@@ -1115,6 +1115,12 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     return tool.isLoggedIn()
   })
 
+  // ── Accounts: what to tell about the current login (why there may be nothing to save) ──
+  ipcMain.handle('accounts:get-hint', async (_event, toolId: string) => {
+    const tool = getToolById(toolId)
+    return tool?.accountHint ? tool.accountHint() : null
+  })
+
   // ── Accounts: get current login identifier ──────────────────────────────────
   ipcMain.handle('accounts:get-login-identifier', async (_event, toolId: string) => {
     const tool = getToolById(toolId)

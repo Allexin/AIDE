@@ -62,7 +62,9 @@ Every CLI with an account system and a headless adapter takes part: Claude Code,
 Codex, Cursor, Devin and OpenCode 2.
 
 - **OpenCode 2** accounts are AIDE's, not OpenCode's own: an account is the set of
-  active provider credentials (`credential` table, one per provider). Loading it
+  active provider credentials (`credential` table, one per provider; a credential
+  with `active` unset — migrated from OpenCode 1.x — is in effect while its provider
+  has no active one, verified by the key OpenCode sends). Loading it
   logs out each of its providers' credentials and imports the saved one
   (`opencode auth logout` / `auth import --standalone`; `auth import` only adds
   unknown ids and a sole credential becomes active). A credential is sent over a key

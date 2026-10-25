@@ -215,20 +215,21 @@ export interface OpenCodeCredential {
   id: string
   integrationID: string
   label: string
-  active: boolean
+  /** null: not set — credentials migrated from OpenCode 1.x's auth.json; OpenCode uses such a credential while its provider has no active one. */
+  active: boolean | null
   value: Record<string, unknown>
 }
 
 export function readOpenCodeCredentials(): OpenCodeCredential[] {
   return withDb('credentials', [], (db) => {
     const rows = db.prepare('SELECT id, integration_id, label, value, active FROM credential ORDER BY time_created').all() as Array<{
-      id: string; integration_id: string; label: string | null; value: string; active: number
+      id: string; integration_id: string; label: string | null; value: string; active: number | null
     }>
     const credentials: OpenCodeCredential[] = []
     for (const row of rows) {
       try {
         const value = JSON.parse(row.value) as Record<string, unknown>
-        credentials.push({ id: row.id, integrationID: row.integration_id, label: row.label ?? row.integration_id, active: row.active === 1, value })
+        credentials.push({ id: row.id, integrationID: row.integration_id, label: row.label ?? row.integration_id, active: row.active === null ? null : row.active === 1, value })
       } catch { /* unreadable value */ }
     }
     return credentials

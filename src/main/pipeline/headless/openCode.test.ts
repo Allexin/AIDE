@@ -4,6 +4,8 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import type { HistoryEntry } from '../../pty/cliTools/types'
 import { openCodePartBlocks } from '../../pty/cliTools/openCodeParts'
+import { describeOpenCodeCredentials, effectiveOpenCodeCredentials, openCodeAccountHint } from '../../pty/cliTools/openCodeAuth'
+import type { OpenCodeCredential } from '../../pty/cliTools/openCodeScanner'
 import {
   buildOpenCodeArgs, buildOpenCodeConfigContent, openCodeHeadless, openCodeModel,
   readOpenCodeConfig, READ_ONLY_AGENT, retryLimitMessage
@@ -172,5 +174,27 @@ describe('opencode headless adapter', () => {
   it('fails without a final message, and on a non-JSON answer when a schema was asked', async () => {
     expect((await openCodeHeadless.run(options([line(stepFinish(0))])).result).error?.code).toBe('no_output')
     expect((await openCodeHeadless.run(options([line(textEvent('m', 'plain'))], { outputSchema: { type: 'object' } })).result).error?.code).toBe('no_output')
+  })
+})
+
+describe('opencode accounts', () => {
+  const cred = (id: string, integrationID: string, active: boolean | null): OpenCodeCredential =>
+    ({ id, integrationID, label: id, active, value: { type: 'key', key: `sk-${id}-0000` } })
+
+  it('counts a credential without an active flag while its provider has no active one', () => {
+    const all = [cred('legacy', 'local_qwen', null), cred('a', 'deepseek', false), cred('b', 'deepseek', true), cred('old', 'deepseek', null)]
+    expect(effectiveOpenCodeCredentials(all).map((c) => c.id)).toEqual(['legacy', 'b'])
+  })
+
+  it('tells accounts apart by the end of an API key or the email of an OAuth login', () => {
+    const oauth: OpenCodeCredential = { id: 'z', integrationID: 'opencode', label: 'Personal', active: true, value: { type: 'oauth', access: 'a', refresh: 'r', metadata: { email: 'me@example.com' } } }
+    expect(describeOpenCodeCredentials([cred('k', 'deepseek', true), oauth])).toBe('deepseek: k …0000, opencode: Personal (me@example.com)')
+  })
+
+  it('explains why there is nothing to save and what to do', () => {
+    expect(openCodeAccountHint([], ['deepseek'])).toContain('the key of deepseek in opencode.json is not a stored credential')
+    expect(openCodeAccountHint([], [])).toContain('Free models need none.')
+    expect(openCodeAccountHint([cred('legacy', 'local_qwen', null)], ['deepseek'])).toContain('not part of a saved account')
+    expect(openCodeAccountHint([cred('b', 'deepseek', true)], ['deepseek'])).toBeNull()
   })
 })

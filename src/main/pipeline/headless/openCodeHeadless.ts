@@ -74,7 +74,7 @@ export function openCodeMajorVersion(executable: string): Promise<{ version: str
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-function readJsonc(path: string): Record<string, unknown> | null {
+export function readJsonc(path: string): Record<string, unknown> | null {
   if (!existsSync(path)) return null
   try {
     const text = readFileSync(path, 'utf8')

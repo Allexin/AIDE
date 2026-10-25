@@ -30,6 +30,7 @@ interface AccountManagerAPI {
   deleteAccount: (toolId: string, accountId: string) => Promise<void>
   updateAccount: (toolId: string, accountId: string) => Promise<CliAccountInfo | null>
   getActiveAccount: (toolId: string) => Promise<string | null>
+  getHint: (toolId: string) => Promise<string | null>
   setInPool: (toolId: string, accountId: string, inPool: boolean) => Promise<void>
   moveAccount: (toolId: string, accountId: string, delta: -1 | 1) => Promise<void>
   loadAccount: (toolId: string, accountId: string, autoSaveMode?: 'check' | 'force' | 'skip') => Promise<true | false | { conflict: AccountSwitchConflict }>
@@ -44,6 +45,7 @@ export default function AccountManagerApp(): React.ReactElement {
   const [loginIdentifier, setLoginIdentifier] = useState<string | null>(null)
   const [accounts, setAccounts] = useState<CliAccountInfo[]>([])
   const [activeAccountId, setActiveAccountId] = useState<string | null>(null)
+  const [hint, setHint] = useState<string | null>(null)
   const [saveName, setSaveName] = useState('')
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
@@ -63,12 +65,14 @@ export default function AccountManagerApp(): React.ReactElement {
 
   const refresh = useCallback(async (toolId: string) => {
     if (!toolId) return
-    const [loggedInResult, identifier, accs, active] = await Promise.all([
+    const [loggedInResult, identifier, accs, active, toolHint] = await Promise.all([
       api().isLoggedIn(toolId),
       api().getLoginIdentifier(toolId),
       api().listAccounts(toolId),
-      api().getActiveAccount(toolId)
+      api().getActiveAccount(toolId),
+      api().getHint(toolId)
     ])
+    setHint(toolHint)
     setLoggedIn(loggedInResult)
     setLoginIdentifier(identifier)
     setAccounts(accs)
@@ -247,6 +251,11 @@ export default function AccountManagerApp(): React.ReactElement {
             Save Current As...
           </button>
         </div>
+        {hint ? (
+          <div style={styles.hint}>{hint}</div>
+        ) : !loggedIn && (
+          <div style={styles.hint}>Not logged in, so there is nothing to save: log in with {tools.find((t) => t.id === activeToolId)?.name ?? 'the CLI'} first, then save the account here.</div>
+        )}
       </div>
 
       {/* Conflict dialog */}
