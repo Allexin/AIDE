@@ -41,42 +41,46 @@ function run(args: string[]): Promise<string> {
 }
 
 /**
- * Providers OpenCode knows (`auth list`). A stored credential of any other provider —
- * e.g. a custom provider migrated from 1.x and no longer configured — is invisible to
- * OpenCode: it is never sent, and `auth logout` refuses it ("Integration not found").
- * AIDE leaves such credentials out. Cached; refreshed by every account operation.
+ * Providers whose stored credentials OpenCode does not show (`auth list` lists the providers
+ * that have credentials it recognises). Such a credential — e.g. of a custom provider migrated
+ * from 1.x and no longer configured — is invisible to OpenCode: it is never sent, and
+ * `auth logout` refuses it ("Integration not found"). AIDE leaves such credentials out.
+ *
+ * The orphans are remembered, not the providers listed: a provider logged in after the last
+ * check is then counted at once. Refreshed by every account operation.
  */
-let knownIntegrations: Set<string> | null = null
+let orphanIntegrations: Set<string> | null = null
 
-export async function refreshKnownIntegrations(): Promise<Set<string>> {
+export async function refreshOrphanIntegrations(): Promise<Set<string>> {
   const listed: unknown = JSON.parse(await run(['auth', 'list', '--format', 'json']))
-  knownIntegrations = new Set((Array.isArray(listed) ? listed : []).map((entry) => String((entry as { id?: unknown }).id ?? '')).filter(Boolean))
-  return knownIntegrations
+  const shown = new Set((Array.isArray(listed) ? listed : []).map((entry) => String((entry as { id?: unknown }).id ?? '')).filter(Boolean))
+  orphanIntegrations = new Set(readOpenCodeCredentials().map((c) => c.integrationID).filter((id) => !shown.has(id)))
+  return orphanIntegrations
 }
 
 /**
  * The credentials OpenCode sends, one set per provider: the active ones, or — for a
  * provider without an active one — those with `active` unset (migrated from 1.x).
  */
-export function effectiveOpenCodeCredentials(all: OpenCodeCredential[], known: Set<string> | null = null): OpenCodeCredential[] {
-  const usable = known ? all.filter((c) => known.has(c.integrationID)) : all
+export function effectiveOpenCodeCredentials(all: OpenCodeCredential[], orphans: Set<string> | null = null): OpenCodeCredential[] {
+  const usable = orphans ? all.filter((c) => !orphans.has(c.integrationID)) : all
   const withActive = new Set(usable.filter((c) => c.active === true).map((c) => c.integrationID))
   return usable.filter((c) => c.active === true || (c.active === null && !withActive.has(c.integrationID)))
 }
 
 /**
- * The credentials in effect, as far as the cache of known providers allows without
- * starting OpenCode (the status bar asks often). Until the cache is filled, credentials
- * of unknown providers are counted too; the first call fills it in the background.
+ * The credentials in effect, as far as the remembered orphans allow without starting
+ * OpenCode (the status bar asks often). Until they are known, every credential is
+ * counted; the first call looks them up in the background.
  */
 export function activeOpenCodeCredentials(): OpenCodeCredential[] {
-  if (!knownIntegrations) refreshKnownIntegrations().catch((err) => cliLog(LOG_CH, `[auth] ${err instanceof Error ? err.message : String(err)}`))
-  return effectiveOpenCodeCredentials(readOpenCodeCredentials(), knownIntegrations)
+  if (!orphanIntegrations) refreshOrphanIntegrations().catch((err) => cliLog(LOG_CH, `[auth] ${err instanceof Error ? err.message : String(err)}`))
+  return effectiveOpenCodeCredentials(readOpenCodeCredentials(), orphanIntegrations)
 }
 
 /** The credentials in effect, after asking OpenCode which providers it knows — for saving an account. */
 export async function exportOpenCodeCredentials(): Promise<OpenCodeCredential[]> {
-  return effectiveOpenCodeCredentials(readOpenCodeCredentials(), await refreshKnownIntegrations())
+  return effectiveOpenCodeCredentials(readOpenCodeCredentials(), await refreshOrphanIntegrations())
 }
 
 /**
@@ -130,18 +134,18 @@ export function openCodeAccountHint(credentials: OpenCodeCredential[], keyedProv
  * accounts saved in AIDE stay usable.
  */
 export async function clearOpenCodeCredentials(): Promise<void> {
-  const known = await refreshKnownIntegrations()
-  for (const credential of readOpenCodeCredentials().filter((c) => known.has(c.integrationID))) {
+  const orphans = await refreshOrphanIntegrations()
+  for (const credential of readOpenCodeCredentials().filter((c) => !orphans.has(c.integrationID))) {
     await run(['auth', 'logout', credential.integrationID, credential.id])
   }
 }
 
 export async function importOpenCodeAccount(account: OpenCodeAccount): Promise<void> {
-  const known = await refreshKnownIntegrations()
-  const current = readOpenCodeCredentials().filter((c) => known.has(c.integrationID))
+  const orphans = await refreshOrphanIntegrations()
+  const current = readOpenCodeCredentials().filter((c) => !orphans.has(c.integrationID))
   const dir = mkdtempSync(join(tmpdir(), 'aide-opencode-auth-'))
   try {
-    for (const saved of account.credentials.filter((c) => known.has(c.integrationID))) {
+    for (const saved of account.credentials.filter((c) => !orphans.has(c.integrationID))) {
       for (const existing of current.filter((c) => c.integrationID === saved.integrationID)) {
         await run(['auth', 'logout', saved.integrationID, existing.id])
       }

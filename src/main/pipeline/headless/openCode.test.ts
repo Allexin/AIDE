@@ -188,7 +188,7 @@ describe('opencode accounts', () => {
 
   it('leaves out credentials of providers OpenCode does not know (it never sends them, logout refuses them)', () => {
     const all = [cred('orphan', 'local_qwen', null), cred('b', 'deepseek', true)]
-    expect(effectiveOpenCodeCredentials(all, new Set(['deepseek', 'opencode'])).map((c) => c.id)).toEqual(['b'])
+    expect(effectiveOpenCodeCredentials(all, new Set(['local_qwen'])).map((c) => c.id)).toEqual(['b'])
   })
 
   it('tells accounts apart by the end of an API key or the email of an OAuth login', () => {
