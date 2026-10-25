@@ -182,13 +182,6 @@ export default function AccountManagerApp(): React.ReactElement {
           <div style={styles.accountList}>
             {accounts.map((acc, index) => (
               <div key={acc.id} style={styles.accountRow}>
-                <input
-                  type="checkbox"
-                  style={styles.poolCheck}
-                  checked={acc.inPool}
-                  onChange={(e) => handleInPool(acc.id, e.target.checked)}
-                  title="Switch to this account automatically when a pipeline step hits a usage limit"
-                />
                 <div style={styles.accountInfo}>
                   <div style={styles.accountName}>
                     {acc.name}
@@ -198,6 +191,15 @@ export default function AccountManagerApp(): React.ReactElement {
                     {acc.identifier} &middot; saved{' '}
                     {new Date(acc.savedAt).toLocaleDateString()}
                   </div>
+                  <label style={styles.poolLabel}>
+                    <input
+                      type="checkbox"
+                      style={styles.poolCheck}
+                      checked={acc.inPool}
+                      onChange={(e) => handleInPool(acc.id, e.target.checked)}
+                    />
+                    Switch to this account when a pipeline hits a usage limit
+                  </label>
                   {acc.exhausted && (
                     <div style={styles.exhausted}>
                       {acc.exhaustedUntil
@@ -390,8 +392,18 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#888',
     marginTop: 2
   },
+  poolLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+    fontSize: 11,
+    color: '#aaa',
+    cursor: 'pointer',
+    userSelect: 'none' as const
+  },
   poolCheck: {
-    marginRight: 10,
+    margin: 0,
     cursor: 'pointer',
     flexShrink: 0
   },
