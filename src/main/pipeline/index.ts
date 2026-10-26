@@ -6,7 +6,8 @@ import { pipelineServer } from './server/pipelineServer'
 import { shimLaunch, writeLauncher, type ShimLaunch } from './server/runtimeFiles'
 import { buildPipelineTools, ORCHESTRATOR_RULES } from './mcp/tools'
 import { orchestrators, type OrchestratorConnection } from './orchestrators'
-import { PipelineManager, type RunSnapshot } from './manager'
+import { PipelineManager } from './manager'
+import { PipelineViewService } from './viewService'
 import { sharedPipelinesDir } from './engine/library'
 import { getProjectUserPath } from '../config/projectUserData'
 import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
@@ -17,7 +18,6 @@ import { failedRun } from './headless/common'
 import { killAllProcessTreesSync, runShellCommand } from './processRunner'
 import { commitIndex, headSha, stagedDiff, status, workingDiff } from './git'
 import { smokeTestMachine } from './smoke'
-import type { HistoryEntry } from '../pty/cliTools/types'
 
 /**
  * Pipeline bootstrap for the main process: the local pipeline server, the
@@ -51,6 +51,9 @@ export const pipelineManager = new PipelineManager({
     git: { workingDiff, stagedDiff, status, headSha, commitIndex }
   })
 })
+
+/** Run views (the desktop pipeline tab, the remote pipeline page) read and control runs through this. */
+export const pipelineView = new PipelineViewService(pipelineManager)
 
 function authoringGuide(): string {
   return readFileSync(join(__dirname, '../../resources/docs/pipeline-authoring.md'), 'utf8')
@@ -120,19 +123,16 @@ export function attachPipelineProject(projectPath: string, win: BrowserWindow): 
     logEvent('orchestration-doc-deploy-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn')
   }
   const send = (channel: string, payload: unknown): void => { if (!win.isDestroyed()) win.webContents.send(channel, payload) }
-  const onState = (path: string, snapshot: RunSnapshot): void => { if (path === projectPath) send('pipeline:run-state', snapshot) }
-  const onTranscript = (path: string, runId: string, node: string, visit: number, entry: HistoryEntry): void => {
-    if (path === projectPath) send('pipeline:transcript', { runId, node, visit, entry })
-  }
-  pipelineManager.on('state', onState)
-  pipelineManager.on('transcript', onTranscript)
+  const unsubscribe = pipelineView.subscribe(projectPath, {
+    onState: (snapshot) => send('pipeline:run-state', snapshot),
+    onTranscript: (runId, node, visit, entry) => send('pipeline:transcript', { runId, node, visit, entry })
+  })
   try { pipelineManager.recover(projectPath) } catch (err) {
     logEvent('pipeline-recover-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn')
   }
 
   return () => {
-    pipelineManager.off('state', onState)
-    pipelineManager.off('transcript', onTranscript)
+    unsubscribe()
     pipelineManager.forget(projectPath)
     orchestrators.forgetProject(projectPath)
     pipelineServer.unregisterProject(projectPath)

@@ -17,7 +17,8 @@ import {
   type ToolbarItem
 } from '../config/toolbarConfig'
 import { openProjectAndTrack } from '../windows/editor'
-import { getOrchestrationSetup, pipelineManager } from '../pipeline'
+import { getOrchestrationSetup, pipelineView } from '../pipeline'
+import type { AnswerAction, RunControl } from '../pipeline/viewService'
 import { orchestrators } from '../pipeline/orchestrators'
 import { osDisplayName } from '../platform'
 import { runGitStatus } from '../filetree/gitStatus'
@@ -451,46 +452,31 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   // ── Pipeline: run view and controls (overlay) ─────────────────────────────────
   ipcMain.handle('pipeline:get-run', (event) => {
     const projectPath = projectOf(event.sender)
-    return projectPath ? pipelineManager.snapshot(projectPath) : null
+    return projectPath ? pipelineView.snapshot(projectPath) : null
   })
-  ipcMain.handle('pipeline:control', async (event, action: 'pause' | 'stop' | 'resume' | 'abandon') => {
+  ipcMain.handle('pipeline:control', async (event, action: RunControl) => {
     const projectPath = projectOf(event.sender)
-    if (!projectPath) return 'No project.'
-    try {
-      if (action === 'pause') pipelineManager.pause(projectPath)
-      else if (action === 'stop') await pipelineManager.stop(projectPath)
-      else if (action === 'resume') pipelineManager.resume(projectPath)
-      else await pipelineManager.abandon(projectPath, 'abandoned by the user')
-      return null
-    } catch (err) {
-      return err instanceof Error ? err.message : String(err)
-    }
+    return projectPath ? pipelineView.control(projectPath, action) : 'No project.'
   })
-  ipcMain.handle('pipeline:answer', async (event, escalationId: string, action: 'continue' | 'retry' | 'reject' | 'stop', text: string) => {
+  ipcMain.handle('pipeline:answer', async (event, escalationId: string, action: AnswerAction, text: string) => {
     const projectPath = projectOf(event.sender)
-    if (!projectPath) return 'No project.'
-    try {
-      await pipelineManager.answer(projectPath, escalationId, { action, text, by: 'user' })
-      return null
-    } catch (err) {
-      return err instanceof Error ? err.message : String(err)
-    }
+    return projectPath ? pipelineView.answer(projectPath, escalationId, action, text) : 'No project.'
   })
   ipcMain.handle('pipeline:get-transcript', (event, runId: string, node: string, visit: number) => {
     const projectPath = projectOf(event.sender)
-    return projectPath ? pipelineManager.transcript(projectPath, runId, node, visit) : []
+    return projectPath ? pipelineView.transcript(projectPath, runId, node, visit) : []
   })
   ipcMain.handle('pipeline:get-agent-input', (event, runId: string, node: string, visit: number) => {
     const projectPath = projectOf(event.sender)
-    return projectPath ? pipelineManager.agentInputs(projectPath, runId, node, visit) : []
+    return projectPath ? pipelineView.agentInputs(projectPath, runId, node, visit) : []
   })
   ipcMain.handle('pipeline:get-check-log', (event, runId: string, node: string, visit: number) => {
     const projectPath = projectOf(event.sender)
-    return projectPath ? pipelineManager.checkLog(projectPath, runId, node, visit) : ''
+    return projectPath ? pipelineView.checkLog(projectPath, runId, node, visit) : ''
   })
   ipcMain.handle('pipeline:get-report', (event, runId: string) => {
     const projectPath = projectOf(event.sender)
-    return projectPath ? pipelineManager.report(projectPath, runId) : null
+    return projectPath ? pipelineView.report(projectPath, runId) : null
   })
 
   // ── CLI tools: list registered tools ──────────────────────────────────────────
