@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { runProcess } from '../processRunner'
-import { classifyFailure, failedRun, parseJsonLine, processError, resolveExecutable } from './common'
+import { classifyFailure, isClassifiedFailure, failedRun, parseJsonLine, processError, resolveExecutable } from './common'
 import type { HistoryEntry } from '../../pty/cliTools/types'
 import type { HeadlessCapability, HeadlessResult, HeadlessRunOptions, HeadlessRun } from './types'
 
@@ -181,7 +181,7 @@ export const codexHeadless: HeadlessCapability = {
       const lastMessage = existsSync(files.lastMessage) ? readFileSync(files.lastMessage, 'utf8') : lastAgentMessage
       const base: HeadlessResult = { ok: false, sessionId, structured: null, finalText: lastMessage, costUsd: null, warnings, error: null }
       const exitError = processError(exit, 'Codex')
-      if (exitError && exitError.code !== 'failed' && exitError.code !== 'limit') return { ...base, error: exitError }
+      if (exitError && !isClassifiedFailure(exitError)) return { ...base, error: exitError }
       if (fatal) return { ...base, error: { code: classifyFailure(fatal), message: fatal } }
       if (exitError) return { ...base, error: exitError }
       if (options.outputSchema) {

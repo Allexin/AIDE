@@ -56,6 +56,12 @@ type NodeResult =
   | { kind: 'interrupted' }
   /** The CLI hit its usage limit: the run holds and resumes later, keeping the session. */
   | { kind: 'limited'; message: string; cli: string }
+  /** The CLI is temporarily unavailable (model at capacity, overloaded, network): the engine retries the step. */
+  | { kind: 'unavailable'; message: string; cli: string }
+
+/** How often a step whose CLI is unavailable is retried, and for how long before the orchestrator is asked. */
+export const UNAVAILABLE_RETRY_MS = 60_000
+export const UNAVAILABLE_WINDOW_MS = 20 * 60_000
 
 export interface RunReport {
   runId: string
@@ -109,6 +115,8 @@ export class PipelineRun {
   /** The current interruption is an amendment: the step restarts at once, without a run_stopped event. */
   private amending = false
   private limitTimer: ReturnType<typeof setTimeout> | null = null
+  /** Ends the wait before the next attempt at an unavailable CLI when the run is paused. */
+  private retryWake: (() => void) | null = null
   private readonly commits: CommitResult[] = []
 
   constructor(
@@ -196,6 +204,13 @@ export class PipelineRun {
   /** Finish the current step, then stop before the next one. */
   pause(): void {
     if (this.state.status === 'running') this.setStatus('pausing')
+    this.retryWake?.()
+  }
+
+  /** Continue by hand (pipeline_resume): a CLI that was unavailable gets a new retry window. */
+  resume(): Promise<void> {
+    if (this.state.status !== 'running' && this.state.status !== 'pausing') this.state.unavailable = null
+    return this.run()
   }
 
   /** Interrupt the current step now; the run can be resumed later from that step. */
@@ -415,13 +430,36 @@ export class PipelineRun {
       this.save()
       this.deps.emit(this.runId, 'node_started', { node: id, visit: visits, type: step.type, summary: `${id} started (visit ${visits})` })
 
-      let result: NodeResult
-      try {
-        result = step.type === 'agent' ? await this.runAgent(id, step, visit)
-          : step.type === 'check' ? await this.runCheck(id, step, visit)
-            : await this.runCommit(id, step, visit)
-      } catch (err) {
-        result = { kind: 'escalate', message: err instanceof Error ? err.message : String(err) }
+      let result: Exclude<NodeResult, { kind: 'unavailable' }>
+      let paused = false
+      for (;;) {
+        let attempt: NodeResult
+        try {
+          attempt = step.type === 'agent' ? await this.runAgent(id, step, visit)
+            : step.type === 'check' ? await this.runCheck(id, step, visit)
+              : await this.runCommit(id, step, visit)
+        } catch (err) {
+          attempt = { kind: 'escalate', message: err instanceof Error ? err.message : String(err) }
+        }
+        if (attempt.kind !== 'unavailable') {
+          result = attempt
+          if (result.kind !== 'interrupted') this.state.unavailable = null
+          break
+        }
+        if (this.interruptRequested) { result = { kind: 'interrupted' }; break }
+        const unavailable = this.noteUnavailable(id, visit, attempt)
+        if (unavailable) { result = { kind: 'escalate', message: unavailable }; break }
+        const next = await this.waitBeforeRetry()
+        if (next === 'stop') { result = { kind: 'interrupted' }; break }
+        if (next === 'pause') { result = { kind: 'interrupted' }; paused = true; break }
+      }
+      if (paused) {
+        visit.finishedAt = new Date().toISOString()
+        visit.outcome = 'interrupted'
+        this.state.visits[id] = visits - 1
+        this.setStatus('paused')
+        this.deps.emit(this.runId, 'run_paused', { next: id, summary: `run paused while ${id} waited for its CLI to become available; resume with pipeline_resume` })
+        return
       }
       this.active = null
 
@@ -611,7 +649,9 @@ export class PipelineRun {
     // engine failure answered with retry) continues in its own session. The session
     // already holds the task, so only the continuation is sent: resending the task
     // made agents redo work they had finished (staging, bookkeeping).
-    const earlier = [...this.state.history].reverse().find((h) => h !== visit && h.node === id && h.visit === visit.visit && (h.outcome === 'interrupted' || h.error))
+    // The visit itself is the earlier attempt when its CLI was unavailable and it is being retried.
+    const earlier = visit.error && visit.sessionId ? visit
+      : [...this.state.history].reverse().find((h) => h !== visit && h.node === id && h.visit === visit.visit && (h.outcome === 'interrupted' || h.error))
     if (earlier?.sessionId) {
       resumeSessionId = earlier.sessionId
       const why = earlier.outcome === 'interrupted' ? 'was interrupted' : `ended with an error (${clip(earlier.error ?? '', 300)})`
@@ -649,6 +689,7 @@ export class PipelineRun {
     let result = await handle.result
     if (result.error?.code === 'cancelled' || this.interruptRequested) return { kind: 'interrupted' }
     if (result.error?.code === 'limit') return { kind: 'limited', message: `${cli}: ${result.error.message}`, cli: String(cli) }
+    if (result.error?.code === 'unavailable') return { kind: 'unavailable', message: `${cli}: ${result.error.message}`, cli: String(cli) }
     if (!result.ok) return { kind: 'escalate', message: `${cli} failed (${result.error?.code}): ${result.error?.message}` }
 
     let errors = validateAgainstSchema(result.structured, schema)
@@ -658,6 +699,7 @@ export class PipelineRun {
       result = await handle.result
       if (result.error?.code === 'cancelled' || this.interruptRequested) return { kind: 'interrupted' }
       if (result.error?.code === 'limit') return { kind: 'limited', message: `${cli}: ${result.error.message}`, cli: String(cli) }
+      if (result.error?.code === 'unavailable') return { kind: 'unavailable', message: `${cli}: ${result.error.message}`, cli: String(cli) }
       if (!result.ok) return { kind: 'escalate', message: `${cli} failed (${result.error?.code}): ${result.error?.message}` }
       errors = validateAgainstSchema(result.structured, schema)
     }
@@ -754,6 +796,7 @@ export class PipelineRun {
       const result = await handle.result
       if (result.error?.code === 'cancelled' || this.interruptRequested) return { kind: 'interrupted' }
       if (result.error?.code === 'limit') return { kind: 'limited', message: `${cli}: ${result.error.message}`, cli: String(cli) }
+      if (result.error?.code === 'unavailable') return { kind: 'unavailable', message: `${cli}: ${result.error.message}`, cli: String(cli) }
       if (!result.ok) return { kind: 'escalate', message: `Commit reviewer failed (${result.error?.code}): ${result.error?.message}` }
       const errors = validateAgainstSchema(result.structured, BUILTIN_SCHEMAS.commitReview)
       if (errors.length) return { kind: 'escalate', message: `Commit review output invalid: ${errors.join('; ')}` }
@@ -787,6 +830,54 @@ export class PipelineRun {
         : `${node} hit a CLI usage limit; resume with pipeline_resume once it resets (the session is kept)`
     })
     this.scheduleLimitResume()
+  }
+
+  /**
+   * A failed attempt because the CLI is unavailable. Returns the escalation message
+   * once the retry window since the first such failure is over, else null (retry).
+   */
+  private noteUnavailable(node: string, visit: NodeVisit, result: { message: string; cli: string }): string | null {
+    const now = Date.now()
+    const previous = this.state.unavailable
+    const unavailable = previous && previous.node === node
+      ? previous
+      : { node, cli: result.cli, since: new Date(now).toISOString(), attempts: 0, lastError: '' }
+    unavailable.attempts += 1
+    unavailable.lastError = clip(result.message, 400)
+    this.state.unavailable = unavailable
+    visit.error = result.message
+    visit.retries = unavailable.attempts
+    this.save()
+    const elapsed = now - Date.parse(unavailable.since)
+    if (elapsed >= UNAVAILABLE_WINDOW_MS) {
+      return `${result.cli} has been unavailable for ${Math.round(elapsed / 60_000)} min (${unavailable.attempts} attempts, retried every ${UNAVAILABLE_RETRY_MS / 60_000} min). Last error: ${result.message}`
+    }
+    this.deps.emit(this.runId, 'step_retrying', {
+      node,
+      visit: visit.visit,
+      cli: result.cli,
+      attempt: unavailable.attempts,
+      since: unavailable.since,
+      message: clip(result.message, 400),
+      summary: `${node}: ${result.cli} is unavailable; retrying in ${UNAVAILABLE_RETRY_MS / 60_000} min (attempt ${unavailable.attempts})`
+    })
+    return null
+  }
+
+  /** Wait before the next attempt at an unavailable CLI; stop and pause end the wait at once. */
+  private waitBeforeRetry(): Promise<'retry' | 'stop' | 'pause'> {
+    if (this.state.status === 'pausing') return Promise.resolve('pause')
+    return new Promise((resolve) => {
+      const finish = (how: 'retry' | 'stop' | 'pause'): void => {
+        clearTimeout(timer)
+        this.active = null
+        this.retryWake = null
+        resolve(how)
+      }
+      const timer = setTimeout(() => finish('retry'), UNAVAILABLE_RETRY_MS)
+      this.active = { cancel: async () => finish('stop') }
+      this.retryWake = () => finish('pause')
+    })
   }
 
   /** Pipeline issues an agent reported, as an event the UI and the event log keep (not sent to the orchestrator's wait). */
@@ -901,6 +992,7 @@ export class PipelineRun {
       visits: this.state.visits,
       pendingEscalation: pending ? compactEscalation(pending) : null,
       ...(this.state.limitResumeAt ? { limitResumeAt: this.state.limitResumeAt } : {}),
+      ...(this.state.unavailable ? { unavailable: this.state.unavailable } : {}),
       result: this.state.result
     }
   }

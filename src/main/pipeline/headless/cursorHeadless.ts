@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFil
 import { delimiter, join } from 'path'
 import { homedir } from 'os'
 import { runProcess } from '../processRunner'
-import { classifyFailure, failedRun, parseFinalJson, parseJsonLine, processError, promptWithRoleAndSchema, resolveExecutable } from './common'
+import { classifyFailure, isClassifiedFailure, failedRun, parseFinalJson, parseJsonLine, processError, promptWithRoleAndSchema, resolveExecutable } from './common'
 import { cursorToolView } from '../../pty/cliTools/toolViews'
 import type { HistoryBlock } from '../../pty/cliTools/types'
 import type { HeadlessCapability, HeadlessResult, HeadlessRunOptions, HeadlessRun, PermissionProfile } from './types'
@@ -239,7 +239,7 @@ export const cursorHeadless: HeadlessCapability = {
     const result = handle.done.then((exit): HeadlessResult => {
       const base: HeadlessResult = { ok: false, sessionId, structured: null, finalText: finalText || null, costUsd: null, warnings: [], error: null }
       const exitError = processError(exit, 'Cursor Agent')
-      if (exitError && exitError.code !== 'failed' && exitError.code !== 'limit') return { ...base, error: exitError }
+      if (exitError && !isClassifiedFailure(exitError)) return { ...base, error: exitError }
       const final = resultEvent as Record<string, unknown> | null
       if (final?.is_error === true) {
         const message = str(final.result) || str(final.subtype) || 'Cursor Agent reported an error'

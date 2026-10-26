@@ -50,6 +50,8 @@ export type HeadlessErrorCode =
   | 'timeout'
   | 'cancelled'
   | 'limit'
+  /** The service is temporarily unavailable (model at capacity, overloaded, network): the engine retries. */
+  | 'unavailable'
   | 'prompt_too_large'
   | 'no_output'
   | 'failed'

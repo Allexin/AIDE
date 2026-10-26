@@ -28,8 +28,17 @@ export function resolveExecutable(name: string, env: NodeJS.ProcessEnv = process
 
 const LIMIT_MARKERS = /usage limit|rate limit|rate_limit|limit reached|quota|too many requests|\b429\b|insufficient credit|credit balance/i
 
+/** Failures of the service rather than of the request: they pass by themselves, so the engine retries them. */
+const UNAVAILABLE_MARKERS = /at capacity|overloaded|529|503|service unavailable|temporarily unavailable|stream disconnected|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i
+
 export function classifyFailure(text: string): HeadlessErrorCode {
-  return LIMIT_MARKERS.test(text) ? 'limit' : 'failed'
+  if (LIMIT_MARKERS.test(text)) return 'limit'
+  return UNAVAILABLE_MARKERS.test(text) ? 'unavailable' : 'failed'
+}
+
+/** An error classifyFailure produced from the CLI's text (a CLI's own error message is more precise than its exit code). */
+export function isClassifiedFailure(error: HeadlessResult['error']): boolean {
+  return error?.code === 'failed' || error?.code === 'limit' || error?.code === 'unavailable'
 }
 
 /** Map a finished process to an error, or null when it exited cleanly. */

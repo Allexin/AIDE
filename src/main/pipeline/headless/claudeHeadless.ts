@@ -3,7 +3,7 @@ import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { runProcess } from '../processRunner'
 import { parseHistoryLine } from '../../pty/cliTools/claudeCodeScanner'
-import { classifyFailure, failedRun, parseJsonLine, processError, resolveExecutable } from './common'
+import { classifyFailure, isClassifiedFailure, failedRun, parseJsonLine, processError, resolveExecutable } from './common'
 import type { HeadlessCapability, HeadlessResult, HeadlessRunOptions, HeadlessRun } from './types'
 
 /**
@@ -87,7 +87,7 @@ export const claudeHeadless: HeadlessCapability = {
         if (typeof event.session_id === 'string') base.sessionId = event.session_id
       }
       const spawnOrSignal = processError(exit, 'Claude Code')
-      if (spawnOrSignal && (spawnOrSignal.code !== 'failed' && spawnOrSignal.code !== 'limit')) return { ...base, error: spawnOrSignal }
+      if (spawnOrSignal && !isClassifiedFailure(spawnOrSignal)) return { ...base, error: spawnOrSignal }
       if (!event) return { ...base, error: spawnOrSignal ?? { code: 'no_output', message: 'Claude Code finished without a result event' } }
       if (event.is_error === true || event.subtype !== 'success') {
         const message = `${String(event.subtype ?? 'error')}: ${base.finalText ?? exit.stderrTail.slice(-500)}`

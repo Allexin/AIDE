@@ -144,6 +144,12 @@ Step progress (`node_started`, `node_finished`, `check_failed`, `loop_repeated`,
 themselves, and the report has the outcome. `events --all` streams it for
 debugging.
 
+Neither is `step_retrying`: when a step's CLI is temporarily unavailable (model
+at capacity, overloaded, network errors), AIDE retries the step every minute in
+its session and says nothing. `pipeline_status` shows it as `unavailable` (since
+when, attempts, last error). Only after 20 minutes without success do you get an
+`engine` escalation; `retry` then makes one more attempt.
+
 Every event has a one-line `summary`. An escalation carries its `kind`, a
 clipped `message`, the allowed `actions`, and — when a step's output explains
 it — `source` with a ready `pipeline_output` call for the details:

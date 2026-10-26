@@ -20,6 +20,7 @@ export type PipelineEventType =
   | 'run_finished'
   | 'run_failed'
   | 'account_switched'
+  | 'step_retrying'
 
 export interface PipelineEvent {
   id: number

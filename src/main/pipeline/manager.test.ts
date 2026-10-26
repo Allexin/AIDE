@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join, resolve } from 'path'
 import { tmpdir } from 'os'
@@ -260,5 +260,27 @@ describe('PipelineManager through the MCP tools', () => {
     await second.answer(dir, String(again.data.escalationId), { action: 'continue', text: 'proceed', by: 'user' })
     await until(() => second.activeRun(dir)?.isFinal() === true)
     expect(second.activeRun(dir)?.state.result).toBe('success')
+  })
+
+  it('after an AIDE restart, a run that was retrying an unavailable CLI goes on retrying by itself', async () => {
+    vi.useFakeTimers()
+    try {
+      const dir = project('p7', guideExample())
+      const unavailable = { ok: false, error: { code: 'unavailable' as const, message: 'Selected model is at capacity.' } }
+      const first = new PipelineManager(environment((label) => label.endsWith(':implement') ? unavailable : happy(label)))
+      const { runId } = await first.start(dir, 'code-feature', { taskSpec: 'X', acceptance: [] })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(first.activeRun(dir)?.state.unavailable).toMatchObject({ node: 'implement', attempts: 1 })
+      const lastId = pipelineEvents.since(dir, runId, 0).at(-1)!.id
+      pipelineEvents.reset(dir)
+
+      const second = new PipelineManager(environment(happy))
+      second.recover(dir)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(second.activeRun(dir)?.state.result).toBe('success')
+      expect(pipelineEvents.since(dir, runId, lastId).some((e) => e.type === 'run_paused')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

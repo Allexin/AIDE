@@ -171,7 +171,11 @@ export class PipelineManager extends EventEmitter {
       pipelineEvents.seed(projectPath, store.lastEventId(runId) + 1)
       // Re-announce what needs the orchestrator: a waiter from before the restart lost its call.
       const pending = run.pendingEscalation()
-      if (pending) deps.emit(runId, 'escalation', { ...compactEscalation(pending), summary: `AIDE restarted; still waiting for a decision at ${pending.node}` })
+      if (wasExecuting && state.unavailable && !pending) {
+        // It was retrying a CLI that was unavailable: keep retrying, in the same window
+        // (an attempt after the window ends raises the escalation).
+        void run.run()
+      } else if (pending) deps.emit(runId, 'escalation', { ...compactEscalation(pending), summary: `AIDE restarted; still waiting for a decision at ${pending.node}` })
       else if (state.status === 'stopped' && state.limitResumeAt) {
         run.scheduleLimitResume()
         deps.emit(runId, 'run_stopped', { next: state.current, reason: 'usage_limit', cli: state.limitCli ?? null, resumeAt: state.limitResumeAt, summary: `AIDE restarted; the run waits for a CLI usage limit and resumes by itself at ${state.limitResumeAt} (or pipeline_resume)` })
@@ -214,7 +218,7 @@ export class PipelineManager extends EventEmitter {
     const run = this.require(projectPath, runId)
     if (run.state.status === 'waiting') throw new Error('The run is waiting for an escalation answer; use pipeline_answer.')
     if (run.isFinal()) throw new Error('The run has already ended.')
-    void run.run()
+    void run.resume()
   }
 
   /** Record an event that happened to the run from outside the engine (the account pool). */

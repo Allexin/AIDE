@@ -120,6 +120,10 @@ and the tail of the output.
   `outputs.specify.gate != 'none'`): conditions compare one reference.
 - A CLI usage limit is not a failure: the run holds, keeps the step's session,
   and resumes by itself when the limit resets (if the CLI says when).
+- Neither is a CLI that is temporarily unavailable (model at capacity,
+  overloaded, network errors): the step is retried every minute in its session,
+  and only after 20 minutes without success does the orchestrator get an
+  engine escalation.
 
 ## 3. What each agent receives
 

@@ -6,6 +6,7 @@ import type { HistoryEntry } from '../../pty/cliTools/types'
 import { buildClaudeArgs, claudeHeadless } from './claudeHeadless'
 import { buildCodexArgs, codexHeadless, MAX_PROMPT_CHARS, parseCodexDefaults, unwrapShellCommand } from './codexHeadless'
 import type { HeadlessCapability, HeadlessRunOptions } from './types'
+import { classifyFailure } from './common'
 
 const FAKE_CLI = join(__dirname, '..', 'testing', 'fakeCli.cjs')
 
@@ -172,5 +173,17 @@ describe('codex headless adapter', () => {
     const { result } = await run(codexHeadless, options([{ writeAfterFlag: '-o' }], { systemAppend: 'You are a reviewer.' }))
     expect(result.ok).toBe(true)
     expect(result.finalText).toBe('You are a reviewer.\n\n---\n\ndo the thing')
+  })
+})
+
+describe('failure classification', () => {
+  it('tells usage limits and an unavailable service from other failures', () => {
+    expect(classifyFailure('Selected model is at capacity. Please try a different model.')).toBe('unavailable')
+    expect(classifyFailure('API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}')).toBe('unavailable')
+    expect(classifyFailure('stream disconnected before completion: error sending request')).toBe('unavailable')
+    expect(classifyFailure('503 Service Unavailable')).toBe('unavailable')
+    expect(classifyFailure("You've hit your usage limit. Try again in 2 hours.")).toBe('limit')
+    expect(classifyFailure('429 Too Many Requests: service overloaded')).toBe('limit')
+    expect(classifyFailure('invalid model name')).toBe('failed')
   })
 })

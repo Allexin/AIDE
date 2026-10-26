@@ -66,6 +66,10 @@ The interval is the point: heartbeats, sampling, refresh.
 - Aggregator port (`remote/index.ts`, `AGGREGATOR_RETRY_*`) — when another process holds the
   port, registration is retried with backoff from 500 ms to 30 s. The other holder may be an
   instance that is not serving yet, or something else entirely, so there is no event to wait for.
+- `pipeline/engine/runner` unavailable-CLI retry (`UNAVAILABLE_RETRY_MS`, `UNAVAILABLE_WINDOW_MS`) —
+  a step whose CLI failed because the service is unavailable (model at capacity, overloaded,
+  network) is retried every minute; 20 minutes after the first failure the orchestrator gets an
+  engine escalation. Nothing announces that the service is back, so the attempt is the probe.
 
 ## UI durations
 

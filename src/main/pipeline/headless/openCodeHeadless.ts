@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'fs'
 import { delimiter, dirname, join } from 'path'
 import { homedir } from 'os'
 import { runProcess } from '../processRunner'
-import { classifyFailure, failedRun, parseFinalJson, parseJsonLine, processError, promptWithRoleAndSchema, resolveExecutable } from './common'
+import { classifyFailure, isClassifiedFailure, failedRun, parseFinalJson, parseJsonLine, processError, promptWithRoleAndSchema, resolveExecutable } from './common'
 import { openCodePartBlocks } from '../../pty/cliTools/openCodeParts'
 import { readOpenCodeRetry, readOpenCodeRunCost, readOpenCodeRunModels, type OpenCodeRetry } from '../../pty/cliTools/openCodeScanner'
 import type { HeadlessCapability, HeadlessResult, HeadlessRunOptions, HeadlessRun } from './types'
@@ -237,7 +237,7 @@ export const openCodeHeadless: HeadlessCapability = {
       const base: HeadlessResult = { ok: false, sessionId, structured: null, finalText: finalText || null, costUsd, warnings, error: null }
       if (limit) return { ...base, error: { code: 'limit', message: limit } }
       const exitError = processError(exit, 'OpenCode')
-      if (exitError && exitError.code !== 'failed' && exitError.code !== 'limit') return { ...base, error: exitError }
+      if (exitError && !isClassifiedFailure(exitError)) return { ...base, error: exitError }
       if (fatal) return { ...base, error: { code: classifyFailure(fatal), message: fatal } }
       if (exitError) return { ...base, error: exitError }
       // OpenCode silently answers with another model (its free one) when the requested one is unavailable.

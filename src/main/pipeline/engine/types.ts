@@ -24,6 +24,18 @@ export interface NodeVisit {
   sessionId: string | null
   costUsd: number | null
   error: string | null
+  /** Attempts the visit made while its CLI was unavailable (the error is the last one). */
+  retries?: number
+}
+
+/** A step's CLI is temporarily unavailable; the engine retries it every minute for a while. */
+export interface UnavailableState {
+  node: string
+  cli: string
+  /** The first failure: the retries end, with an escalation, a fixed time after it. */
+  since: string
+  attempts: number
+  lastError: string
 }
 
 export interface Escalation {
@@ -96,6 +108,9 @@ export interface RunState {
   limitResumeAt?: string | null
   /** The CLI whose usage limit the run waits for (set with limitResumeAt). */
   limitCli?: string | null
+  /** Set while a step's CLI is retried because it is unavailable; kept after the escalation that ends the retries
+   *  (its retry gets one attempt), cleared when an attempt gets through or the run is resumed by hand. */
+  unavailable?: UnavailableState | null
   outputs: Record<string, unknown>
   history: NodeVisit[]
   escalations: Escalation[]

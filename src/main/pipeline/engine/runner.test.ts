@@ -1,8 +1,8 @@
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { PipelineRun, type AgentRequest, type EngineDeps } from './runner'
+import { PipelineRun, UNAVAILABLE_RETRY_MS, type AgentRequest, type EngineDeps } from './runner'
 import { RunStore } from './runStore'
 import { validateMachine } from './validate'
 import type { MachineDefinition, RunState, Step } from './types'
@@ -675,6 +675,90 @@ describe('PipelineRun', () => {
     await h.run.answer(h.run.pendingEscalation()!.id, { action: 'continue', text: 'now', by: 'orchestrator' })
     expect(h.state().result).toBe('success')
     expect(h.state().history.filter((v) => v.node === 'approveDraft').map((v) => v.outcome)).toEqual(['fail', 'ok'])
+  })
+})
+
+describe('PipelineRun with an unavailable CLI', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  const atCapacity = { ok: false, error: { code: 'unavailable' as const, message: 'Selected model is at capacity. Please try a different model.' } }
+  const minute = async (): Promise<void> => { await vi.advanceTimersByTimeAsync(UNAVAILABLE_RETRY_MS) }
+
+  it('retries every minute in the session without telling the orchestrator, then goes on', async () => {
+    vi.useFakeTimers()
+    let failures = 3
+    const h = harness({ agent: (req) => {
+      if (req.label.endsWith(':implement') && failures > 0) { failures--; return atCapacity }
+      return happy(req)
+    } })
+    const running = h.run.run()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.state().status).toBe('running')
+    expect(h.run.describe().unavailable).toMatchObject({ node: 'implement', attempts: 1 })
+    for (let i = 0; i < 3; i++) await minute()
+    await running
+    expect(h.state().result).toBe('success')
+    expect(h.events.some((e) => e.type === 'escalation')).toBe(false)
+    expect(h.events.filter((e) => e.type === 'step_retrying').map((e) => e.data.attempt)).toEqual([1, 2, 3])
+    expect(h.state().unavailable).toBeNull()
+    expect(h.state().visits.implement).toBe(1)
+    const visits = h.state().history.filter((v) => v.node === 'implement')
+    expect(visits).toHaveLength(1)
+    expect(visits[0]).toMatchObject({ outcome: 'ok', retries: 3 })
+    const [first, ...retries] = h.requests.filter((r) => r.label.endsWith(':implement'))
+    expect(first.prompt).toContain('Add feature X')
+    expect(retries).toHaveLength(3)
+    expect(retries[0].resumeSessionId).toBe('session-3')
+    expect(retries[0].prompt).toContain('ended with an error')
+    expect(retries[0].prompt).not.toContain('Add feature X')
+  })
+
+  it('asks the orchestrator after 20 minutes; its retry makes one attempt', async () => {
+    vi.useFakeTimers()
+    const h = harness({ agent: (req) => req.label.endsWith(':implement') ? atCapacity : happy(req) })
+    void h.run.run()
+    await vi.advanceTimersByTimeAsync(0)
+    for (let i = 0; i < 20; i++) await minute()
+    const escalation = h.run.pendingEscalation()!
+    expect(escalation).toMatchObject({ node: 'implement', kind: 'engine' })
+    expect(escalation.message).toContain('claude-code has been unavailable for 20 min (21 attempts')
+    expect(escalation.message).toContain('at capacity')
+    expect(h.events.filter((e) => e.type === 'step_retrying')).toHaveLength(20)
+    expect(h.state().visits.implement).toBe(0)
+
+    const before = h.requests.length
+    await h.run.answer(escalation.id, { action: 'retry', text: 'try again', by: 'orchestrator' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.requests.length).toBe(before + 1)
+    expect(h.run.pendingEscalation()).toMatchObject({ node: 'implement', kind: 'engine' })
+  })
+
+  it('stop and pause end the wait at once; resuming by hand starts a new window', async () => {
+    vi.useFakeTimers()
+    let failures = 2
+    const h = harness({ agent: (req) => {
+      if (req.label.endsWith(':implement') && failures > 0) { failures--; return atCapacity }
+      return happy(req)
+    } })
+    void h.run.run()
+    await vi.advanceTimersByTimeAsync(0)
+    await h.run.stop()
+    expect(h.state().status).toBe('stopped')
+    expect(h.state().visits.implement).toBe(0)
+    expect(h.state().unavailable).toMatchObject({ attempts: 1 })
+
+    void h.run.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.state().unavailable).toMatchObject({ attempts: 1 })
+    h.run.pause()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.state().status).toBe('paused')
+    expect(h.events.at(-1)).toMatchObject({ type: 'run_paused', data: { next: 'implement' } })
+
+    const resumed = h.run.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    await resumed
+    expect(h.state().result).toBe('success')
   })
 })
 
