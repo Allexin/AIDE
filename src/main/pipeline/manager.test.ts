@@ -145,6 +145,7 @@ describe('PipelineManager through the MCP tools', () => {
       commits: [{ sha: 'abc123', subject: 'Add X', files: 1 }],
       visits: { implement: 1, checks: 1, review: 1, commitPrep: 1, commit: 1 },
       loops: { build: 1, commit: 1 },
+      checks: [{ step: 'checks', command: expect.any(String), result: 'passed', runs: 1 }],
       summaries: [{ step: 'implement', summary: 'did X' }, { step: 'review', summary: 'fine' }]
     })
     expect(report.data).not.toHaveProperty('params')

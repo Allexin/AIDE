@@ -62,6 +62,16 @@ export const ENGINE_CHANGES: readonly EngineChange[] = [
       'A role that relied on an MCP tool in a Claude Code step must do without it.',
       'Inputs that bring in noise (regenerated golden files in run.diff) can be filtered: {"ref": "run.diff", "exclude": ["<glob>"]}.'
     ]
+  },
+  {
+    version: 5,
+    changes: [
+      'The context tells agents not to run the later checks to verify their finished work (AIDE runs them next); building and running the tests they add or change while they work is fine.',
+      'The run report lists every check with its last result ("checks"), so the orchestrator need not run them again.'
+    ],
+    actions: [
+      'Remove "run the tests / verify before you finish" from tasks and roles where it means the machine\'s own check commands; keep it only where a step must run a check itself (blessing goldens, measuring), and say so explicitly.'
+    ]
   }
 ]
 

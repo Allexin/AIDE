@@ -85,11 +85,14 @@ project", the project is not open in AIDE.
 3. Escalations from a run come to you first. Answer them when the answer is
    within the plan; ask the user otherwise.
 4. Read each run's result: the end-of-run event carries the compact report
-   (commits, visits per step, loop iterations, decisions, agent summaries,
-   non-blocking findings). Recurring findings are your signal to plan a
-   refactoring task.
+   (commits, visits per step, loop iterations, check results, decisions, agent
+   summaries, non-blocking findings). Read all of it: when you wait in code,
+   return the report whole rather than a few fields. Recurring findings are
+   your signal to plan a refactoring task.
 5. **Keep each cycle to the few calls it needs.** Every call re-reads your whole
-   context. Do not re-verify what the machine's checks and reviewers verified;
+   context. Do not re-verify what the machine's checks and reviewers verified:
+   a check listed as passed in the report's `checks` ran on the final code, so
+   do not run its command again;
    look yourself only on a signal (a reviewer flagged something, the first
    capture of a new visual stage, a failed run).
 6. Keep the plan and its progress in the project's documents, not only in

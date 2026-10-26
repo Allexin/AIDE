@@ -135,8 +135,11 @@ AIDE composes the prompt; you only write the role file and the step fields.
   loops the agent is in and their iteration, what later steps do, and what
   happened before — including the latest results of the current loop pass, so
   feedback from an earlier pass is not mistaken for the current state. Agents
-  therefore know they need not run checks that a check step runs (they may when
-  their task asks for it), and not to stage or commit before the commit step.
+  therefore know not to run the checks a check step runs to verify their
+  finished work (building and running the tests they add while they work is
+  fine; a whole check only when their task asks for it), and not to stage or
+  commit before the commit step. Do not tell them in a task or role to "run the
+  tests before you finish" when the machine's checks do exactly that.
   This is why every agent step needs a good one-line `summary`. An `if` whose
   condition uses only params is resolved: the agent sees just the branch that
   runs. Conditions on outputs are shown as conditions.
@@ -254,7 +257,7 @@ rows.
   "id": "code-feature",
   "name": "Code feature",
   "description": "Implements one plan stage that is pure code. Needs the stage spec and acceptance criteria. Produces one reviewed commit.",
-  "engineVersion": 4,
+  "engineVersion": 5,
   "params": {
     "taskSpec": { "type": "string", "description": "What to implement, or a path to the spec section" },
     "acceptance": { "type": "string[]", "description": "Acceptance criteria" }
@@ -314,7 +317,7 @@ an outer loop and return to it with a `repeat` step:
   "id": "location-content",
   "name": "Location content",
   "description": "Generates the assets of a game location and integrates them. Needs the location brief. Produces one commit.",
-  "engineVersion": 4,
+  "engineVersion": 5,
   "params": { "brief": { "type": "string", "description": "The location brief or a path to it" } },
   "defaults": { "cli": "claude-code" },
   "schemas": {

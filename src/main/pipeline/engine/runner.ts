@@ -77,6 +77,8 @@ export interface RunReport {
   commits: CommitResult[]
   summaries: Array<{ node: string; summary: string }>
   nonBlockingFindings: string[]
+  /** Every check step that ran: the command and its last result (absent in reports from before it existed). */
+  checks?: Array<{ node: string; command: string; passed: boolean; runs: number }>
   /** Problems with the pipeline itself that agents reported (`pipelineIssues`), every visit. */
   pipelineIssues: Array<{ step: string; visit: number; issue: string }>
   amendments: Amendment[]
@@ -953,6 +955,15 @@ export class PipelineRun {
         pipelineIssues.push({ step: h.node, visit: h.visit, issue: issue.trim() })
       }
     }
+    const checks = new Map<string, NonNullable<RunReport['checks']>[number]>()
+    for (const h of this.state.history) {
+      const step = this.tree.leaf(h.node)?.step
+      if (step?.type !== 'check' || !h.finishedAt || (h.outcome !== 'ok' && h.outcome !== 'fail')) continue
+      const output = this.store.readOutput(this.runId, h.node, h.visit) as CheckOutput | undefined
+      const runs = (checks.get(h.node)?.runs ?? 0) + 1
+      checks.delete(h.node) // keep the order of the last runs
+      checks.set(h.node, { node: h.node, command: output?.command ?? step.command, passed: h.outcome === 'ok', runs })
+    }
     return {
       runId: this.runId,
       machine: { id: this.machine.id, name: this.machine.name },
@@ -970,6 +981,7 @@ export class PipelineRun {
       }),
       summaries,
       nonBlockingFindings: nonBlocking,
+      checks: [...checks.values()],
       pipelineIssues,
       amendments: this.state.amendments ?? [],
       escalations: this.state.escalations,

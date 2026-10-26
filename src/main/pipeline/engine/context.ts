@@ -164,7 +164,7 @@ export function buildPipelineContext(machine: MachineDefinition, current: string
   const next = tree.order.slice(leaf.order + 1).find((id) => !skipped.has(id))
   if (next) lines.push(`- Next in order: ${next} — ${stepSummary(tree.leaves.get(next)!.step)}.`)
   else lines.push('- You are the last step; the run ends after you.')
-  if (checks.length) lines.push(`- AIDE itself runs these checks later: ${checks.map((c) => `\`${c.command}\``).join(', ')}. You need not run them: if they fail, the failure output comes back to the steps that must fix it. Run one yourself only when your task or a decision explicitly asks for it.`)
+  if (checks.length) lines.push(`- AIDE itself runs these checks later: ${checks.map((c) => `\`${c.command}\``).join(', ')}. Do not run them to verify your finished work: if they fail, the failure output comes back to the steps that must fix it. While you work, building and running the tests you add or change is fine; run a whole check yourself only when your task or a decision explicitly asks for it.`)
   if (isCommitPrep) lines.push('- You prepare the commit (stage files, write the message); AIDE reviews it and commits. Do not commit yourself.')
   else if (commitLater) lines.push('- Staging and committing happen in a later step. Do not stage or commit.')
   // Facts about the machine and the engine only. How an agent should work (finish

@@ -20,6 +20,8 @@ export interface CompactReport {
   loops: Record<string, number>
   summaries: Array<{ step: string; summary: string }>
   nonBlockingFindings: string[]
+  /** Every check command and its last result. A check that passed here ran on the final code: no need to run it again. */
+  checks: Array<{ step: string; command: string; result: 'passed' | 'failed'; runs: number }>
   /** Problems with the pipeline itself that agents reported. */
   pipelineIssues: Array<{ step: string; issue: string }>
   /** Instructions added during the run. */
@@ -46,6 +48,7 @@ export function compactReport(report: RunReport & { reason?: string | null; note
     loops: report.loops ?? {},
     summaries: report.summaries.map((s) => ({ step: s.node, summary: clip(s.summary, 400) })),
     nonBlockingFindings: findings.slice(0, MAX_FINDINGS).map((f) => clip(f, 240)).concat(findings.length > MAX_FINDINGS ? [`… and ${findings.length - MAX_FINDINGS} more (pipeline_report detail: true)`] : []),
+    checks: (report.checks ?? []).map((c) => ({ step: c.node, command: clip(c.command, 200), result: c.passed ? 'passed' : 'failed', runs: c.runs })),
     pipelineIssues: (report.pipelineIssues ?? []).slice(0, MAX_FINDINGS).map((p) => ({ step: p.step, issue: clip(p.issue, 300) })),
     amendments: (report.amendments ?? []).map((a) => ({ step: a.node, text: clip(a.text, 240) })),
     decisions: report.escalations.filter((e) => e.answer).map((e) => ({ step: e.node, kind: e.kind, action: e.answer!.action, by: e.answer!.by, text: clip(e.answer!.text, 240) })),

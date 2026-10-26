@@ -18,7 +18,7 @@ const MACHINE: MachineDefinition = {
   id: 'content-and-code',
   name: 'Content and code',
   description: 'Generates content, then integrates it.',
-  engineVersion: 4,
+  engineVersion: 5,
   params: { taskSpec: { type: 'string' } },
   defaults: { cli: 'claude-code' },
   steps: [
@@ -142,6 +142,14 @@ describe('PipelineRun', () => {
     expect(report.commits.map((c) => c.sha)).toEqual(['sha-1'])
   })
 
+  it('reports each check by its last result and how often it ran', async () => {
+    const h = harness({ agent: happy, check: (call) => call === 0 ? { exitCode: 1, output: 'FAIL a.test' } : { exitCode: 0, output: 'ok' } })
+    await h.run.run()
+    expect(h.state().result).toBe('success')
+    const report = h.store.readReport('run-1') as { checks: unknown }
+    expect(report.checks).toEqual([{ node: 'checks', command: 'npm test', passed: true, runs: 2 }])
+  })
+
   it('gives each agent its role, the step tree with its position, and what comes later', async () => {
     const h = harness({ agent: happy })
     await h.run.run()
@@ -168,7 +176,8 @@ describe('PipelineRun', () => {
     expect(implement.prompt).toContain('Add feature X')
     // The reviewer comes after the checks, but a repeat runs them again — it is still told not to run them.
     expect(review.systemAppend).toContain('AIDE itself runs these checks later')
-    expect(implement.systemAppend).toContain('Run one yourself only when your task or a decision explicitly asks for it.')
+    expect(implement.systemAppend).toContain('Do not run them to verify your finished work')
+    expect(implement.systemAppend).toContain('building and running the tests you add or change is fine; run a whole check yourself only when your task or a decision explicitly asks for it.')
     expect(review.permissions).toBe('read-only')
     expect(review.prompt).toContain('+line')
     expect(commitPrep.systemAppend).toContain('You prepare the commit')
