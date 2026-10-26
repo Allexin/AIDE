@@ -171,4 +171,29 @@ describe('pipeline server + stdio shim', () => {
     const res = await fetch(`http://127.0.0.1:${server.getPort()}/mcp`, { method: 'POST', body: '{}', headers: { 'x-aide-project': project } })
     expect(res.status).toBe(403)
   })
+
+  it('takes a step answer through its result channel, checked against the schema', async () => {
+    const schema = { type: 'object', additionalProperties: false, required: ['verdict'], properties: { verdict: { type: 'string', enum: ['accept', 'reject'] } } }
+    const channel = server.openResultChannel(project, schema)!
+    expect(server.openResultChannel(join(root, 'elsewhere'), schema)).toBeNull()
+    expect(server.openResultChannel(project, { type: 'array' })).toBeNull()
+    const rpc = async (body: Record<string, unknown>): Promise<{ status: number; json?: Record<string, unknown> }> => {
+      const res = await fetch(channel.url, { method: 'POST', headers: { ...channel.headers, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, ...body }) })
+      return { status: res.status, json: res.status === 200 ? await res.json() as Record<string, unknown> : undefined }
+    }
+    const listed = await rpc({ method: 'tools/list' })
+    expect(listed.json).toMatchObject({ result: { tools: [{ name: 'submit_result', inputSchema: schema }] } })
+
+    const wrong = await rpc({ method: 'tools/call', params: { name: 'submit_result', arguments: { verdict: 'maybe' } } })
+    expect(wrong.json).toMatchObject({ result: { isError: true } })
+    expect(JSON.stringify(wrong.json)).toContain('Call submit_result again')
+    expect(channel.submitted()).toBeUndefined()
+
+    const right = await rpc({ method: 'tools/call', params: { name: 'submit_result', arguments: { verdict: 'accept' } } })
+    expect(JSON.stringify(right.json)).toContain('end your turn now')
+    expect(channel.submitted()).toEqual({ verdict: 'accept' })
+
+    channel.close()
+    expect((await rpc({ method: 'tools/list' })).status).toBe(404)
+  })
 })

@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { openCodeHeadless, resolveOpenCodeExecutable } from './openCodeHeadless'
+import { PipelineServer } from '../server/pipelineServer'
 import type { HistoryEntry } from '../../pty/cliTools/types'
 
 // Real OpenCode 2 runs on the model of the user's OpenCode config:
@@ -82,5 +83,31 @@ describe.skipIf(!live)('opencode headless (live)', () => {
     }).result
     expect(allowed.error).toBeNull()
     expect(readFileSync(join(workdir, 'created.txt'), 'utf8').trim()).toBe('ok')
+  })
+
+  it('submits the answer through the result tool, also from the read-only agent', async () => {
+    const server = new PipelineServer()
+    server.registerProject(workdir)
+    await server.start({ runtimeDir: mkdtempSync(join(tmpdir(), 'aide-live-runtime-')), serverName: 'aide', serverVersion: '0.0.0-live', instructions: '', tools: () => [] })
+    try {
+      const channel = server.openResultChannel(workdir, schema)!
+      const entries: HistoryEntry[] = []
+      const result = await openCodeHeadless.run({
+        ...base,
+        runDir: mkdtempSync(join(tmpdir(), 'aide-live-run-')),
+        prompt: 'Read note.txt and report the secret word.',
+        permissions: 'read-only',
+        outputSchema: schema,
+        resultTool: channel,
+        onEntry: (entry) => entries.push(entry)
+      }).result
+      expect(result.error).toBeNull()
+      expect(channel.submitted()).toMatchObject({ status: 'done', word: 'pelican' })
+      expect(result.structured).toEqual(channel.submitted())
+      expect(entries.some((e) => e.blocks.some((b) => b.type === 'tool_use' && JSON.stringify(b).includes('submit_result')))).toBe(true)
+      channel.close()
+    } finally {
+      await server.stop()
+    }
   })
 })

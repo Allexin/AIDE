@@ -1,10 +1,13 @@
 import http from 'http'
-import { randomBytes, timingSafeEqual } from 'crypto'
+import { randomBytes, randomUUID, timingSafeEqual } from 'crypto'
 import { logEvent } from '../../diagnostics'
 import { McpServer, type ToolDefinition } from '../mcp/protocol'
 import { orchestrators } from '../orchestrators'
 import { tabActivity } from '../../pty/tabActivity'
 import { pipelineEvents, SIGNIFICANT_EVENTS, type PipelineEvent } from '../events'
+import { validateAgainstSchema } from '../engine/schema'
+import type { JsonSchema } from '../engine/types'
+import type { ResultTool } from '../headless/types'
 import { pruneStaleRuntimes, removeAllProjectRuntimes, removeProjectRuntime, writeProjectRuntime } from './runtimeFiles'
 
 /**
@@ -15,6 +18,7 @@ import { pruneStaleRuntimes, removeAllProjectRuntimes, removeProjectRuntime, wri
  *   POST /mcp     one JSON-RPC message (or batch) → JSON-RPC response, 202 for notifications
  *   GET  /events  NDJSON stream of a run's significant events (?run=&since=; &all=1 for every event)
  *   GET  /wait    the next significant event of a run as one JSON line (?run=&since=&timeout=)
+ *   POST /step    MCP of one step visit (header x-aide-step): its submit_result tool (see openResultChannel)
  *
  * Every request must carry the token and a registered project path. Same
  * guarantees as the hook server: localhost only, permanent 'error' listeners.
@@ -26,6 +30,32 @@ export interface PipelineServerOptions {
   serverVersion: string
   instructions: string
   tools: () => ToolDefinition[]
+}
+
+/** MCP server name of a step's result channel. */
+export const RESULT_SERVER_NAME = 'aide_step'
+
+export interface ResultChannel extends ResultTool {
+  close(): void
+}
+
+interface OpenChannel {
+  projectPath: string
+  mcp: McpServer
+}
+
+function resultTool(schema: JsonSchema, record: (answer: unknown) => void): ToolDefinition {
+  return {
+    name: 'submit_result',
+    description: 'Submit the final answer of this pipeline step. Its parameters are the required answer format. Call it once you are done; if it reports problems, correct the answer and call it again.',
+    inputSchema: schema,
+    handler: (args) => {
+      const errors = validateAgainstSchema(args, schema)
+      if (errors.length > 0) return { text: `The answer does not match the required format: ${errors.join('; ')}. Call submit_result again with a corrected answer.`, isError: true }
+      record(args)
+      return { text: 'Answer recorded. The step is complete: end your turn now.' }
+    }
+  }
 }
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -44,6 +74,7 @@ export class PipelineServer {
   private readonly openStreams = new Set<http.ServerResponse>()
   private mcp: McpServer | null = null
   private options: PipelineServerOptions | null = null
+  private readonly channels = new Map<string, OpenChannel>()
 
   async start(options: PipelineServerOptions): Promise<void> {
     if (this.server) return
@@ -88,6 +119,27 @@ export class PipelineServer {
     if (this.options) removeProjectRuntime(this.options.runtimeDir, projectPath)
   }
 
+  /**
+   * A result channel for one agent run: an MCP endpoint with a `submit_result`
+   * tool whose parameters are `schema`. Null when the server does not run, the
+   * project is not registered or the schema is not an object (a tool takes an object).
+   */
+  openResultChannel(projectPath: string, schema: JsonSchema): ResultChannel | null {
+    if (!this.server || !this.projects.has(projectPath) || schema.type !== 'object') return null
+    const id = randomUUID()
+    let value: { answer: unknown } | null = null
+    const tool = resultTool(schema, (answer) => { value = { answer } })
+    const mcp = new McpServer({ name: RESULT_SERVER_NAME, version: this.options?.serverVersion ?? '', instructions: 'Submit the final answer of this pipeline step with submit_result.' }, () => [tool])
+    this.channels.set(id, { projectPath, mcp })
+    return {
+      serverName: RESULT_SERVER_NAME,
+      url: `http://127.0.0.1:${this.port}/step`,
+      headers: { 'x-aide-token': this.token, 'x-aide-project': projectPath, 'x-aide-step': id },
+      submitted: () => value?.answer,
+      close: () => { this.channels.delete(id) }
+    }
+  }
+
   async stop(): Promise<void> {
     if (this.options) removeAllProjectRuntimes(this.options.runtimeDir, this.projects)
     for (const res of this.openStreams) res.end()
@@ -121,7 +173,12 @@ export class PipelineServer {
         tabActivity.markBusy(tabId)
       }
       if (url.pathname === '/events' || url.pathname === '/wait') pipelineEvents.noteObserver(projectPath)
-      if (req.method === 'POST' && url.pathname === '/mcp') await this.handleMcp(req, res, projectPath)
+      if (req.method === 'POST' && url.pathname === '/mcp') await this.handleMcp(req, res, projectPath, this.mcp!)
+      else if (req.method === 'POST' && url.pathname === '/step') {
+        const channel = this.channels.get(String(req.headers['x-aide-step'] ?? ''))
+        if (channel && channel.projectPath === projectPath) await this.handleMcp(req, res, projectPath, channel.mcp)
+        else res.writeHead(404, { 'content-type': 'text/plain' }).end('No such step')
+      }
       else if (req.method === 'GET' && url.pathname === '/events') this.handleEvents(url, res, projectPath)
       else if (req.method === 'GET' && url.pathname === '/wait') this.handleWait(url, res, projectPath)
       else res.writeHead(404, { 'content-type': 'text/plain' }).end('Not found')
@@ -132,7 +189,7 @@ export class PipelineServer {
     }
   }
 
-  private async handleMcp(req: http.IncomingMessage, res: http.ServerResponse, projectPath: string): Promise<void> {
+  private async handleMcp(req: http.IncomingMessage, res: http.ServerResponse, projectPath: string, mcp: McpServer): Promise<void> {
     const chunks: Buffer[] = []
     let size = 0
     for await (const chunk of req) {
@@ -150,7 +207,7 @@ export class PipelineServer {
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }))
       return
     }
-    const response = await this.mcp!.handle(payload, {
+    const response = await mcp.handle(payload, {
       projectPath,
       connectionId: String(req.headers['x-aide-conn'] ?? ''),
       tabId: req.headers['x-aide-tab'] ? String(req.headers['x-aide-tab']) : null

@@ -6,7 +6,7 @@ import { runProcess } from '../processRunner'
 import { classifyFailure, isClassifiedFailure, failedRun, parseFinalJson, parseJsonLine, processError, promptWithRoleAndSchema, resolveExecutable } from './common'
 import { openCodePartBlocks } from '../../pty/cliTools/openCodeParts'
 import { readOpenCodeRetry, readOpenCodeRunCost, readOpenCodeRunModels, type OpenCodeRetry } from '../../pty/cliTools/openCodeScanner'
-import type { HeadlessCapability, HeadlessResult, HeadlessRunOptions, HeadlessRun } from './types'
+import type { HeadlessCapability, HeadlessResult, HeadlessRunOptions, HeadlessRun, ResultTool } from './types'
 
 /**
  * OpenCode 2 headless adapter (`opencode run --format json`). Verified against
@@ -20,9 +20,12 @@ import type { HeadlessCapability, HeadlessResult, HeadlessRunOptions, HeadlessRu
  *   and every MCP server the user or project configures switched off — step
  *   agents start without MCP servers, like Claude Code and Codex steps.
  * - The prompt goes on stdin. Role instructions are prepended (there is no flag
- *   to append to the system prompt); the output schema is appended as an
- *   instruction, since OpenCode has no structured-output mode — the engine
- *   validates the parsed answer.
+ *   to append to the system prompt). OpenCode has no structured-output mode:
+ *   with a result tool (`options.resultTool`, AIDE's MCP endpoint added to the
+ *   per-run config) the agent submits its answer as a tool call, which the tool
+ *   checks against the schema, so a malformed answer is corrected in the same
+ *   turn. Without one, the schema is appended as an instruction and the final
+ *   message is parsed; the engine validates either answer.
  * - Effort is the model variant: `--model provider/model#variant`.
  * - Every event carries `sessionID`; resume is `--session <id>`.
  * - The stream ends before the last step's cost; the run's cost is read from
@@ -120,10 +123,19 @@ export function readOpenCodeConfig(cwd: string, env: NodeJS.ProcessEnv): OpenCod
 }
 
 /** OPENCODE_CONFIG_CONTENT for a run. A disabled server needs a complete entry, or OpenCode ignores the override. */
-export function buildOpenCodeConfigContent(mcpServers: string[]): string {
+export function buildOpenCodeConfigContent(mcpServers: string[], resultTool?: ResultTool): string {
   const mcp: Record<string, unknown> = {}
   for (const name of mcpServers) mcp[name] = { type: 'local', command: ['node'], enabled: false }
+  if (resultTool) mcp[resultTool.serverName] = { type: 'remote', url: resultTool.url, headers: resultTool.headers, oauth: false, enabled: true }
   return JSON.stringify({ agent: { [READ_ONLY_AGENT]: READ_ONLY_AGENT_CONFIG }, mcp })
+}
+
+/** The prompt when the answer goes through the result tool: role instructions, the task, how to submit. */
+export function promptWithResultTool(options: Pick<HeadlessRunOptions, 'prompt' | 'systemAppend'>, resultTool: ResultTool): string {
+  const prompt = options.systemAppend ? `${options.systemAppend}\n\n---\n\n${options.prompt}` : options.prompt
+  return prompt + '\n\n---\n\n'
+    + `When you are done, submit your final answer by calling the tool \`submit_result\` of the MCP server \`${resultTool.serverName}\`: its parameters are the required answer format. `
+    + 'If it reports problems, correct the answer and call it again. Once it accepts the answer, end your turn. Do not write the answer as JSON in a message.'
 }
 
 // ── Invocation ────────────────────────────────────────────────────────────────
@@ -165,6 +177,8 @@ function baseModel(model: string): string {
 }
 
 export const openCodeHeadless: HeadlessCapability = {
+  resultTool: true,
+
   run(options: HeadlessRunOptions): HeadlessRun {
     const resolved = options.executable ? null : resolveOpenCodeExecutable(options.env)
     const executable = options.executable ?? (resolved ? { command: resolved } : null)
@@ -184,14 +198,15 @@ export const openCodeHeadless: HeadlessCapability = {
     let limit: string | null = null
     let emptySteps = 0
     const startedAt = Date.now()
+    const resultTool = options.outputSchema ? options.resultTool : undefined
 
     const handle = runProcess({
       command: executable.command,
       args: [...(executable.args ?? []), ...buildOpenCodeArgs(options, model)],
       cwd: options.cwd,
       // OpenCode takes its working directory from PWD when set, over the real cwd.
-      env: { ...options.env, PWD: options.cwd, OPENCODE_CONFIG_CONTENT: buildOpenCodeConfigContent(config.mcpServers) },
-      stdin: promptWithRoleAndSchema(options),
+      env: { ...options.env, PWD: options.cwd, OPENCODE_CONFIG_CONTENT: buildOpenCodeConfigContent(config.mcpServers, resultTool) },
+      stdin: resultTool ? promptWithResultTool(options, resultTool) : promptWithRoleAndSchema(options),
       timeoutMs: options.timeoutMs,
       label: options.label,
       onStdoutLine: (line) => {
@@ -245,12 +260,15 @@ export const openCodeHeadless: HeadlessCapability = {
       const answered = sessionId && expected ? readOpenCodeRunModels(sessionId, startedAt) : []
       const other = answered.filter((m) => m !== baseModel(expected ?? ''))
       if (other.length > 0) return { ...base, error: { code: 'failed', message: `OpenCode answered with ${other.join(', ')} instead of ${baseModel(expected ?? '')}; is the model available to the configured provider?` } }
-      if (!finalText) return { ...base, error: { code: 'no_output', message: 'OpenCode returned no final message' } }
+      const submitted = resultTool?.submitted()
+      if (submitted !== undefined) return { ...base, ok: true, structured: submitted }
+      if (!finalText) return { ...base, error: { code: 'no_output', message: resultTool ? 'OpenCode neither submitted an answer nor wrote a final message' : 'OpenCode returned no final message' } }
       if (options.outputSchema) {
+        // Without a result tool, or when the agent wrote the answer instead of submitting it.
         try {
           base.structured = parseFinalJson(finalText)
-        } catch {
-          return { ...base, error: { code: 'no_output', message: 'OpenCode final message is not valid JSON' } }
+        } catch (err) {
+          return { ...base, error: { code: 'no_output', message: `OpenCode final message is not valid JSON (${err instanceof Error ? err.message : String(err)})` } }
         }
       }
       return { ...base, ok: true }

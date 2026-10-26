@@ -8,10 +8,10 @@ import { describeOpenCodeCredentials, effectiveOpenCodeCredentials, openCodeAcco
 import type { OpenCodeCredential } from '../../pty/cliTools/openCodeScanner'
 import {
   buildOpenCodeArgs, buildOpenCodeConfigContent, openCodeHeadless, openCodeModel,
-  readOpenCodeConfig, READ_ONLY_AGENT, retryLimitMessage
+  promptWithResultTool, readOpenCodeConfig, READ_ONLY_AGENT, retryLimitMessage
 } from './openCodeHeadless'
 import { parseFinalJson, promptWithRoleAndSchema } from './common'
-import type { HeadlessRunOptions } from './types'
+import type { HeadlessRunOptions, ResultTool } from './types'
 
 const FAKE_CLI = join(__dirname, '..', 'testing', 'fakeCli.cjs')
 
@@ -107,6 +107,28 @@ describe('opencode headless adapter', () => {
     const config = JSON.parse(buildOpenCodeConfigContent(['aide']))
     expect(config.mcp).toEqual({ aide: { type: 'local', command: ['node'], enabled: false } })
     expect(config.agent[READ_ONLY_AGENT].permission).toMatchObject({ edit: 'deny', bash: { '*': 'deny', 'git diff*': 'allow' } })
+  })
+
+  it('adds the result tool as a remote MCP server and asks for the answer through it', () => {
+    const tool: ResultTool = { serverName: 'aide_step', url: 'http://127.0.0.1:1/step', headers: { 'x-aide-step': 's1' }, submitted: () => undefined }
+    const config = JSON.parse(buildOpenCodeConfigContent(['aide'], tool))
+    expect(config.mcp.aide).toMatchObject({ enabled: false })
+    expect(config.mcp.aide_step).toEqual({ type: 'remote', url: 'http://127.0.0.1:1/step', headers: { 'x-aide-step': 's1' }, oauth: false, enabled: true })
+    const prompt = promptWithResultTool({ prompt: 'do the thing', systemAppend: 'You are a reviewer.' }, tool)
+    expect(prompt.startsWith('You are a reviewer.\n\n---\n\ndo the thing\n\n---\n\nWhen you are done')).toBe(true)
+    expect(prompt).toContain('tool `submit_result` of the MCP server `aide_step`')
+    expect(prompt).not.toContain('JSON Schema')
+  })
+
+  it('takes the submitted answer over the final message, and parses the message when nothing was submitted', async () => {
+    const tool = (answer: unknown): ResultTool => ({ serverName: 'aide_step', url: 'http://127.0.0.1:1/step', headers: {}, submitted: () => answer })
+    const submitted = await openCodeHeadless.run(options([line(textEvent('m', 'Submitted.'))], { outputSchema: { type: 'object' }, resultTool: tool({ verdict: 'accept' }) })).result
+    expect(submitted).toMatchObject({ ok: true, error: null, structured: { verdict: 'accept' } })
+    const written = await openCodeHeadless.run(options([line(textEvent('m', '{"verdict":"reject"}'))], { outputSchema: { type: 'object' }, resultTool: tool(undefined) })).result
+    expect(written).toMatchObject({ ok: true, structured: { verdict: 'reject' } })
+    const broken = await openCodeHeadless.run(options([line(textEvent('m', '{"verdict":"reject","summary":"x"],"more":1}'))], { outputSchema: { type: 'object' } })).result
+    expect(broken.error?.code).toBe('no_output')
+    expect(broken.error?.message).toMatch(/not valid JSON \(.*position/)
   })
 
   it('prepends role instructions and appends the output schema', () => {

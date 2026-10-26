@@ -42,6 +42,23 @@ export interface HeadlessRunOptions {
   onEntry?: (entry: HistoryEntry) => void
   /** Called as soon as the CLI session id is known. */
   onSessionId?: (sessionId: string) => void
+  /** An MCP endpoint whose `submit_result` tool takes the final answer, for adapters that declare
+   *  `resultTool` (set by the pipeline when an output schema is asked and its server runs). */
+  resultTool?: ResultTool
+}
+
+/**
+ * The final answer of a step as a tool call instead of JSON in the last message:
+ * the CLI checks the call's arguments and the tool checks them against the schema,
+ * so the agent corrects a malformed answer in the same turn.
+ */
+export interface ResultTool {
+  /** MCP server name the adapter registers the endpoint under (its tool is `submit_result`). */
+  serverName: string
+  url: string
+  headers: Record<string, string>
+  /** The last answer that matched the schema, or undefined when none was submitted. */
+  submitted(): unknown
 }
 
 export type HeadlessErrorCode =
@@ -75,4 +92,6 @@ export interface HeadlessRun {
 
 export interface HeadlessCapability {
   run(options: HeadlessRunOptions): HeadlessRun
+  /** The adapter can take the final answer through `HeadlessRunOptions.resultTool`. */
+  readonly resultTool?: boolean
 }

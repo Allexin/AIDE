@@ -39,7 +39,12 @@ export const pipelineManager = new PipelineManager({
   deps: () => ({
     startAgent: ({ cli, ...options }) => {
       const tool = getToolById(cli)
-      return tool ? startHeadless(tool, options) : failedRun('not_installed', `CLI "${cli}" is not registered in AIDE`)
+      if (!tool) return failedRun('not_installed', `CLI "${cli}" is not registered in AIDE`)
+      // CLIs without a structured-output mode take the answer as a tool call (see ResultTool).
+      const channel = tool.headless?.resultTool && options.outputSchema ? pipelineServer.openResultChannel(options.cwd, options.outputSchema) : null
+      if (!channel) return startHeadless(tool, options)
+      const run = startHeadless(tool, { ...options, resultTool: channel })
+      return { result: run.result.finally(() => channel.close()), cancel: () => run.cancel() }
     },
     runCheck: ({ commandLine, cwd, timeoutMs, label, onOutput }) =>
       runShellCommand({ commandLine, cwd, timeoutMs, label, onStdoutLine: (line) => onOutput(line + '\n'), onStderr: onOutput }),

@@ -16,7 +16,7 @@ columns verified 2026-10-25 against Devin **3000.11.92** and Cursor Agent **2026
 |---|---|---|---|---|---|
 | Headless invocation | `-p` (**live**) | `exec` (**prod**) | `-p --prompt-file <file>` (**live**) | `--print`, prompt on stdin (**live**) | `run --standalone`, prompt on stdin (**live**) |
 | Event stream | `--output-format stream-json --verbose` (**live**) | `--json` JSONL (**prod**) | none; stdout is the final message, `--export <file>` writes ATIF at the end (**live**) | `--output-format stream-json`: `system/init` / `thinking` / `assistant` / `tool_call` / `result` (**live**) | `--format json` JSONL: `step_start` / `text` / `tool_use` / `step_finish` / `error` (**live**) |
-| Structured final answer | `--json-schema <inline JSON>` → `result.structured_output` (**live**) | `--output-schema <file>` + `-o <file>` (**prod**) | none; schema as a prompt instruction, final message parsed (**live**) | none; schema as a prompt instruction, final message parsed (**live**) | none; schema as a prompt instruction, final message parsed (**live**) |
+| Structured final answer | `--json-schema <inline JSON>` → `result.structured_output` (**live**) | `--output-schema <file>` + `-o <file>` (**prod**) | none; schema as a prompt instruction, final message parsed (**live**) | none; schema as a prompt instruction, final message parsed (**live**) | no native mode; the answer is a call of AIDE's `submit_result` MCP tool (remote server `aide_step` in the per-run config), checked against the schema; final message parsed as a fallback (**live**) |
 | Session id | pre-assign `--session-id <uuid>` (**live**) | `thread.started.thread_id` (**prod**) | `session_id` of the export, a name such as `thoughtful-papyrus` (**live**) | `session_id` of `system/init` (**live**) | `sessionID` on every event (**live**) |
 | Resume headless | `--resume <id>` keeps context (**live**) | `exec resume <id>` keeps context (**live**) | `--resume <id>` keeps context (**live**) | `--resume <id>` keeps context, also from the other permission profile (**live**) | `--session <id>` keeps context (**live**) |
 | System prompt append | `--append-system-prompt-file` (**live**) | none that appends; prepend to prompt | none; prepend to prompt | none; prepend to prompt | none; prepend to prompt |
@@ -219,4 +219,9 @@ AIDE_LIVE_DEVIN=1    npx vitest run devin.live     # on the account's default mo
 
 - Cursor, Devin: no structured-output mode; a schema is an instruction only.
 - Devin: no live transcript while a step runs (the export is written at the end).
-- OpenCode 2: no structured-output mode; a schema is an instruction only.
+- OpenCode 2: no structured-output mode. The answer goes through AIDE's result tool: the
+  pipeline server opens a per-visit MCP endpoint (`POST /step`, header `x-aide-step`) whose
+  `submit_result` tool takes the schema as parameters and reports violations back, so the
+  agent corrects the answer in the same turn. OpenCode 2 exposes MCP tools through its
+  `execute` code tool (`tools.aide_step.submit_result({...})`). Without the server, the
+  schema is an instruction and the final message is parsed.
