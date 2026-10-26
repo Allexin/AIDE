@@ -63,6 +63,7 @@ function harness(script: Script, machine: MachineDefinition = MACHINE, params: R
   const events: Array<{ type: string; data: Record<string, unknown> }> = []
   const commits: string[] = []
   const commands: string[] = []
+  const checkOutput: string[] = []
   let agentCalls = 0
   let checkCalls = 0
   let sessionCounter = 0
@@ -101,12 +102,14 @@ function harness(script: Script, machine: MachineDefinition = MACHINE, params: R
       commitIndex: async (_cwd, message) => { commits.push(message); return { sha: `sha-${commits.length}`, files: ['src/a.ts'], message } }
     },
     readRole: (_dir, rolePath) => `ROLE ${rolePath}`,
-    emit: (_runId, type, data) => { events.push({ type, data }) }
+    emit: (_runId, type, data) => { events.push({ type, data }) },
+    // Records the output with what the check log held when it was announced.
+    onCheckOutput: (runId, node, visit, text) => { checkOutput.push(`${node}#${visit} ${text} (log: ${store.readCheckLog(runId, node, visit)})`) }
   }
   const store = new RunStore(join(root, `runs-${Math.random().toString(36).slice(2)}`))
   const run = PipelineRun.create({ machine, machineDir: root }, params, 'run-1', root, store, deps)
   const labels = (): string[] => requests.map((r) => r.label.replace('claude-code:', ''))
-  return { run, requests, events, commits, commands, store, labels, state: (): RunState => run.state }
+  return { run, requests, events, commits, commands, checkOutput, store, labels, state: (): RunState => run.state }
 }
 
 const done = { structured: { status: 'done', summary: 'implemented', docsChanged: [], pipelineIssues: [] } }
@@ -129,6 +132,12 @@ describe('machine fixture', () => {
 })
 
 describe('PipelineRun', () => {
+  it('announces check output after appending it to the check log', async () => {
+    const h = harness({ agent: happy, check: () => ({ exitCode: 0, output: 'tests passed' }) })
+    await h.run.run()
+    expect(h.checkOutput).toEqual(['checks#1 tests passed (log: tests passed)'])
+  })
+
   it('runs both phases top to bottom to a commit and a success report', async () => {
     const h = harness({ agent: happy })
     await h.run.run()

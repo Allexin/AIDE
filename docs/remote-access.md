@@ -108,7 +108,10 @@ The project's pipeline run is a page of its own, `/pipeline?port&project&tab`
 controls (pause, stop now, resume, abandon), the pending escalation with the
 answers its kind takes, the CLI-unavailable and usage-limit waits, the last
 decision, the step list with step states and loop progress, and the report of a
-finished run. The terminal page has a **Pipeline** button while the project has a
+finished run. Tapping a step that ran opens its visit (a full-screen panel on a
+phone, a right column on a wide screen): an agent step's live transcript, what its
+agent was sent (Input) and its output; a check's live log. Visit chips switch
+between the visits of a step that ran more than once. The terminal page has a **Pipeline** button while the project has a
 run (it blinks while a decision is pending); the pipeline page's **Agent** button
 goes back to the terminal tab in `tab`. The tab picker links to the page too.
 
@@ -125,13 +128,24 @@ Client → Server:
   { type: 'pipeline-control', action: 'pause' | 'stop' | 'resume' | 'abandon' }
   { type: 'pipeline-answer', escalationId, action: 'continue' | 'retry' | 'reject' | 'stop', text }
   { type: 'pipeline-report', runId }
+  { type: 'pipeline-visit', runId, node, visit }     ← open a visit; replaces the open one
+  { type: 'pipeline-visit-close' }
+  { type: 'pipeline-agent-input', runId, node, visit }
 
 Server → Client:
   { type: 'pipeline-run', run: RemoteRunView | null }  ← on subscribe and on every state change
   { type: 'pipeline-control-result', action, error: string | null }
   { type: 'pipeline-answer-result', escalationId, error: string | null }
   { type: 'pipeline-report', runId, report }
+  { type: 'pipeline-visit', runId, node, visit, entries, skippedEntries, log, skippedLog, output }
+  { type: 'pipeline-visit-entry', runId, node, visit, entry }  ← live transcript of the open visit
+  { type: 'pipeline-visit-log', runId, node, visit, text }     ← live check output of the open visit
+  { type: 'pipeline-agent-input', runId, node, visit, records }
 ```
+
+An opened visit sends the last 300 transcript entries and the last 200 000
+characters of the check log; the engine writes both to the run directory before it
+announces them, so subscribing and then reading loses and repeats nothing.
 
 ---
 

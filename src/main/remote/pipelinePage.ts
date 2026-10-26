@@ -1,10 +1,11 @@
-import { HISTORY_STYLE } from './historyRender'
+import { HISTORY_RENDER_SCRIPT, HISTORY_STYLE } from './historyRender'
 import { safeJsJson } from './pageUtil'
 
 /**
  * The remote pipeline page: the project's run as `RemoteRunView` draws it (run
  * header and controls, the pending escalation with its answers, the step list,
- * the report of a finished run). Served by the aggregator like the terminal
+ * the report of a finished run) and any step visit opened from the list: its
+ * live transcript, what its agent was sent, its output, a check's live log. Served by the aggregator like the terminal
  * page; its WebSocket goes through the aggregator to the instance. `tab` in the
  * URL is the terminal tab the "Agent" button goes back to.
  * The script is inside a template literal: no backticks, no backslashes.
@@ -75,10 +76,46 @@ export function makePipelineHtml(port: number, projectId: string, projectName: s
     .pulse { animation: pulse 1.2s ease-in-out infinite; }
     @keyframes pulse { 50% { opacity: 0.35; } }
     .empty { padding: 24px 16px; color: #858585; text-align: center; }
+    .row.leaf.openable { cursor: pointer; }
+    .row.leaf.open { background: #37373d; }
+    .chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 3px 0 0 22px; }
+    .chip { padding: 1px 7px; color: #aaa; background: transparent; border: 1px solid #444; border-radius: 3px; font-size: 11px; cursor: pointer; }
+    .chip.ok { color: #4ec9b0; }
+    .chip.fail { color: #f48771; }
+    .chip.open { background: #37373d; color: #fff; }
+    #visit { display: none; position: fixed; inset: 0; z-index: 20; flex-direction: column; background: #1e1e1e; }
+    body.visit-open #visit { display: flex; }
+    body.visit-open { overflow: hidden; }
+    #visit-head { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #252526; border-bottom: 1px solid #3d3d3d; }
+    #visit-title { flex: 1; min-width: 0; color: #e0e0e0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #visit-meta { flex-shrink: 0; padding: 5px 12px; color: #888; font-size: 12px; border-bottom: 1px solid #2d2d2d; overflow-wrap: anywhere; }
+    #visit-meta .chips { margin: 4px 0 0; }
+    #visit-tabs { flex-shrink: 0; display: flex; gap: 2px; padding: 4px 8px; border-bottom: 1px solid #2d2d2d; }
+    #visit-tabs:empty { display: none; }
+    .vtab { padding: 4px 10px; color: #888; background: transparent; border: 0; border-radius: 3px; cursor: pointer; }
+    .vtab.active { color: #e0e0e0; background: #37373d; }
+    #visit-error { flex-shrink: 0; }
+    #visit-error:empty { display: none; }
+    #visit-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+    .vpre { margin: 0; padding: 8px 12px; color: #bbbbbb; font: 12px/1.45 Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+    .vstate { padding: 16px; color: #858585; font-size: 12px; text-align: center; }
+    .input-record { padding: 8px 12px; border-bottom: 1px solid #2d2d2d; }
+    .input-head { display: flex; flex-wrap: wrap; gap: 4px 10px; color: #888; font-size: 12px; }
+    .input-head b { color: #e0e0e0; }
+    .input-label { margin-top: 6px; color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+    .input-record details { margin-top: 4px; font-size: 12px; }
+    .input-record summary { color: #888; cursor: pointer; }
+    .input-record .vpre { padding: 4px 0; }
+    @media (min-width: 900px) {
+      #visit { left: 45%; border-left: 1px solid #3d3d3d; }
+      body.visit-open { overflow: auto; }
+      body.visit-open #page { width: 45%; }
+    }
 ${HISTORY_STYLE}
   </style>
 </head>
 <body>
+  <div id="page">
   <header id="bar">
     <a id="back" class="nav">&#x2039; Agent</a>
     <div id="title"><span id="dot"></span><span id="name">Pipeline</span><span id="project"></span></div>
@@ -90,6 +127,17 @@ ${HISTORY_STYLE}
   <section id="escalation"></section>
   <section id="report"></section>
   <main id="steps"></main>
+  </div>
+  <section id="visit">
+    <div id="visit-head">
+      <button id="visit-close" class="nav">&#x2039; Flow</button>
+      <div id="visit-title"></div>
+    </div>
+    <div id="visit-meta"></div>
+    <div id="visit-tabs"></div>
+    <div id="visit-error" class="note error"></div>
+    <div id="visit-body"></div>
+  </section>
   <script src="/static/marked.js"></script>
   <script src="/static/purify.js"></script>
   <script>
@@ -112,6 +160,12 @@ ${HISTORY_STYLE}
     var wsReady = false
     var reconnectTimer = null
     var reconnectDelay = 1000
+    // The step visit open in the visit panel, what AIDE sent of it, and the shown pane.
+    var openVisit = null
+    var visitData = null
+    var visitInputs = null
+    var visitPane = null
+    var visitFinished = false
 
     document.getElementById('project').textContent = projectName
     var back = document.getElementById('back')
@@ -308,7 +362,23 @@ ${HISTORY_STYLE}
       if (row.summary) node.appendChild(el('div', 'leaf-summary', row.summary))
       var last = row.visits[row.visits.length - 1]
       if (last && last.error) node.appendChild(el('div', 'leaf-error', last.error))
+      if (last) {
+        node.classList.add('openable')
+        if (openVisit && openVisit.node === row.id) node.classList.add('open')
+        node.addEventListener('click', function() { showVisit(row.id, last.visit) })
+        if (row.visits.length > 1) node.appendChild(visitChips(row))
+      }
       return node
+    }
+    function visitChips(row) {
+      var chips = el('div', 'chips')
+      row.visits.forEach(function(v) {
+        var open = openVisit && openVisit.node === row.id && openVisit.visit === v.visit
+        var chip = el('button', 'chip' + (v.outcome === 'ok' ? ' ok' : v.outcome === 'fail' ? ' fail' : '') + (open ? ' open' : ''), '#' + v.visit)
+        chip.addEventListener('click', function(e) { e.stopPropagation(); showVisit(row.id, v.visit) })
+        chips.appendChild(chip)
+      })
+      return chips
     }
     function renderSteps() {
       var box = document.getElementById('steps')
@@ -342,6 +412,176 @@ ${HISTORY_STYLE}
       renderEscalation()
       renderReport()
       renderSteps()
+      renderVisitMeta()
+    }
+
+${HISTORY_RENDER_SCRIPT}
+
+    // --- Step visit panel ---
+    function leafOf(node) {
+      var rows = (run && run.rows) || []
+      for (var i = 0; i < rows.length; i++) if (rows[i].kind === 'leaf' && rows[i].id === node) return rows[i]
+      return null
+    }
+    function visitRecord() {
+      var row = openVisit && leafOf(openVisit.node)
+      if (!row) return null
+      for (var i = 0; i < row.visits.length; i++) if (row.visits[i].visit === openVisit.visit) return row.visits[i]
+      return null
+    }
+    function requestVisit() {
+      sendWs({ type: 'pipeline-visit', runId: openVisit.runId, node: openVisit.node, visit: openVisit.visit })
+    }
+    function showVisit(node, visit) {
+      if (!run) return
+      var row = leafOf(node)
+      openVisit = { runId: run.runId, node: node, visit: visit }
+      visitData = null
+      visitInputs = null
+      visitPane = row && row.agent ? 'transcript' : row && row.type === 'check' ? 'log' : 'output'
+      var record = visitRecord()
+      visitFinished = !!(record && record.finishedAt)
+      document.body.classList.add('visit-open')
+      requestVisit()
+      renderSteps()
+      renderVisitMeta()
+      renderVisitBody()
+    }
+    function closeVisit() {
+      openVisit = null
+      visitData = null
+      visitInputs = null
+      document.body.classList.remove('visit-open')
+      sendWs({ type: 'pipeline-visit-close' })
+      renderSteps()
+    }
+    document.getElementById('visit-close').addEventListener('click', closeVisit)
+    function renderVisitMeta() {
+      if (!openVisit) return
+      if (!run || run.runId !== openVisit.runId) { closeVisit(); return }
+      var row = leafOf(openVisit.node)
+      var record = visitRecord()
+      // A visit that ends while open gets its output now.
+      if (record && record.finishedAt && !visitFinished) {
+        visitFinished = true
+        requestVisit()
+      }
+      document.getElementById('visit-title').textContent = openVisit.node + ' · visit ' + openVisit.visit
+      var meta = document.getElementById('visit-meta')
+      meta.innerHTML = ''
+      var parts = []
+      if (row) parts.push(row.type + (row.cli ? ' · ' + row.cli : ''))
+      if (record) {
+        parts.push(record.outcome || (record.finishedAt ? 'ended' : 'running...'))
+        parts.push(elapsed(record.startedAt, record.finishedAt))
+        if (record.costUsd) parts.push('$' + record.costUsd.toFixed(3))
+        if (record.retries) parts.push(record.retries + ' retries')
+      }
+      meta.appendChild(el('div', '', parts.join(' · ')))
+      if (row && row.visits.length > 1) meta.appendChild(visitChips(row))
+      document.getElementById('visit-error').textContent = record && record.error ? record.error : ''
+      var tabs = document.getElementById('visit-tabs')
+      tabs.innerHTML = ''
+      var panes = row && row.agent ? ['transcript', 'input', 'output'] : row && row.type === 'check' ? ['log'] : []
+      var labels = { transcript: 'Transcript', input: 'Input', output: 'Output', log: 'Log' }
+      panes.forEach(function(pane) {
+        var b = el('button', 'vtab' + (visitPane === pane ? ' active' : ''), labels[pane])
+        b.addEventListener('click', function() {
+          visitPane = pane
+          if (pane === 'input' && visitInputs === null) sendWs({ type: 'pipeline-agent-input', runId: openVisit.runId, node: openVisit.node, visit: openVisit.visit })
+          renderVisitMeta()
+          renderVisitBody()
+        })
+        tabs.appendChild(b)
+      })
+    }
+    function visitBody() { return document.getElementById('visit-body') }
+    function visitBodyNearBottom() {
+      var body = visitBody()
+      return body.scrollHeight - body.scrollTop - body.clientHeight < 80
+    }
+    function visitEntry(entry) {
+      var row = el('article', 'history-entry ' + (entry.role === 'user' ? 'user' : 'assistant'))
+      row.appendChild(el('div', 'history-role', entry.role === 'user' ? 'AIDE' : 'Agent'))
+      var body = el('div', 'history-md')
+      body.innerHTML = renderHistoryMarkdown(entry)
+      Array.prototype.forEach.call(body.querySelectorAll('a'), function(link) { link.target = '_blank'; link.rel = 'noopener noreferrer' })
+      row.appendChild(body)
+      return row
+    }
+    function renderVisitBody() {
+      var body = visitBody()
+      body.innerHTML = ''
+      if (!openVisit) return
+      if (!visitData) { body.appendChild(el('div', 'vstate', 'Loading...')); return }
+      var record = visitRecord()
+      var running = !!(record && !record.finishedAt)
+      if (visitPane === 'transcript') {
+        if (visitData.skippedEntries) body.appendChild(el('div', 'vstate', visitData.skippedEntries + ' earlier entries are not shown.'))
+        visitData.entries.forEach(function(entry) { body.appendChild(visitEntry(entry)) })
+        if (!visitData.entries.length) body.appendChild(el('div', 'vstate waiting-note', running ? 'Waiting for the agent...' : 'No transcript.'))
+      } else if (visitPane === 'log') {
+        if (visitData.skippedLog) body.appendChild(el('div', 'vstate', 'The beginning of the log is not shown.'))
+        body.appendChild(el('pre', 'vpre', visitData.log || (running ? 'Waiting for output...' : '(no output)')))
+      } else if (visitPane === 'input') {
+        renderInputs(body)
+      } else {
+        body.appendChild(el('pre', 'vpre', visitData.output == null ? (running ? 'The step is still running.' : '(no output)') : JSON.stringify(visitData.output, null, 2)))
+      }
+    }
+    var INPUT_KIND = { task: 'task', retry: 'invalid output sent back', continuation: 'continuation of an interrupted attempt', review: 'commit review' }
+    function renderInputs(body) {
+      if (visitInputs === null) { body.appendChild(el('div', 'vstate', 'Loading...')); return }
+      if (!visitInputs.length) { body.appendChild(el('div', 'vstate', 'Not recorded.')); return }
+      visitInputs.forEach(function(r, i) {
+        var box = el('div', 'input-record')
+        var head = el('div', 'input-head')
+        head.appendChild(el('b', '', '#' + (i + 1) + ' ' + (INPUT_KIND[r.kind] || r.kind)))
+        head.appendChild(el('span', '', clock(r.at)))
+        head.appendChild(el('span', '', [r.cli, r.model, r.effort].filter(Boolean).join(' · ')))
+        if (r.permissions) head.appendChild(el('span', '', r.permissions))
+        head.appendChild(el('span', '', r.resumeSessionId ? 'continues the session' : 'new session'))
+        box.appendChild(head)
+        box.appendChild(el('div', 'input-label', 'Message'))
+        box.appendChild(el('pre', 'vpre', r.prompt))
+        if (r.systemAppend) {
+          var details = el('details')
+          details.appendChild(el('summary', '', 'System prompt append (' + r.systemAppend.length + ' characters)'))
+          details.appendChild(el('pre', 'vpre', r.systemAppend))
+          box.appendChild(details)
+        }
+        body.appendChild(box)
+      })
+    }
+    function isOpenVisit(msg) {
+      return !!openVisit && msg.runId === openVisit.runId && msg.node === openVisit.node && msg.visit === openVisit.visit
+    }
+    function receiveVisitMessage(msg) {
+      if (!isOpenVisit(msg)) return
+      var body = visitBody()
+      var bottom = visitBodyNearBottom()
+      if (msg.type === 'pipeline-visit') {
+        visitData = { entries: msg.entries || [], skippedEntries: msg.skippedEntries || 0, log: msg.log || '', skippedLog: !!msg.skippedLog, output: msg.output }
+        renderVisitBody()
+      } else if (msg.type === 'pipeline-agent-input') {
+        visitInputs = msg.records || []
+        if (visitPane === 'input') renderVisitBody()
+        return
+      } else if (!visitData) {
+        return
+      } else if (msg.type === 'pipeline-visit-entry') {
+        visitData.entries.push(msg.entry)
+        if (visitPane !== 'transcript') return
+        var note = body.querySelector('.waiting-note')
+        if (note) note.remove()
+        body.appendChild(visitEntry(msg.entry))
+      } else if (msg.type === 'pipeline-visit-log') {
+        visitData.log += msg.text
+        if (visitPane !== 'log') return
+        var pre = body.querySelector('.vpre')
+        if (pre) pre.textContent = visitData.log
+      }
+      if (bottom) body.scrollTop = body.scrollHeight
     }
     setInterval(function() { if (run && run.active) renderElapsed() }, 1000)
 
@@ -374,6 +614,7 @@ ${HISTORY_STYLE}
         reconnectDelay = 1000
         reportRunId = null
         sendWs({ type: 'pipeline-subscribe' })
+        if (openVisit) requestVisit()
       } else if (msg.type === 'auth-fail') {
         setSub('Auth failed — session expired, reload the page')
       } else if (msg.type === 'pipeline-run') {
@@ -389,6 +630,8 @@ ${HISTORY_STYLE}
         if (card && card.answerResult && msg.escalationId === shownEscalationId) card.answerResult(msg.error)
       } else if (msg.type === 'pipeline-report') {
         if (run && msg.runId === run.runId) { report = msg.report; renderReport() }
+      } else if (msg.type === 'pipeline-visit' || msg.type === 'pipeline-visit-entry' || msg.type === 'pipeline-visit-log' || msg.type === 'pipeline-agent-input') {
+        receiveVisitMessage(msg)
       }
     }
     connectWs()

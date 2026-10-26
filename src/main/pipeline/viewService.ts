@@ -16,6 +16,7 @@ export type AnswerAction = EscalationAnswer['action']
 export interface RunViewListener {
   onState?(snapshot: RunSnapshot): void
   onTranscript?(runId: string, node: string, visit: number, entry: HistoryEntry): void
+  onCheckOutput?(runId: string, node: string, visit: number, text: string): void
 }
 
 function message(err: unknown): string {
@@ -66,21 +67,32 @@ export class PipelineViewService {
     return this.manager.report(projectPath, runId)
   }
 
+  /** The output of one step visit, or null when it has none (yet). */
+  output(projectPath: string, runId: string, node: string, visit: number): unknown {
+    return this.manager.output(projectPath, node, visit, runId)?.output ?? null
+  }
+
   /**
-   * Run state changes and live transcript entries of the project's runs. A
-   * transcript entry is written to the run directory before it is announced, so
-   * subscribing and then reading `transcript()` misses and repeats nothing.
+   * Run state changes, live transcript entries and check output of the
+   * project's runs. Entries and output are written to the run directory before
+   * they are announced, so subscribing and then reading `transcript()` or
+   * `checkLog()` misses and repeats nothing.
    */
   subscribe(projectPath: string, listener: RunViewListener): () => void {
     const onState = (path: string, snapshot: RunSnapshot): void => { if (path === projectPath) listener.onState?.(snapshot) }
     const onTranscript = (path: string, runId: string, node: string, visit: number, entry: HistoryEntry): void => {
       if (path === projectPath) listener.onTranscript?.(runId, node, visit, entry)
     }
+    const onCheckOutput = (path: string, runId: string, node: string, visit: number, text: string): void => {
+      if (path === projectPath) listener.onCheckOutput?.(runId, node, visit, text)
+    }
     this.manager.on('state', onState)
     this.manager.on('transcript', onTranscript)
+    this.manager.on('check-output', onCheckOutput)
     return () => {
       this.manager.off('state', onState)
       this.manager.off('transcript', onTranscript)
+      this.manager.off('check-output', onCheckOutput)
     }
   }
 }

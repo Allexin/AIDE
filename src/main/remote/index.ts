@@ -37,6 +37,9 @@ const SESSION_TTL = 24 * 60 * 60 * 1000  // 24 hours
 const REMOTE_FILE_MAX_BYTES = 5 * 1024 * 1024
 const RUN_CONTROLS: readonly string[] = ['pause', 'stop', 'resume', 'abandon'] satisfies RunControl[]
 const ANSWER_ACTIONS: readonly string[] = ['continue', 'retry', 'reject', 'stop'] satisfies AnswerAction[]
+// What the pipeline page gets of a step visit when it opens it: the end of a long transcript or check log.
+const VISIT_ENTRIES_MAX = 300
+const VISIT_LOG_MAX_CHARS = 200_000
 
 
 interface RegistryEntry {
@@ -1399,6 +1402,7 @@ export class RemoteServer {
     let activeTabId: string | null = null
     let historyCleanup: (() => void) | null = null
     let pipelineCleanup: (() => void) | null = null
+    let visitCleanup: (() => void) | null = null
     const projectPath = new URL(req.url ?? '/', 'http://x').searchParams.get('project') ?? ''
 
     const send = (data: object): void => {
@@ -1559,6 +1563,41 @@ export class RemoteServer {
             send({ type: 'pipeline-report', runId, report: projectPath && runId ? pipelineView.report(projectPath, runId) : null })
             break
           }
+          // One step visit opened on the pipeline page: what it recorded so far, then its live transcript entries and check output.
+          case 'pipeline-visit': {
+            visitCleanup?.()
+            visitCleanup = null
+            const runId = String(msg.runId ?? '')
+            const node = String(msg.node ?? '')
+            const visit = Number(msg.visit)
+            if (!projectPath || !runId || !node || !Number.isInteger(visit)) break
+            const same = (r: string, n: string, v: number): boolean => r === runId && n === node && v === visit
+            visitCleanup = pipelineView.subscribe(projectPath, {
+              onTranscript: (r, n, v, entry) => { if (same(r, n, v)) send({ type: 'pipeline-visit-entry', runId, node, visit, entry }) },
+              onCheckOutput: (r, n, v, text) => { if (same(r, n, v)) send({ type: 'pipeline-visit-log', runId, node, visit, text }) }
+            })
+            const entries = pipelineView.transcript(projectPath, runId, node, visit)
+            const log = pipelineView.checkLog(projectPath, runId, node, visit)
+            send({
+              type: 'pipeline-visit', runId, node, visit,
+              entries: entries.slice(-VISIT_ENTRIES_MAX), skippedEntries: Math.max(0, entries.length - VISIT_ENTRIES_MAX),
+              log: log.slice(-VISIT_LOG_MAX_CHARS), skippedLog: log.length > VISIT_LOG_MAX_CHARS,
+              output: pipelineView.output(projectPath, runId, node, visit)
+            })
+            break
+          }
+          case 'pipeline-visit-close':
+            visitCleanup?.()
+            visitCleanup = null
+            break
+          case 'pipeline-agent-input': {
+            const runId = String(msg.runId ?? '')
+            const node = String(msg.node ?? '')
+            const visit = Number(msg.visit)
+            const records = projectPath && runId && node && Number.isInteger(visit) ? pipelineView.agentInputs(projectPath, runId, node, visit) : []
+            send({ type: 'pipeline-agent-input', runId, node, visit, records })
+            break
+          }
         }
       } catch {}
     })
@@ -1572,6 +1611,8 @@ export class RemoteServer {
       historyCleanup = null
       pipelineCleanup?.()
       pipelineCleanup = null
+      visitCleanup?.()
+      visitCleanup = null
     })
   }
 }

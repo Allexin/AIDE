@@ -114,6 +114,9 @@ export class PipelineManager extends EventEmitter {
       },
       onTranscript: (runId: string, node: string, visit: number, entry: HistoryEntry) => {
         this.emit('transcript', projectPath, runId, node, visit, entry)
+      },
+      onCheckOutput: (runId: string, node: string, visit: number, text: string) => {
+        this.emit('check-output', projectPath, runId, node, visit, text)
       }
     }
   }

@@ -46,6 +46,8 @@ export interface EngineDeps {
   emit(runId: string, type: PipelineEventType, data: Record<string, unknown>): void
   onStateChange?(state: RunState): void
   onTranscript?(runId: string, node: string, visit: number, entry: HistoryEntry): void
+  /** Output of a running check, after it is appended to the visit's check log. */
+  onCheckOutput?(runId: string, node: string, visit: number, text: string): void
 }
 
 const CHECK_OUTPUT_TAIL = 8000
@@ -743,6 +745,7 @@ export class PipelineRun {
         output += text
         if (output.length > CHECK_OUTPUT_TAIL * 4) output = output.slice(-CHECK_OUTPUT_TAIL * 2)
         this.store.appendCheckLog(this.runId, id, visit.visit, text)
+        this.deps.onCheckOutput?.(this.runId, id, visit.visit, text)
       }
     })
     this.active = handle

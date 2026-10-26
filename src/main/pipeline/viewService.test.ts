@@ -25,14 +25,16 @@ describe('PipelineViewService', () => {
     const seen: string[] = []
     const unsubscribe = view.subscribe('/p', {
       onState: (snapshot) => seen.push(`state ${snapshot.runId}`),
-      onTranscript: (runId, node, visit) => seen.push(`entry ${runId} ${node}#${visit}`)
+      onTranscript: (runId, node, visit) => seen.push(`entry ${runId} ${node}#${visit}`),
+      onCheckOutput: (runId, node, visit, text) => seen.push(`check ${runId} ${node}#${visit} ${text}`)
     })
     manager.emit('state', '/p', { runId: 'r1' })
     manager.emit('state', '/other', { runId: 'r2' })
     manager.emit('transcript', '/p', 'r1', 'implement', 2, { role: 'assistant', blocks: [] })
+    manager.emit('check-output', '/p', 'r1', 'checks', 1, 'ok')
     unsubscribe()
     manager.emit('state', '/p', { runId: 'r1' })
-    expect(seen).toEqual(['state r1', 'entry r1 implement#2'])
-    expect(manager.listenerCount('state') + manager.listenerCount('transcript')).toBe(0)
+    expect(seen).toEqual(['state r1', 'entry r1 implement#2', 'check r1 checks#1 ok'])
+    expect(manager.listenerCount('state') + manager.listenerCount('transcript') + manager.listenerCount('check-output')).toBe(0)
   })
 })
