@@ -146,19 +146,53 @@ interface MessageRow {
 
 const MESSAGE_COLUMNS = "SELECT id, type, data, time_updated FROM session_message WHERE session_id = ? AND type IN ('user', 'assistant')"
 
-/** A user message, or an assistant message that has finished streaming; null otherwise. */
-function messageEntry(row: MessageRow): { entry: HistoryEntry | null; complete: boolean } {
+interface MessageParts {
+  role: 'user' | 'assistant'
+  /** Transcript blocks of each part, in order. */
+  parts: HistoryBlock[][]
+  /** How many leading parts are final; all of them once the message is complete. */
+  ready: number
+  complete: boolean
+}
+
+/**
+ * Whether a part of an assistant message that is still streaming is final.
+ * OpenCode completes a message only after the tool call it ends with has run, so
+ * the parts before it are taken as they finish. A text part has no completion
+ * time: it is final once a later part follows it.
+ */
+function partFinished(part: unknown, blocks: HistoryBlock[], isLast: boolean): boolean {
+  const p = (part ?? {}) as Record<string, unknown>
+  switch (p.type) {
+    case 'reasoning': return typeof ((p.time ?? {}) as Record<string, unknown>).completed === 'number'
+    case 'tool': return blocks.length > 0
+    default: return !isLast
+  }
+}
+
+/** The parts of a user or assistant message; null when its data cannot be read. */
+function messageParts(row: MessageRow): MessageParts | null {
   let data: Record<string, unknown>
-  try { data = JSON.parse(row.data) as Record<string, unknown> } catch { return { entry: null, complete: true } }
+  try { data = JSON.parse(row.data) as Record<string, unknown> } catch { return null }
   if (row.type === 'user') {
     const text = typeof data.text === 'string' ? data.text : ''
-    return { entry: text.trim() ? { role: 'user', blocks: [{ type: 'text', text }] } : null, complete: true }
+    const parts: HistoryBlock[][] = text.trim() ? [[{ type: 'text', text }]] : []
+    return { role: 'user', parts, ready: parts.length, complete: true }
   }
-  const time = (data.time ?? {}) as Record<string, unknown>
-  if (typeof time.completed !== 'number') return { entry: null, complete: false }
-  const blocks: HistoryBlock[] = []
-  for (const part of Array.isArray(data.content) ? data.content : []) blocks.push(...openCodePartBlocks(part))
-  return { entry: blocks.length > 0 ? { role: 'assistant', blocks } : null, complete: true }
+  const content: unknown[] = Array.isArray(data.content) ? data.content : []
+  const parts = content.map((part) => openCodePartBlocks(part))
+  const complete = typeof ((data.time ?? {}) as Record<string, unknown>).completed === 'number'
+  let ready = complete ? parts.length : 0
+  while (ready < parts.length && partFinished(content[ready], parts[ready], ready === parts.length - 1)) ready++
+  return { role: 'assistant', parts, ready, complete }
+}
+
+/** A user message, or an assistant message that has finished streaming; null otherwise. */
+function messageEntry(row: MessageRow): HistoryEntry | null {
+  const msg = messageParts(row)
+  if (!msg?.complete) return null
+  const blocks = msg.parts.flat()
+  return blocks.length > 0 ? { role: msg.role, blocks } : null
 }
 
 /** The session's conversation; an assistant turn still streaming is left to the live watcher. */
@@ -167,7 +201,7 @@ export function readOpenCodeSessionHistory(sessionId: string): HistoryEntry[] {
     const rows = db.prepare(`${MESSAGE_COLUMNS} ORDER BY seq ASC`).all(sessionId) as MessageRow[]
     const entries: HistoryEntry[] = []
     for (const row of rows) {
-      const { entry } = messageEntry(row)
+      const entry = messageEntry(row)
       if (entry) entries.push(entry)
     }
     return entries
@@ -180,7 +214,7 @@ export function readOpenCodeSessionPreview(sessionId: string): Array<{ role: 'us
     const rows = (db.prepare(`${MESSAGE_COLUMNS} ORDER BY seq DESC LIMIT 10`).all(sessionId) as MessageRow[]).reverse()
     const result: Array<{ role: 'user' | 'assistant'; text: string }> = []
     for (const row of rows) {
-      const { entry } = messageEntry(row)
+      const entry = messageEntry(row)
       if (!entry) continue
       const text = entry.blocks.map((b) => (b.type === 'text' ? b.text : '')).filter(Boolean).join('\n').trim()
       if (text) result.push({ role: entry.role, text: text.slice(0, 200) })
@@ -362,7 +396,9 @@ export function watchOpenCodeSessions(
 
 /**
  * Watch a session for messages that complete after the watch starts (history
- * up to then comes from readOpenCodeSessionHistory) and emit each once.
+ * up to then comes from readOpenCodeSessionHistory) and emit each once. An
+ * assistant message still streaming is emitted in pieces as its leading parts
+ * become final, so reasoning shows before the tool call after it has run.
  * Returns a cleanup function.
  */
 export function watchOpenCodeMessages(
@@ -374,6 +410,8 @@ export function watchOpenCodeMessages(
   let stopped = false
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
   const done = new Set<string>()
+  // Parts already emitted of each message still streaming.
+  const emitted = new Map<string, number>()
   // Rows are rescanned from the latest update seen: an assistant row is updated in place.
   let since = 0
 
@@ -384,19 +422,30 @@ export function watchOpenCodeMessages(
         if (stopped) return
         since = Math.max(since, row.time_updated)
         if (done.has(row.id)) continue
-        const { entry, complete } = messageEntry(row)
-        if (!complete) continue
-        done.add(row.id)
-        if (emit && entry) onEntry(entry)
+        const msg = messageParts(row)
+        if (!msg || msg.complete) done.add(row.id)
+        // The first scan only settles completed messages, which history already
+        // shows; the finished parts of one still streaming are emitted later.
+        if (!msg || !emit) continue
+        const from = emitted.get(row.id) ?? 0
+        const blocks = msg.parts.slice(from, msg.ready).flat()
+        if (msg.complete) emitted.delete(row.id)
+        else if (msg.ready > from) emitted.set(row.id, msg.ready)
+        if (blocks.length > 0) onEntry({ role: msg.role, blocks })
       }
     })
   }
 
   scan(false)
 
+  // Coalesce without postponing: a database written to continuously while a turn
+  // streams must still be rescanned during the stream, not only after it.
   const scheduleCheck = (): void => {
-    if (debounceTimer) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(() => { if (!stopped) scan(true) }, 300)
+    if (debounceTimer) return
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null
+      if (!stopped) scan(true)
+    }, 300)
   }
 
   const unwatch = watchDb(scheduleCheck)

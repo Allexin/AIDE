@@ -23,7 +23,8 @@ export class ThinkingWatcher {
   }
 
   /** Start watching a session file. filePath comes from tool.getSessionFilePath().
-   *  If filePath is null the tool does not support file-based thinking blocks — no-op.
+   *  If filePath is null the tool does not support file-based thinking blocks — no-op,
+   *  unless the tool streams thinking through history entries.
    */
   startWatching(
     tabId: string,
@@ -35,11 +36,18 @@ export class ThinkingWatcher {
     // Stop any existing watcher for this tab first
     this.stopWatching(tabId)
 
-    if (!filePath) return
+    // Tools without appendable JSONL session files (Cursor Agent stores reasoning
+    // in store.db; Devin rewrites the whole ATIF transcript; OpenCode keeps its
+    // sessions in SQLite with no session file at all) stream thinking via
+    // history entries instead of line-based parsing.
+    const viaHistory =
+      (tool.id === 'cursor-agent' || tool.id === 'devin' || tool.id === 'open-code') &&
+      !!(tool.getSessionHistory || tool.subscribeToSessionHistory)
+    if (!filePath && !viaHistory) return
 
     const state: TabState = {
       sessionId,
-      filePath,
+      filePath: filePath ?? '',
       tool,
       blocks: [],
       offset: 0,
@@ -48,13 +56,7 @@ export class ThinkingWatcher {
     }
     this.tabs.set(tabId, state)
 
-    // Tools without appendable JSONL session files (Cursor Agent stores reasoning
-    // in store.db; Devin rewrites the whole ATIF transcript) stream thinking via
-    // history entries instead of line-based parsing.
-    if (
-      (tool.id === 'cursor-agent' || tool.id === 'devin') &&
-      (tool.getSessionHistory || tool.subscribeToSessionHistory)
-    ) {
+    if (viaHistory) {
       void this.bootstrapFromHistory(tabId, projectPath, sessionId)
       state.unsubscribeHistory = tool.subscribeToSessionHistory?.(projectPath, sessionId, (entry) => {
         const s = this.tabs.get(tabId)
@@ -68,6 +70,8 @@ export class ThinkingWatcher {
       }) ?? null
       return
     }
+
+    if (!filePath) return
 
     // Read whatever already exists in the file
     this.readNew(tabId)
