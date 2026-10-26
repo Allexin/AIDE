@@ -101,6 +101,38 @@ Server → Client:
   { type: 'tab-closed', tabId: string }
 ```
 
+### Pipeline page
+
+The project's pipeline run is a page of its own, `/pipeline?port&project&tab`
+(served by the aggregator like `/terminal`). It shows the run header with the
+controls (pause, stop now, resume, abandon), the pending escalation with the
+answers its kind takes, the CLI-unavailable and usage-limit waits, the last
+decision, the step list with step states and loop progress, and the report of a
+finished run. The terminal page has a **Pipeline** button while the project has a
+run (it blinks while a decision is pending); the pipeline page's **Agent** button
+goes back to the terminal tab in `tab`. The tab picker links to the page too.
+
+AIDE builds the page's view of the run (`src/main/remote/pipelineRunView.ts`):
+the step tree flattened into rows, so the page's script only draws it and step
+outputs stay in AIDE. Reads and controls go through `PipelineViewService`
+(`src/main/pipeline/viewService.ts`), the same calls the desktop pipeline tab's
+IPC handlers make. An answer from the page is recorded as the user's, and, as on
+the desktop, whoever answers an escalation first wins.
+
+```
+Client → Server:
+  { type: 'pipeline-subscribe', brief?: boolean }   ← brief: header only (terminal page button)
+  { type: 'pipeline-control', action: 'pause' | 'stop' | 'resume' | 'abandon' }
+  { type: 'pipeline-answer', escalationId, action: 'continue' | 'retry' | 'reject' | 'stop', text }
+  { type: 'pipeline-report', runId }
+
+Server → Client:
+  { type: 'pipeline-run', run: RemoteRunView | null }  ← on subscribe and on every state change
+  { type: 'pipeline-control-result', action, error: string | null }
+  { type: 'pipeline-answer-result', escalationId, error: string | null }
+  { type: 'pipeline-report', runId, report }
+```
+
 ---
 
 ## Module Structure

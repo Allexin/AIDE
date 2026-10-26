@@ -21,6 +21,13 @@ import { addFsChangeObserver, addGitStatusObserver } from '../filetree/watcher'
 import { logEvent } from '../diagnostics'
 import { runGitStatus } from '../filetree/gitStatus'
 import type { HistoryEntry } from '../pty/cliTools/types'
+import { pipelineView } from '../pipeline'
+import type { RunSnapshot } from '../pipeline/manager'
+import type { AnswerAction, RunControl } from '../pipeline/viewService'
+import { buildRemoteRunView } from './pipelineRunView'
+import { makePipelineHtml } from './pipelinePage'
+import { HISTORY_RENDER_SCRIPT, HISTORY_STYLE } from './historyRender'
+import { safeJsJson } from './pageUtil'
 
 const AGGREGATOR_PORT = 3847
 // Retry pacing while another process holds the aggregator port: doubles per attempt.
@@ -28,6 +35,8 @@ const AGGREGATOR_RETRY_MIN_MS = 500
 const AGGREGATOR_RETRY_MAX_MS = 30_000
 const SESSION_TTL = 24 * 60 * 60 * 1000  // 24 hours
 const REMOTE_FILE_MAX_BYTES = 5 * 1024 * 1024
+const RUN_CONTROLS: readonly string[] = ['pause', 'stop', 'resume', 'abandon'] satisfies RunControl[]
+const ANSWER_ACTIONS: readonly string[] = ['continue', 'retry', 'reject', 'stop'] satisfies AnswerAction[]
 
 
 interface RegistryEntry {
@@ -1013,6 +1022,19 @@ export class RemoteServer {
       return
     }
 
+    // Pipeline page — the project's run, next to the terminal; `tab` is the terminal tab to go back to.
+    if (path === '/pipeline') {
+      const port = Number(urlObj.searchParams.get('port'))
+      const projectId = urlObj.searchParams.get('project') ?? ''
+      const entry = port ? this.registry.get(this.registryKey(port, projectId)) : undefined
+      if (!entry) {
+        res.writeHead(404); res.end('Project not found'); return
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(makePipelineHtml(port, projectId, entry.projectName))
+      return
+    }
+
     // Static assets — served directly, all instances share the same xterm files.
     if (path.startsWith('/static/')) {
       this.serveStatic(path.slice(8).split('?')[0], res)
@@ -1376,6 +1398,7 @@ export class RemoteServer {
     let authenticated = false
     let activeTabId: string | null = null
     let historyCleanup: (() => void) | null = null
+    let pipelineCleanup: (() => void) | null = null
     const projectPath = new URL(req.url ?? '/', 'http://x').searchParams.get('project') ?? ''
 
     const send = (data: object): void => {
@@ -1506,6 +1529,36 @@ export class RemoteServer {
             historyCleanup?.()
             historyCleanup = null
             break
+          // Pipeline run of the project: the pipeline page gets the whole view, the terminal page a brief one for its button.
+          case 'pipeline-subscribe': {
+            pipelineCleanup?.()
+            pipelineCleanup = null
+            const brief = msg.brief === true
+            const push = (snapshot: RunSnapshot | null): void => send({ type: 'pipeline-run', run: snapshot ? buildRemoteRunView(snapshot, { brief }) : null })
+            if (!projectPath) { push(null); break }
+            pipelineCleanup = pipelineView.subscribe(projectPath, { onState: push })
+            push(pipelineView.snapshot(projectPath))
+            break
+          }
+          case 'pipeline-control': {
+            const action = String(msg.action ?? '')
+            if (!projectPath || !RUN_CONTROLS.includes(action)) { send({ type: 'pipeline-control-result', action, error: 'Unknown control.' }); break }
+            void pipelineView.control(projectPath, action as RunControl).then((error) => send({ type: 'pipeline-control-result', action, error }))
+            break
+          }
+          case 'pipeline-answer': {
+            const escalationId = String(msg.escalationId ?? '')
+            const action = String(msg.action ?? '')
+            if (!projectPath || !ANSWER_ACTIONS.includes(action)) { send({ type: 'pipeline-answer-result', escalationId, error: 'Unknown answer.' }); break }
+            void pipelineView.answer(projectPath, escalationId, action as AnswerAction, String(msg.text ?? ''))
+              .then((error) => send({ type: 'pipeline-answer-result', escalationId, error }))
+            break
+          }
+          case 'pipeline-report': {
+            const runId = String(msg.runId ?? '')
+            send({ type: 'pipeline-report', runId, report: projectPath && runId ? pipelineView.report(projectPath, runId) : null })
+            break
+          }
         }
       } catch {}
     })
@@ -1517,6 +1570,8 @@ export class RemoteServer {
       this.fileWatchers.delete(ws)
       historyCleanup?.()
       historyCleanup = null
+      pipelineCleanup?.()
+      pipelineCleanup = null
     })
   }
 }
@@ -1647,13 +1702,6 @@ function makeConnectHtml(urls: string[], pin: string, qrDataUrls: string[], remo
 // JSON.stringify escapes U+0000-U+001F but leaves U+007F (DEL) as a raw byte.
 // A raw 0x7F in a JS string literal is a SyntaxError in browsers.
 // We use split/join computed at runtime — esbuild would strip a DEL byte from a regex literal.
-function safeJsJson(obj: unknown): string {
-  const del = String.fromCharCode(0x7f)
-  return JSON.stringify(obj)
-    .split(del).join('\\u007f')
-    .replace(/<\/script>/gi, '<\\/script>')
-}
-
 // Login page served at the aggregator when the client has no valid session.
 const LOGIN_HTML = `<!DOCTYPE html>
 <html>
@@ -1809,6 +1857,7 @@ function makeTabPickerHtml(port: number, projectId: string, projectName: string)
     }
     .top { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
     .back { color: #858585; text-decoration: none; font-size: 13px; }
+    .pipeline-link { flex-shrink: 0; padding: 5px 10px; color: #4ec9b0; border: 1px solid #4ec9b0; border-radius: 4px; text-decoration: none; font-size: 13px; }
     .title { flex: 1; min-width: 0; }
     h2 { font-size: 15px; font-weight: 400; color: #858585; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .new-row { display: flex; gap: 8px; margin-bottom: 14px; }
@@ -1849,6 +1898,7 @@ function makeTabPickerHtml(port: number, projectId: string, projectName: string)
   <div class="top">
     <a class="back" href="/">&larr; Projects</a>
     <div class="title"><h2 id="heading"></h2></div>
+    <a class="pipeline-link" id="pipeline-link">Pipeline</a>
   </div>
   <div class="new-row">
     <select class="tool-select" id="tool-select" style="display:none"></select>
@@ -1865,6 +1915,7 @@ function makeTabPickerHtml(port: number, projectId: string, projectName: string)
     var port = ${port}
     var projectId = ${projectIdJson}
     var projectName = ${projectNameJson}
+    document.getElementById('pipeline-link').href = '/pipeline?port=' + port + '&project=' + encodeURIComponent(projectId)
     var tools = []
     var defaultToolId = null
     var activeTabs = []
@@ -2165,20 +2216,10 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     #history-close { background: none; border: 0; color: #999; font: 18px/1 monospace; cursor: pointer; padding: 2px 6px; }
     #history-view { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; color: #d4d4d4; font: 13px/1.5 system-ui, sans-serif; }
     .history-state { padding: 16px; color: #858585; font: 12px/1.5 monospace; text-align: center; }
-    .history-entry { padding: 10px 14px; border-bottom: 1px solid #2d2d2d; }
-    .history-role { margin-bottom: 5px; color: #4ec9b0; font: bold 11px/1.3 monospace; text-transform: uppercase; letter-spacing: .04em; }
-    .history-entry.user .history-role { color: #569cd6; }
-    .history-md { overflow-wrap: anywhere; }
-    .history-md > :first-child { margin-top: 0; }
-    .history-md > :last-child { margin-bottom: 0; }
-    .history-md p, .history-md ul, .history-md ol, .history-md blockquote, .history-md pre { margin: 7px 0; }
-    .history-md ul, .history-md ol { padding-left: 22px; }
-    .history-md blockquote { padding-left: 10px; color: #9a9a9a; border-left: 3px solid #555; }
-    .history-md code { padding: 1px 4px; background: #2a2a2a; border-radius: 3px; font: 12px/1.4 Consolas, monospace; }
-    .history-md pre { padding: 9px; overflow-x: auto; background: #181818; border: 1px solid #333; border-radius: 4px; }
-    .history-md pre code { padding: 0; background: transparent; }
-    .history-md a { color: #4fc3f7; }
+${HISTORY_STYLE}
     body.size-small .cbtn, body.size-small .tb-btn { padding: 3px 7px; font-size: 11px; }
+    .cbtn.pipeline-attention { color: #f0a500 !important; border-color: #f0a500 !important; animation: pipeline-blink 1s steps(2) infinite; }
+    @keyframes pipeline-blink { 50% { opacity: 0.4; } }
     body.size-large .cbtn, body.size-large .tb-btn { padding: 7px 14px; font-size: 14px; }
     .tb-extra-row { flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: #252526; border-bottom: 1px solid #3d3d3d; overflow-x: auto; }
     .tb-extra-row::-webkit-scrollbar { display: none; }
@@ -2310,6 +2351,7 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
     var historyPending = []
     var historyNewCount = 0
     var historyRequest = 0
+    var pipelineBrief = null
     var treeCache = {}
     var expandedDirs = new Set([''])
     var selectedFile = null
@@ -2616,36 +2658,7 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
       var url = '/api/history?port=' + port + '&project=' + encodeURIComponent(projectId) + '&tab=' + encodeURIComponent(activeTabId || '') + '&limit=10'
       return before == null ? url : url + '&before=' + encodeURIComponent(before)
     }
-    function historyBlockMarkdown(block) {
-      if (!block) return ''
-      if (block.type === 'text') return block.text || ''
-      var NL = String.fromCharCode(10)
-      if (block.type === 'thinking') {
-        return '> **Thinking**' + NL + '>' + NL + String(block.thinking || '').split(NL).map(function(line) { return '> ' + line }).join(NL)
-      }
-      var fence = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96)
-      if (block.type === 'tool_use') {
-        var input = ''
-        try { input = JSON.stringify(block.input, null, 2) } catch (err) { input = String(block.input || '') }
-        return '**' + String(block.name || 'tool') + '**' + NL + NL + fence + 'json' + NL + input + NL + fence
-      }
-      if (block.type === 'tool_result') {
-        var content = block.content
-        if (Array.isArray(content)) content = content.filter(function(item) { return item && item.type === 'text' }).map(function(item) { return item.text || '' }).join(NL)
-        return '**Result**' + NL + NL + fence + NL + String(content || '') + NL + fence
-      }
-      return ''
-    }
-    function renderHistoryMarkdown(entry) {
-      var NL = String.fromCharCode(10)
-      var source = (entry.blocks || []).map(historyBlockMarkdown).filter(Boolean).join(NL + NL)
-      try {
-        var html = window.marked.parse(source, { gfm: true, breaks: true })
-        return window.DOMPurify.sanitize(html)
-      } catch (err) {
-        return '<p>' + esc(source).split(NL).join('<br>') + '</p>'
-      }
-    }
+${HISTORY_RENDER_SCRIPT}
     function makeHistoryEntry(entry) {
       var row = document.createElement('article')
       row.className = 'history-entry ' + (entry.role === 'user' ? 'user' : 'assistant')
@@ -3202,9 +3215,31 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
       history.textContent = 'History'
       history.addEventListener('click', function() { historyOpen ? closeHistory() : openHistory() })
       ctrlBar.appendChild(history)
+      var pipeline = document.createElement('button')
+      pipeline.id = 'pipeline-btn'
+      pipeline.className = 'cbtn'
+      pipeline.addEventListener('click', function() {
+        location.href = '/pipeline?port=' + port + '&project=' + encodeURIComponent(projectId) + '&tab=' + encodeURIComponent(activeTabId || '')
+      })
+      ctrlBar.appendChild(pipeline)
+      updatePipelineButton()
       var kb = makeKbBtn()
       kb.addEventListener('click', switchToInput)
       ctrlBar.appendChild(kb)
+    }
+
+    // The project's pipeline run, if any: the button opens the pipeline page and blinks while a decision is pending.
+    function updatePipelineButton() {
+      var button = document.getElementById('pipeline-btn')
+      if (!button) return
+      button.style.display = pipelineBrief ? '' : 'none'
+      if (!pipelineBrief) return
+      var waiting = !!pipelineBrief.pending
+      button.textContent = waiting ? 'Pipeline !' : 'Pipeline'
+      button.title = pipelineBrief.machineName + ' — ' + pipelineBrief.status
+      button.classList.toggle('pipeline-attention', waiting)
+      button.style.color = pipelineBrief.active ? '#4ec9b0' : '#858585'
+      button.style.borderColor = pipelineBrief.active ? '#4ec9b0' : '#555'
     }
 
     function switchToInput() {
@@ -3305,11 +3340,15 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
           sendWs({ type: 'log-subscribe' })
         }
         if (historyOpen) subscribeHistory()
+        sendWs({ type: 'pipeline-subscribe', brief: true })
       } else if (msg.type === 'auth-fail') {
         shouldReconnect = false
         setStatus('Auth failed — session expired, reload the page')
       } else if (msg.type === 'tabs') {
         setStatus('No tab selected — go back and choose a tab')
+      } else if (msg.type === 'pipeline-run') {
+        pipelineBrief = msg.run
+        updatePipelineButton()
       } else if (msg.type === 'tab-taken') {
         setStatus('Connected: ' + (msg.toolName || msg.tabId))
         startUsagePoll()
