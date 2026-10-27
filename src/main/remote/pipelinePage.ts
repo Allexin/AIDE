@@ -1,5 +1,5 @@
 import { HISTORY_RENDER_SCRIPT, HISTORY_STYLE } from './historyRender'
-import { safeJsJson } from './pageUtil'
+import { escapeHtml, safeJsJson } from './pageUtil'
 
 /**
  * The remote pipeline page: the project's run as `RemoteRunView` draws it (run
@@ -17,7 +17,7 @@ export function makePipelineHtml(port: number, projectId: string, projectName: s
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>AIDE Pipeline</title>
+  <title>${escapeHtml(projectName)} · Pipeline</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { min-height: 100%; background: #1e1e1e; color: #cccccc; font: 13px/1.45 system-ui, sans-serif; }

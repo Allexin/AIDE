@@ -9,7 +9,7 @@ import { app, BrowserWindow } from 'electron'
 import QRCode from 'qrcode'
 import type { PtyManager } from '../pty/ptyManager'
 import { loadOrGeneratePin, regeneratePin, validatePin } from './auth'
-import { PtyBridge } from './ptyBridge'
+import { PtyBridge, type RemoteTab } from './ptyBridge'
 import { getAppConfig, type RemoteButtonRow } from '../config/appConfig'
 import { getActivatedTools } from '../config/appState'
 import { readProjectSettings } from '../config/projectConfig'
@@ -27,7 +27,7 @@ import type { AnswerAction, RunControl } from '../pipeline/viewService'
 import { buildRemoteRunView } from './pipelineRunView'
 import { makePipelineHtml } from './pipelinePage'
 import { HISTORY_RENDER_SCRIPT, HISTORY_STYLE } from './historyRender'
-import { safeJsJson } from './pageUtil'
+import { escapeHtml, safeJsJson } from './pageUtil'
 
 const AGGREGATOR_PORT = 3847
 // Retry pacing while another process holds the aggregator port: doubles per attempt.
@@ -275,7 +275,7 @@ export class RemoteServer {
     return win && !win.isDestroyed() ? win : null
   }
 
-  private getProjectTabs(projectPath: string): Array<{ tabId: string; sessionId: string | null; toolId: string; toolName: string; locked: boolean }> {
+  private getProjectTabs(projectPath: string): RemoteTab[] {
     const projectWin = this.findProjectWindow(projectPath)
     return projectWin ? this.bridge.getTabsForWindow(projectWin) : []
   }
@@ -1012,7 +1012,8 @@ export class RemoteServer {
       const port = Number(urlObj.searchParams.get('port'))
       const projectId = urlObj.searchParams.get('project') ?? ''
       const tabId = urlObj.searchParams.get('tab') ?? ''
-      if (!port || !this.registry.has(this.registryKey(port, projectId))) {
+      const entry = port ? this.registry.get(this.registryKey(port, projectId)) : undefined
+      if (!entry) {
         res.writeHead(404); res.end('Project not found'); return
       }
       if (!tabId) {
@@ -1021,7 +1022,7 @@ export class RemoteServer {
         return
       }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-      res.end(makeAggTerminalHtml(port, projectId))
+      res.end(makeAggTerminalHtml(port, projectId, entry.projectName))
       return
     }
 
@@ -1443,7 +1444,7 @@ export class RemoteServer {
             const ok = this.bridge.takeTab(ws, tabId, cols, rows)
             if (ok) {
               activeTabId = tabId
-              send({ type: 'tab-taken', tabId, toolName: tab?.toolName ?? '', sessionId: tab?.sessionId ?? null })
+              send({ type: 'tab-taken', tabId, toolName: tab?.toolName ?? '', sessionId: tab?.sessionId ?? null, title: tab?.title ?? '' })
             } else {
               send({ type: 'error', message: 'Tab unavailable' })
             }
@@ -2200,7 +2201,7 @@ function makeTabPickerHtml(port: number, projectId: string, projectName: string)
 
 // Terminal page served by the aggregator. All traffic goes through port 3847 —
 // the client never needs direct access to the instance's random port.
-function makeAggTerminalHtml(port: number, projectId: string): string {
+function makeAggTerminalHtml(port: number, projectId: string, projectName: string): string {
   const remote = getAppConfig().remote
   const btnConfigJson = safeJsJson({
     size: remote.buttonSize ?? 'medium',
@@ -2212,7 +2213,7 @@ function makeAggTerminalHtml(port: number, projectId: string): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>AIDE Terminal</title>
+  <title>${escapeHtml(projectName)}</title>
   <link rel="stylesheet" href="/static/xterm.css">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -2393,6 +2394,10 @@ ${HISTORY_STYLE}
     var historyNewCount = 0
     var historyRequest = 0
     var pipelineBrief = null
+    // Status line once the tab is taken: its CLI and its title (the terminal title the CLI sets).
+    var tabToolName = ''
+    var tabTitle = ''
+    var tabTaken = false
     var treeCache = {}
     var expandedDirs = new Set([''])
     var selectedFile = null
@@ -3342,6 +3347,7 @@ ${HISTORY_RENDER_SCRIPT}
       ws.onmessage = handleWsMessage
       ws.onclose = function() {
         wsReady = false
+        tabTaken = false
         stopUsagePoll()
         updateInputState()
         if (shouldReconnect) scheduleReconnect()
@@ -3411,7 +3417,10 @@ ${HISTORY_RENDER_SCRIPT}
         pipelineBrief = msg.run
         updatePipelineButton()
       } else if (msg.type === 'tab-taken') {
-        setStatus('Connected: ' + (msg.toolName || msg.tabId))
+        tabToolName = msg.toolName || msg.tabId
+        tabTitle = msg.title || ''
+        tabTaken = true
+        showTabStatus()
         startUsagePoll()
       } else if (msg.type === 'output') {
         term.write(msg.data)
@@ -3463,6 +3472,13 @@ ${HISTORY_RENDER_SCRIPT}
     }
 
     term.onData(function(data) { sk(data) })
+    term.onTitleChange(function(title) {
+      tabTitle = String(title || '').trim()
+      if (tabTaken && isConnected()) showTabStatus()
+    })
+    function showTabStatus() {
+      setStatus(tabTitle ? tabToolName + ' · ' + tabTitle : 'Connected: ' + tabToolName)
+    }
 
     function doResize() {
       fitAddon.fit()

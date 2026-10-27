@@ -5,3 +5,8 @@ export function safeJsJson(obj: unknown): string {
     .split(del).join('\\u007f')
     .replace(/<\/script>/gi, '<\\/script>')
 }
+
+/** Text for HTML outside a <script>. */
+export function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string)
+}

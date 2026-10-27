@@ -239,7 +239,8 @@ export class PtyManager {
       tabId: t.tabId,
       sessionId: t.sessionId,
       toolId: t.toolId,
-      toolName: t.toolName
+      toolName: t.toolName,
+      title: this.titleCache.get(t.tabId)
     }))
   }
 

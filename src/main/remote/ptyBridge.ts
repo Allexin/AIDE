@@ -9,6 +9,8 @@ interface WsClient {
 
 const WS_OPEN = 1
 
+export type RemoteTab = SessionTabInfo & { locked: boolean }
+
 export class PtyBridge {
   private locks = new Map<string, WsClient>()
   private unsubs = new Map<string, () => void>()
@@ -86,8 +88,8 @@ export class PtyBridge {
     this.findManager(tabId)?.resize(tabId, cols, rows)
   }
 
-  getAllTabs(): Array<{ tabId: string; sessionId: string | null; toolId: string; toolName: string; locked: boolean }> {
-    const result: Array<{ tabId: string; sessionId: string | null; toolId: string; toolName: string; locked: boolean }> = []
+  getAllTabs(): RemoteTab[] {
+    const result: RemoteTab[] = []
     for (const mgr of this.ptyRegistry.values()) {
       for (const tab of mgr.getTabs()) {
         result.push({ ...tab, locked: this.locks.has(tab.tabId) })
@@ -96,7 +98,7 @@ export class PtyBridge {
     return result
   }
 
-  getTabsForWindow(win: BrowserWindow): Array<{ tabId: string; sessionId: string | null; toolId: string; toolName: string; locked: boolean }> {
+  getTabsForWindow(win: BrowserWindow): RemoteTab[] {
     const mgr = this.ptyRegistry.get(win)
     if (!mgr) return []
     return mgr.getTabs().map((tab) => ({ ...tab, locked: this.locks.has(tab.tabId) }))
