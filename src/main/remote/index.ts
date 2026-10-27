@@ -3260,7 +3260,9 @@ ${HISTORY_RENDER_SCRIPT}
       pipeline.id = 'pipeline-btn'
       pipeline.className = 'cbtn'
       pipeline.addEventListener('click', function() {
-        location.href = '/pipeline?port=' + port + '&project=' + encodeURIComponent(projectId) + '&tab=' + encodeURIComponent(activeTabId || '')
+        var url = '/pipeline?port=' + port + '&project=' + encodeURIComponent(projectId) + '&tab=' + encodeURIComponent(activeTabId || '')
+        leaveTab()
+        location.href = url
       })
       ctrlBar.appendChild(pipeline)
       updatePipelineButton()
@@ -3351,6 +3353,24 @@ ${HISTORY_RENDER_SCRIPT}
         setStatus('Connection error — reconnecting...')
       }
     }
+
+    // Leaving the page gives the tab back at once: a page that is navigated away from does not
+    // always close its socket right away, and until it does the tab stays taken for the next page.
+    function leaveTab() {
+      shouldReconnect = false
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      if (!ws || ws.readyState !== WebSocket.OPEN) return
+      if (wsReady && activeTabId) ws.send(JSON.stringify({ type: 'release-tab', tabId: activeTabId }))
+      ws.close()
+    }
+    window.addEventListener('pagehide', leaveTab)
+    // Back to a page kept in the back/forward cache: its socket was closed when it was left.
+    window.addEventListener('pageshow', function(e) {
+      if (!e.persisted) return
+      shouldReconnect = true
+      reconnectDelay = 1000
+      connectWs()
+    })
 
     function scheduleReconnect() {
       if (reconnectTimer) return

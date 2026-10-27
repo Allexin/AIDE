@@ -27,7 +27,9 @@ export class PtyBridge {
 
   takeTab(client: WsClient, tabId: string, cols: number, rows: number): boolean {
     const existing = this.locks.get(tabId)
-    if (existing && existing !== client) return false
+    // A holder whose socket is closing (the page that was just left) gives the tab up.
+    if (existing && existing !== client && existing.readyState === WS_OPEN) return false
+    if (existing && existing !== client) this.releaseAll(existing)
 
     const mgr = this.findManager(tabId)
     if (!mgr) return false
