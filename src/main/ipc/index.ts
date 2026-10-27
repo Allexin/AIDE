@@ -94,7 +94,7 @@ function runGitSubcommand(
   })
 }
 
-export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remoteServer?: { forceReleaseTab: (tabId: string) => void; refreshProjects?: () => void }): void {
+export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remoteServer?: { forceReleaseTab: (tabId: string) => void; isTabLocked?: (tabId: string) => boolean; refreshProjects?: () => void }): void {
   const projectOf = (sender: Electron.WebContents): string | undefined => {
     const senderWin = BrowserWindow.fromWebContents(sender)
     return senderWin ? [...openProjects].find(([, win]) => win === senderWin)?.[0] : undefined
@@ -415,6 +415,8 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   ipcMain.on('terminal:resize', (event, tabId: string, cols: number, rows: number) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender)
     if (!senderWin) return
+    // A tab taken by a remote client keeps the client's size; the desktop fits it again when the tab is given back.
+    if (remoteServer?.isTabLocked?.(tabId)) return
     ptyRegistry.get(senderWin)?.resize(tabId, cols, rows)
   })
 

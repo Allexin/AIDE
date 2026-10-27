@@ -209,6 +209,11 @@ export class RemoteServer {
     this.bridge.forceRelease(tabId)
   }
 
+  /** Whether a remote client has taken the tab: its size is the client's then. */
+  isTabLocked(tabId: string): boolean {
+    return this.bridge.isLocked(tabId)
+  }
+
   refreshProjects(): void {
     if (this.ownPort === 0) return
     if (this.aggregatorServer) {

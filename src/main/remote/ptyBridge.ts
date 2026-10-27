@@ -70,6 +70,10 @@ export class PtyBridge {
     this.clientTabs.delete(client)
   }
 
+  isLocked(tabId: string): boolean {
+    return this.locks.has(tabId)
+  }
+
   forceRelease(tabId: string): void {
     const client = this.locks.get(tabId)
     if (!client) return

@@ -457,6 +457,8 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 
     const removeRemoteLock = window.editorApi.onRemoteTabLockChanged((tabId, locked) => {
       setRemoteLocked(tabId, locked)
+      // While taken, the PTY had the remote client's size: give the tab the desktop's size back.
+      if (!locked && useSessionStore.getState().activeTabId === tabId) fitFunctions.current.get(tabId)?.fit()
     })
 
     return () => {
