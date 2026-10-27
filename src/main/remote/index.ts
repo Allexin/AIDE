@@ -2018,15 +2018,17 @@ function makeTabPickerHtml(port: number, projectId: string, projectName: string)
     function renderTabs(tabs) {
       var list = document.getElementById('tab-list')
       var visible = tabs.filter(function(t) {
-        return matchesFilter([t.toolName, t.toolId, t.tabId, t.sessionId])
+        return matchesFilter([t.title, t.toolName, t.toolId, t.tabId, t.sessionId])
       })
       if (!visible.length) {
         list.innerHTML = '<div class="empty">' + (filterText ? 'No matching active tabs.' : 'No tabs yet. Start a new session.') + '</div>'
         return
       }
       list.innerHTML = visible.map(function(t) {
-        var title = t.toolName || t.toolId || t.tabId
-        var sub = t.sessionId ? ('Session: ' + t.sessionId) : 'No session ID yet'
+        // The tab's terminal title, as on the desktop tab; the CLI name until the CLI sets one.
+        var tool = t.toolName || t.toolId || t.tabId
+        var title = t.title || tool
+        var sub = (t.title ? tool + ' · ' : '') + (t.sessionId ? ('Session: ' + t.sessionId) : 'No session ID yet')
         var action = t.locked
           ? '<span class="open disabled">In use</span>'
           : '<a class="open" href="' + terminalUrl(t.tabId) + '">Open</a>'
