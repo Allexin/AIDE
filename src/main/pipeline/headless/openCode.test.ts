@@ -131,6 +131,21 @@ describe('opencode headless adapter', () => {
     expect(broken.error?.message).toMatch(/not valid JSON \(.*position/)
   })
 
+  it('keeps an answer the result tool accepted before the connection was lost', async () => {
+    const tool = (answer: unknown): ResultTool => ({ serverName: 'aide_step', url: 'http://127.0.0.1:1/step', headers: {}, submitted: () => answer })
+    const reset = 'Connection lost while reading the response: ECONNRESET: The socket connection was closed unexpectedly.'
+    const event = line({ type: 'error', sessionID: SID, error: { type: 'unknown', message: reset } })
+    const late = await openCodeHeadless.run(options([event, { exit: 1 }], { outputSchema: { type: 'object' }, resultTool: tool({ verdict: 'accept' }) })).result
+    expect(late).toMatchObject({ ok: true, error: null, structured: { verdict: 'accept' } })
+    expect(late.warnings).toContain(`after the answer was submitted: ${reset}`)
+    const crashed = await openCodeHeadless.run(options([{ err: reset }, { exit: 1 }], { outputSchema: { type: 'object' }, resultTool: tool({ verdict: 'accept' }) })).result
+    expect(crashed).toMatchObject({ ok: true, structured: { verdict: 'accept' } })
+    const unanswered = await openCodeHeadless.run(options([event, { exit: 1 }], { outputSchema: { type: 'object' }, resultTool: tool(undefined) })).result
+    expect(unanswered.error).toMatchObject({ code: 'unavailable', message: reset })
+    const limited = await openCodeHeadless.run(options([line({ type: 'error', sessionID: SID, error: { type: 'provider.quota', message: 'quota exceeded' } })], { outputSchema: { type: 'object' }, resultTool: tool({ verdict: 'accept' }) })).result
+    expect(limited.error?.code).toBe('limit')
+  })
+
   it('prepends role instructions and appends the output schema', () => {
     const prompt = promptWithRoleAndSchema({ ...options([]), systemAppend: 'You are a reviewer.', outputSchema: { type: 'object' } })
     expect(prompt.startsWith('You are a reviewer.\n\n---\n\ndo the thing\n\n---\n\nEnd your turn')).toBe(true)

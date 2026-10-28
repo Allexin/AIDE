@@ -140,7 +140,11 @@ Verified live against 2.1.4 (`AIDE_LIVE_OPENCODE=1 npx vitest run opencode.live`
 - Events: `text` parts belong to a `messageID`; the final answer is the text of the
   last message. `tool_use` carries the finished call (`part.tool`, `state.input`,
   `state.output` or `state.error`). `error` (`error.type`, `error.message`) comes
-  with exit code 1.
+  with exit code 1. It can come after the answer: a connection lost while the
+  turn ends (`Connection lost while reading the response: ECONNRESET …`). An
+  answer the result tool already accepted stands and the error becomes a warning;
+  a usage limit still fails the step. The stream has no turn-completed event, so
+  without a result tool such an error fails the step.
 - The stream ends before the last step's `step_finish`, so its cost is missing from
   the stream; the adapter reads the run's cost from the database
   (`session_message.data.cost` of the assistant turns of the run).

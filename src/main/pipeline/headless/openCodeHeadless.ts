@@ -30,6 +30,9 @@ import type { HeadlessCapability, HeadlessResult, HeadlessRunOptions, HeadlessRu
  * - Every event carries `sessionID`; resume is `--session <id>`.
  * - The stream ends before the last step's cost; the run's cost is read from
  *   the database afterwards.
+ * - An error after the result tool accepted the answer (a connection lost while
+ *   the turn ends) is a warning: the answer stands. Without a result tool the
+ *   stream cannot tell a finished turn from a cut one, so the error fails.
  */
 
 export const READ_ONLY_AGENT = 'aide-read-only'
@@ -253,14 +256,19 @@ export const openCodeHeadless: HeadlessCapability = {
       if (limit) return { ...base, error: { code: 'limit', message: limit } }
       const exitError = processError(exit, 'OpenCode')
       if (exitError && !isClassifiedFailure(exitError)) return { ...base, error: exitError }
-      if (fatal) return { ...base, error: { code: classifyFailure(fatal), message: fatal } }
-      if (exitError) return { ...base, error: exitError }
+      const failure = fatal ? { code: classifyFailure(fatal), message: fatal } : exitError
+      const submitted = resultTool?.submitted()
+      if (failure) {
+        // An answer the result tool accepted is the step's answer: an error after it (a connection
+        // lost while OpenCode ends its turn) does not undo it. A usage limit still stops the step.
+        if (submitted === undefined || failure.code === 'limit') return { ...base, error: failure }
+        warnings.push(`after the answer was submitted: ${failure.message}`)
+      }
       // OpenCode silently answers with another model (its free one) when the requested one is unavailable.
       const expected = model ?? config.model
       const answered = sessionId && expected ? readOpenCodeRunModels(sessionId, startedAt) : []
       const other = answered.filter((m) => m !== baseModel(expected ?? ''))
       if (other.length > 0) return { ...base, error: { code: 'failed', message: `OpenCode answered with ${other.join(', ')} instead of ${baseModel(expected ?? '')}; is the model available to the configured provider?` } }
-      const submitted = resultTool?.submitted()
       if (submitted !== undefined) return { ...base, ok: true, structured: submitted }
       if (!finalText) return { ...base, error: { code: 'no_output', message: resultTool ? 'OpenCode neither submitted an answer nor wrote a final message' : 'OpenCode returned no final message' } }
       if (options.outputSchema) {
