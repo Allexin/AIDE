@@ -12,7 +12,7 @@ import { sharedPipelinesDir } from './engine/library'
 import { getProjectUserPath } from '../config/projectUserData'
 import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
 import { startHeadless } from './headless'
-import { AccountPool } from './accountPool'
+import { AccountPool, poolHandles } from './accountPool'
 import { EventRelay } from './eventRelay'
 import { failedRun } from './headless/common'
 import { killAllProcessTreesSync, runShellCommand } from './processRunner'
@@ -48,7 +48,8 @@ export const pipelineManager = new PipelineManager({
     },
     runCheck: ({ commandLine, cwd, timeoutMs, label, onOutput }) =>
       runShellCommand({ commandLine, cwd, timeoutMs, label, onStdoutLine: (line) => onOutput(line + '\n'), onStderr: onOutput }),
-    git: { workingDiff, stagedDiff, status, headSha, commitIndex }
+    git: { workingDiff, stagedDiff, status, headSha, commitIndex },
+    accountPool: poolHandles
   })
 })
 

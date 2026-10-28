@@ -15,8 +15,9 @@ switched while no account is checked.
   unchecked account to a checked one, and never back to an unchecked one.
 - With one checked account that is also the active one there is nothing to
   switch to; the Account Manager says so under the list.
-- The orchestrator is not told about accounts: the setup is the user's, in the
-  Account Manager.
+- The orchestrator is not told about accounts or switches: the setup is the
+  user's, in the Account Manager, and a switch only goes on with the run. It is
+  told when the pool cannot go on.
 
 ## What happens on a limit
 
@@ -25,7 +26,12 @@ a limit a step has just hit: after an AIDE restart the run waiting for a limit r
 itself at its time, and hitting the limit again then triggers the pool.
 The engine stops the run with `run_stopped` (`reason: "usage_limit"`, `cli`,
 `visitStartedAt`, `resumeAt` when the CLI said when the limit resets) and keeps the
-step's session. The pool then, one CLI at a time:
+step's session. When the CLI has checked accounts the event is `quiet` (engine dep
+`accountPool` → `poolHandles`): it stays in the run's event log but does not wake
+the orchestrator's `pipeline_wait` or event stream, nor is it typed into its tab.
+The step's visit continues as the same record after the switch, and the limit
+error is cleared from it once the step gets through. The pool then, one CLI at a
+time:
 
 1. Skips the switch when AIDE changed this CLI's account after the step started —
    the limit belongs to the previous account — and only resumes the run.
@@ -34,18 +40,18 @@ step's session. The pool then, one CLI at a time:
 3. Loads the next checked account that is not exhausted. The current credentials
    are saved into the active account's record first, so a rotated token is kept.
 4. Restarts the CLI's tabs in every window (the credentials are the CLI's, shared by
-   every session on the machine). The tab of an orchestrator connected to the
-   project gets a message once its CLI is ready: which account was switched to
-   which, that the restart cut off its `pipeline_wait`, and the `since` to continue
-   with.
+   every session on the machine). An orchestrator in one of them is not told: its
+   cut-off `pipeline_wait` is replaced by the event messages AIDE types into an
+   idle tab that is not waiting (see `eventRelay.ts`).
 5. Records `account_switched` in the run (report, not the orchestrator feed), logs
    to the Log Panel (`Accounts`) and the diagnostics trail, and resumes the run.
 
 When every checked account is exhausted, the account that resets soonest — among
 the checked ones and the active one — is loaded (if it is not already active), and
 the run's automatic resume is moved to that time (`run_stopped` again, with
-`rescheduled: true`). When no exhausted account reports a reset time, the run stays
-stopped until `pipeline_resume`.
+`rescheduled: true`, quiet as well). When no exhausted account reports a reset time,
+or an account cannot be loaded, the run stays stopped until `pipeline_resume`, and
+the pool announces a (not quiet) `run_stopped` so the orchestrator learns it.
 
 Loading an account by hand (Account Manager or the Load Account menu) clears its
 exhausted mark.

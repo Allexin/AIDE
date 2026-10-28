@@ -4,6 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { PipelineRun, UNAVAILABLE_RETRY_MS, type AgentRequest, type EngineDeps } from './runner'
 import { RunStore } from './runStore'
+import { isSignificant } from '../events'
 import { validateMachine } from './validate'
 import type { MachineDefinition, RunState, Step } from './types'
 import type { HeadlessResult } from '../headless/types'
@@ -56,6 +57,8 @@ interface Script {
   agent: (request: AgentRequest, call: number) => (Partial<HeadlessResult> & { structured?: unknown }) | 'hang'
   check?: (call: number) => { exitCode: number; output: string } | 'hang'
   status?: () => FileChange[]
+  /** The account pool handles this CLI's usage limits. */
+  pool?: boolean
 }
 
 function harness(script: Script, machine: MachineDefinition = MACHINE, params: Record<string, unknown> = { taskSpec: 'Add feature X' }) {
@@ -103,6 +106,7 @@ function harness(script: Script, machine: MachineDefinition = MACHINE, params: R
     },
     readRole: (_dir, rolePath) => `ROLE ${rolePath}`,
     emit: (_runId, type, data) => { events.push({ type, data }) },
+    accountPool: () => script.pool === true,
     // Records the output with what the check log held when it was announced.
     onCheckOutput: (runId, node, visit, text) => { checkOutput.push(`${node}#${visit} ${text} (log: ${store.readCheckLog(runId, node, visit)})`) }
   }
@@ -420,7 +424,26 @@ describe('PipelineRun', () => {
     expect(h.state().limitResumeAt).toBeNull()
     const implement = h.requests.filter((r) => r.label.endsWith(':implement'))
     expect(implement[1].resumeSessionId).toBe('session-3')
-    expect(implement[1].prompt).toContain('was interrupted')
+    expect(implement[1].prompt).toContain("ended with an error (claude-code: You've hit your usage limit")
+    // The limit has passed: one record for the visit, without the error.
+    const visits = h.state().history.filter((v) => v.node === 'implement')
+    expect(visits).toHaveLength(1)
+    expect(visits[0]).toMatchObject({ visit: 1, outcome: 'ok', error: null })
+    expect(isSignificant(h.events.find((e) => e.type === 'run_stopped')!)).toBe(true)
+  })
+
+  it('does not wake the orchestrator for a usage limit the account pool switches away from', async () => {
+    let first = true
+    const h = harness({ pool: true, agent: (req) => {
+      if (req.label.endsWith(':implement') && first) { first = false; return { ok: false, error: { code: 'limit', message: 'usage limit reached' } } }
+      return happy(req)
+    } })
+    await h.run.run()
+    const stopped = h.events.find((e) => e.type === 'run_stopped')!
+    expect(stopped.data).toMatchObject({ reason: 'usage_limit', cli: 'claude-code', quiet: true })
+    expect(isSignificant(stopped)).toBe(false)
+    expect(h.run.setLimitResume(new Date(Date.now() + 3_600_000).toISOString(), 'every checked account hit its limit')).toBe(true)
+    expect(isSignificant(h.events.at(-1)!)).toBe(false)
   })
 
   it('names the limited CLI and the visit start, and lets the account pool move the resume time', async () => {
@@ -777,6 +800,11 @@ describe('PipelineRun with an unavailable CLI', () => {
     await vi.advanceTimersByTimeAsync(0)
     await resumed
     expect(h.state().result).toBe('success')
+    // Stopped and paused while waiting: still one record, and the errors that passed are gone.
+    const visits = h.state().history.filter((v) => v.node === 'implement')
+    expect(visits).toHaveLength(1)
+    expect(visits[0]).toMatchObject({ visit: 1, outcome: 'ok', error: null, retries: 2 })
+    expect(visits[0].pendingRetry).toBeUndefined()
   })
 })
 

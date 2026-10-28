@@ -24,8 +24,10 @@ export interface NodeVisit {
   sessionId: string | null
   costUsd: number | null
   error: string | null
-  /** Attempts the visit made while its CLI was unavailable (the error is the last one). */
+  /** Attempts the visit made while its CLI was unavailable (the error is the last one, until an attempt gets through). */
   retries?: number
+  /** Cut off by an unavailable CLI or a usage limit: the next attempt continues this record instead of adding one. */
+  pendingRetry?: boolean
 }
 
 /** A step's CLI is temporarily unavailable; the engine retries it every minute for a while. */

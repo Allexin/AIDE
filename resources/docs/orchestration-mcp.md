@@ -139,7 +139,7 @@ your context:
 | Event | What to do |
 |---|---|
 | `escalation` | Decide: answer with `pipeline_answer`, or ask the user |
-| `run_paused`, `run_stopped` | The run changed hands (possibly the user paused or stopped it in AIDE, or a gate was rejected outside loops); resume when appropriate. `reason: "usage_limit"`: a CLI hit its usage limit — the run resumes by itself at `resumeAt` (when the CLI said when) in the same session; otherwise resume once it has reset. AIDE may also switch the CLI to another account the user set up and resume the run at once (restarting that CLI's tabs — yours included, with a message saying how to continue): wait for the next event before resuming it yourself |
+| `run_paused`, `run_stopped` | The run changed hands (possibly the user paused or stopped it in AIDE, or a gate was rejected outside loops); resume when appropriate. `reason: "usage_limit"`: a CLI hit its usage limit — the run resumes by itself at `resumeAt` (when the CLI said when) in the same session; otherwise resume once it has reset. When the user set up several accounts of that CLI, AIDE switches to another one and goes on without telling you (it restarts that CLI's tabs, yours included: wait again afterwards); you get `run_stopped` only when none of them can go on |
 | `run_finished`, `run_failed` | The event's `report` has the result; update the plan (`pipeline_report detail: true` only when you need every visit) |
 
 Step progress (`node_started`, `node_finished`, `check_failed`, `loop_repeated`,

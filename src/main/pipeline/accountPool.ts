@@ -4,15 +4,15 @@ import { ptyRegistry } from '../pty/registry'
 import { getActiveAccount, listAccountInfos, markAccountExhausted, type CliAccountInfo } from '../config/accountStorage'
 import { lastAccountSwitch, loadSavedAccount } from '../accounts/accountSwitch'
 import { logEvent } from '../diagnostics'
-import { orchestrators } from './orchestrators'
 import type { PipelineManager } from './manager'
 
 /**
  * Account pool for pipelines: when a step stops on a CLI usage limit and the
  * user checked accounts of that CLI in the Account Manager, AIDE marks the
  * account that hit the limit as exhausted, loads the next checked one, restarts
- * the CLI's tabs so they pick it up (telling an orchestrator in one of them what
- * happened), and resumes the run. When every checked account is exhausted, the
+ * the CLI's tabs so they pick it up, and resumes the run. The orchestrator is not
+ * told: the limit stop is quiet (`poolHandles`), the switch only goes on with the
+ * run. It is told when the pool cannot go on. When every checked account is exhausted, the
  * one that resets soonest is loaded and the run resumes by itself at that time.
  *
  * Only pipeline runs trigger a switch; the tabs are restarted because the
@@ -48,16 +48,11 @@ export function choosePoolAccount(accounts: CliAccountInfo[], activeId: string |
   return { load: soonest.id === activeId ? null : soonest, waitUntil: soonest.exhaustedUntil }
 }
 
-export function orchestratorResumeMessage(input: {
-  cli: string; from: string; to: string; runId: string; node: string | null; since: number; resumesAt: string | null
-}): string {
-  const where = input.node ? ` at step ${input.node}` : ''
-  const run = input.resumesAt
-    ? `Every account in the pool has hit its limit, so run ${input.runId} stays stopped${where} and resumes by itself at ${input.resumesAt} on ${input.to}.`
-    : `Run ${input.runId} has been resumed${where} on ${input.to}.`
-  return `AIDE switched ${input.cli} from account ${input.from} to ${input.to} because ${input.from} hit its usage limit. ` +
-    `Your terminal tab was restarted to pick up the new account, which cut off your pipeline_wait call. ${run} ` +
-    `Continue orchestrating: call pipeline_wait for run ${input.runId} with since=${input.since}.`
+/** Whether AIDE switches this CLI to another account when a step hits its usage limit. */
+export function poolHandles(cli: string): boolean {
+  const tool = getToolById(cli)
+  if (!tool?.hasAccountSystem() || !tool.importCredentials) return false
+  return listAccountInfos(cli).some((account) => account.inPool)
 }
 
 export class AccountPool {
@@ -73,7 +68,7 @@ export class AccountPool {
       if (type !== 'run_stopped' || data.reason !== 'usage_limit' || data.rescheduled || typeof data.cli !== 'string' || typeof data.visitStartedAt !== 'string') return
       const cli = data.cli
       const previous = this.queue.get(cli) ?? Promise.resolve()
-      const next = previous.then(() => this.onLimit(projectPath, runId, cli, data, id)).catch((err) => {
+      const next = previous.then(() => this.onLimit(projectPath, runId, cli, data)).catch((err) => {
         logEvent('account-pool-failed', { cli, runId, message: err instanceof Error ? err.message : String(err) }, 'warn')
       })
       this.queue.set(cli, next)
@@ -82,10 +77,9 @@ export class AccountPool {
     return () => { this.manager.off('event', onEvent) }
   }
 
-  private async onLimit(projectPath: string, runId: string, cli: string, data: Record<string, unknown>, eventId: number): Promise<void> {
+  private async onLimit(projectPath: string, runId: string, cli: string, data: Record<string, unknown>): Promise<void> {
     const tool = getToolById(cli)
-    if (!tool?.hasAccountSystem() || !tool.importCredentials) return
-    if (!listAccountInfos(cli).some((account) => account.inPool)) return
+    if (!tool || !poolHandles(cli)) return
 
     const node = typeof data.node === 'string' ? data.node : typeof data.next === 'string' ? data.next : null
     const startedAt = typeof data.visitStartedAt === 'string' ? Date.parse(data.visitStartedAt) : NaN
@@ -106,20 +100,21 @@ export class AccountPool {
     const fromName = accounts.find((account) => account.id === activeId)?.name ?? 'the current account'
     if (!choice) {
       cliLog(LOG_CH, `${tool.name}: every checked account has hit its limit and none reports when it resets; run ${runId} stays stopped.`)
+      this.stuck(projectPath, runId, node, `every checked ${tool.name} account has hit its usage limit and none says when it resets; the run stays stopped — resume with pipeline_resume once one has reset`)
       return
     }
 
     let toName = fromName
-    let tabsRestarted: Array<{ oldTabId: string; newTabId: string }> = []
     if (choice.load) {
       if (!(await loadSavedAccount(cli, choice.load.id))) {
         cliLog(LOG_CH, `${tool.name}: could not load account ${choice.load.name}; run ${runId} stays stopped.`)
+        this.stuck(projectPath, runId, node, `${tool.name} hit its usage limit and AIDE could not switch to the account ${choice.load.name}; the run stays stopped — resume with pipeline_resume`)
         return
       }
       toName = choice.load.name
       for (const win of ptyRegistry.keys()) if (!win.isDestroyed()) win.webContents.send('accounts:changed')
       if (tool.accountSwitchNeedsRestart?.() !== false) {
-        for (const mgr of ptyRegistry.values()) tabsRestarted = tabsRestarted.concat(await mgr.restartToolTabs(cli))
+        for (const mgr of ptyRegistry.values()) await mgr.restartToolTabs(cli)
       }
     }
 
@@ -138,10 +133,11 @@ export class AccountPool {
       cliLog(LOG_CH, `${tool.name}: ${fromName} hit its usage limit — switched to ${toName} and resumed run ${runId}.`)
       this.resume(projectPath, runId)
     }
+  }
 
-    await this.notifyOrchestrators(projectPath, tabsRestarted, {
-      cli: tool.name, from: fromName, to: toName, runId, node, since: eventId, resumesAt: choice.waitUntil
-    })
+  /** The pool cannot go on with the run: now the orchestrator has to know (the limit stop was quiet). */
+  private stuck(projectPath: string, runId: string, node: string | null, summary: string): void {
+    this.manager.announce(projectPath, 'run_stopped', { next: node, reason: 'usage_limit', summary }, runId)
   }
 
   private resume(projectPath: string, runId: string): void {
@@ -149,24 +145,6 @@ export class AccountPool {
       this.manager.resume(projectPath, runId)
     } catch (err) {
       cliLog(LOG_CH, `Run ${runId} could not be resumed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-
-  /** An orchestrator whose tab was restarted lost its pipeline_wait; tell it what happened and how to continue. */
-  private async notifyOrchestrators(
-    projectPath: string,
-    restarted: Array<{ oldTabId: string; newTabId: string }>,
-    message: Parameters<typeof orchestratorResumeMessage>[0]
-  ): Promise<void> {
-    const orchestratorTabs = new Set(orchestrators.forProject(projectPath).map((c) => c.tabId).filter((id): id is string => !!id))
-    const text = orchestratorResumeMessage(message)
-    for (const { oldTabId, newTabId } of restarted) {
-      if (!orchestratorTabs.has(oldTabId)) continue
-      for (const mgr of ptyRegistry.values()) {
-        if (mgr.getTabs().some((tab) => tab.tabId === newTabId)) {
-          if (!(await mgr.submitWhenReady(newTabId, text))) cliLog(LOG_CH, `The orchestrator tab ${newTabId} did not start; tell it to continue with pipeline_wait.`)
-        }
-      }
     }
   }
 }

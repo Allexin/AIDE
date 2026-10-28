@@ -1,6 +1,6 @@
 import type { ToolDefinition, ToolResult } from './protocol'
 import { orchestrators } from '../orchestrators'
-import { clip, pipelineEvents, SIGNIFICANT_EVENTS, type PipelineEvent } from '../events'
+import { clip, isSignificant, pipelineEvents, type PipelineEvent } from '../events'
 import type { PipelineManager } from '../manager'
 import { MACHINE_FILE_SCHEMA } from '../engine/machineSchema'
 import { compactReport } from '../engine/reportView'
@@ -43,7 +43,7 @@ function eventDeliveryText(launcherPath: string): string {
     '1. Stay in one turn and block: pass `wait` to pipeline_start / pipeline_answer / pipeline_resume (they act, then return the next event), or call pipeline_wait. The event comes back as the call result — no output files, no extra turns. When the user types in your terminal, the wait returns early with type "user_input", so their message reaches you right away; handle it, then wait again.',
     `2. If your client cannot block on a tool call for long: a background command or monitor — "${launcherPath}" events --run <runId> --since <lastEventId> (one JSON line per event that needs you) or "${launcherPath}" wait --run <runId> --since <lastEventId> (prints the next one and exits). Each wake-up costs extra calls.`,
     '3. Last resort: poll pipeline_status.',
-    'Events that need you: escalation (a decision; answer with pipeline_answer), run_paused / run_stopped (the run changed hands, possibly by the user or an AIDE restart; continue with pipeline_resume — reason "usage_limit" means a CLI hit its usage limit: the run resumes by itself at resumeAt when the message said when, keeping the step\'s session, and AIDE may switch the CLI to another account and resume it at once — wait for the next event before resuming it yourself), run_finished / run_failed (the event carries the compact report; read all of it — when you wait in code, return the report whole rather than a few fields). Step progress is not sent, nor are retries of a CLI that is temporarily unavailable (model at capacity, overloaded, network): AIDE retries the step every minute and sends an engine escalation only after 20 minutes.',
+    'Events that need you: escalation (a decision; answer with pipeline_answer), run_paused / run_stopped (the run changed hands, possibly by the user or an AIDE restart; continue with pipeline_resume — reason "usage_limit" means a CLI hit its usage limit: the run resumes by itself at resumeAt when the message said when, keeping the step\'s session; when AIDE switches the CLI to another account of the user\'s pool and goes on, you are not told), run_finished / run_failed (the event carries the compact report; read all of it — when you wait in code, return the report whole rather than a few fields). Step progress is not sent, nor are retries of a CLI that is temporarily unavailable (model at capacity, overloaded, network): AIDE retries the step every minute and sends an engine escalation only after 20 minutes.',
     'Pass the last event id you have seen as `since`; ids continue across AIDE restarts, so nothing is lost.'
   ].join('\n')
 }
@@ -88,12 +88,12 @@ type WaitResult = PipelineEvent | { type: 'user_input'; summary: string } | null
  */
 function waitForEvent(projectPath: string, runId: string | null, since: number, timeoutSec: number, tabId: string | null): Promise<WaitResult> {
   pipelineEvents.noteObserver(projectPath)
-  const pending = pipelineEvents.since(projectPath, runId, since).find((e) => SIGNIFICANT_EVENTS.has(e.type))
+  const pending = pipelineEvents.since(projectPath, runId, since).find(isSignificant)
   if (pending) return Promise.resolve(pending)
   return new Promise((resolve) => {
     const finish = (result: WaitResult): void => { clearTimeout(timer); unsubscribe(); orchestrators.off('input', onInput); resolve(result) }
     const unsubscribe = pipelineEvents.subscribe(projectPath, (event) => {
-      if ((runId === null || event.runId === runId) && SIGNIFICANT_EVENTS.has(event.type)) finish(event)
+      if ((runId === null || event.runId === runId) && isSignificant(event)) finish(event)
     })
     const onInput = (inputTab: string): void => { if (tabId && inputTab === tabId) finish({ type: 'user_input', summary: 'The user sent you a message; it follows this result. Wait again afterwards with the same since.' }) }
     orchestrators.on('input', onInput)

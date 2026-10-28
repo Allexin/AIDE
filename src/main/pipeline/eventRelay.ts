@@ -4,7 +4,7 @@ import { ptyRegistry } from '../pty/registry'
 import { tabActivity } from '../pty/tabActivity'
 import type { SettingsField } from '../pty/cliTools/types'
 import type { PtyManager } from '../pty/ptyManager'
-import { clip, pipelineEvents, SIGNIFICANT_EVENTS } from './events'
+import { clip, isSignificant, pipelineEvents } from './events'
 import { orchestrators } from './orchestrators'
 import type { PipelineManager } from './manager'
 
@@ -81,7 +81,7 @@ export class EventRelay {
 
   attach(): () => void {
     const onEvent = (projectPath: string, runId: string, type: string, data: Record<string, unknown>, id: number, observed: boolean): void => {
-      if (!SIGNIFICANT_EVENTS.has(type as never) || observed) return
+      if (!isSignificant({ type, data }) || observed) return
       this.queue(projectPath, { id, runId, type, data })
     }
     const onIdle = (tabId: string): void => { void this.flush(tabId) }

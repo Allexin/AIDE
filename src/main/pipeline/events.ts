@@ -40,6 +40,15 @@ export const SIGNIFICANT_EVENTS: ReadonlySet<PipelineEventType> = new Set([
   'escalation', 'run_paused', 'run_stopped', 'run_finished', 'run_failed'
 ])
 
+/**
+ * Whether the orchestrator gets the event. `quiet: true` in the data marks a
+ * significant type that AIDE handles by itself (a usage limit the account pool
+ * switches away from): it stays in the run's event log, but nobody is woken.
+ */
+export function isSignificant(event: { type: string; data: Record<string, unknown> }): boolean {
+  return SIGNIFICANT_EVENTS.has(event.type as PipelineEventType) && event.data.quiet !== true
+}
+
 /** Shorten text for the orchestrator's context; the full text stays available through pipeline_output. */
 export function clip(text: string, max: number, keep: 'head' | 'tail' = 'head'): string {
   if (text.length <= max) return text

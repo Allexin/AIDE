@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { choosePoolAccount, orchestratorResumeMessage } from './accountPool'
+import { choosePoolAccount } from './accountPool'
 import type { CliAccountInfo } from '../config/accountStorage'
 
 const account = (id: string, extra: Partial<CliAccountInfo> = {}): CliAccountInfo => ({
@@ -41,21 +41,5 @@ describe('choosePoolAccount', () => {
 
   it('gives up when no exhausted account says when it resets', () => {
     expect(choosePoolAccount([account('a', { exhausted: true }), account('b', { exhausted: true })], 'a')).toBeNull()
-  })
-})
-
-describe('orchestratorResumeMessage', () => {
-  const base = { cli: 'Claude Code', from: 'Work', to: 'Personal', runId: 'run-1', node: 'implement', since: 42 }
-
-  it('says what happened and how to continue', () => {
-    const text = orchestratorResumeMessage({ ...base, resumesAt: null })
-    expect(text).toContain('switched Claude Code from account Work to Personal')
-    expect(text).toContain('restarted')
-    expect(text).toContain('Run run-1 has been resumed at step implement')
-    expect(text).toContain('call pipeline_wait for run run-1 with since=42')
-  })
-
-  it('tells when the run resumes by itself if every account is exhausted', () => {
-    expect(orchestratorResumeMessage({ ...base, resumesAt: soon })).toContain(`resumes by itself at ${soon}`)
   })
 })

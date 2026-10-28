@@ -26,7 +26,7 @@ export interface ManagerEnvironment {
   libraryDirs(projectPath: string): Array<{ dir: string; source: 'shared' | 'personal' }>
   headlessClis(): string[]
   /** Engine dependencies except `emit`, `onStateChange`, `onTranscript`, `readRole`, which the manager supplies. */
-  deps(projectPath: string): Pick<EngineDeps, 'startAgent' | 'runCheck' | 'git'>
+  deps(projectPath: string): Pick<EngineDeps, 'startAgent' | 'runCheck' | 'git' | 'accountPool'>
 }
 
 export interface RunSnapshot {
@@ -162,7 +162,13 @@ export class PipelineManager extends EventEmitter {
       if (wasExecuting) {
         // The process that ran it is gone; an in-flight visit counts as interrupted.
         const last = state.history[state.history.length - 1]
-        if (last && !last.finishedAt) { last.outcome = 'interrupted'; last.finishedAt = new Date().toISOString(); state.visits[last.node] = Math.max(0, (state.visits[last.node] ?? 1) - 1) }
+        if (last && !last.finishedAt) {
+          last.outcome = 'interrupted'
+          last.finishedAt = new Date().toISOString()
+          state.visits[last.node] = Math.max(0, (state.visits[last.node] ?? 1) - 1)
+          // Retrying an unavailable CLI: the retry after the restart goes on with this record.
+          if (state.unavailable?.node === last.node) last.pendingRetry = true
+        }
         state.status = 'paused'
         store.saveState(state)
       }
@@ -181,7 +187,8 @@ export class PipelineManager extends EventEmitter {
       } else if (pending) deps.emit(runId, 'escalation', { ...compactEscalation(pending), summary: `AIDE restarted; still waiting for a decision at ${pending.node}` })
       else if (state.status === 'stopped' && state.limitResumeAt) {
         run.scheduleLimitResume()
-        deps.emit(runId, 'run_stopped', { next: state.current, reason: 'usage_limit', cli: state.limitCli ?? null, resumeAt: state.limitResumeAt, summary: `AIDE restarted; the run waits for a CLI usage limit and resumes by itself at ${state.limitResumeAt} (or pipeline_resume)` })
+        const quiet = !!state.limitCli && !!deps.accountPool?.(state.limitCli)
+        deps.emit(runId, 'run_stopped', { next: state.current, reason: 'usage_limit', cli: state.limitCli ?? null, resumeAt: state.limitResumeAt, ...(quiet ? { quiet } : {}), summary: `AIDE restarted; the run waits for a CLI usage limit and resumes by itself at ${state.limitResumeAt} (or pipeline_resume)` })
       } else if (state.status === 'paused' || state.status === 'stopped') {
         deps.emit(runId, state.status === 'paused' ? 'run_paused' : 'run_stopped', {
           next: state.current,

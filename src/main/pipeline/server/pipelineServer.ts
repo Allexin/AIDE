@@ -4,7 +4,7 @@ import { logEvent } from '../../diagnostics'
 import { McpServer, type ToolDefinition } from '../mcp/protocol'
 import { orchestrators } from '../orchestrators'
 import { tabActivity } from '../../pty/tabActivity'
-import { pipelineEvents, SIGNIFICANT_EVENTS, type PipelineEvent } from '../events'
+import { isSignificant, pipelineEvents, type PipelineEvent } from '../events'
 import { validateAgainstSchema } from '../engine/schema'
 import type { JsonSchema } from '../engine/types'
 import type { ResultTool } from '../headless/types'
@@ -223,7 +223,7 @@ export class PipelineServer {
     const all = url.searchParams.get('all') === '1'
     res.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-cache' })
     this.openStreams.add(res)
-    const write = (event: PipelineEvent): void => { if (all || SIGNIFICANT_EVENTS.has(event.type)) res.write(JSON.stringify(event) + '\n') }
+    const write = (event: PipelineEvent): void => { if (all || isSignificant(event)) res.write(JSON.stringify(event) + '\n') }
     for (const event of pipelineEvents.since(projectPath, runId, since)) write(event)
     const unsubscribe = pipelineEvents.subscribe(projectPath, (event) => {
       if (runId === null || event.runId === runId) write(event)
@@ -246,10 +246,10 @@ export class PipelineServer {
     const respond = (body: unknown): void => {
       if (!res.writableEnded) res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body) + '\n')
     }
-    const pending = pipelineEvents.since(projectPath, runId, since).find((event) => SIGNIFICANT_EVENTS.has(event.type))
+    const pending = pipelineEvents.since(projectPath, runId, since).find(isSignificant)
     if (pending) { respond(pending); return }
     const unsubscribe = pipelineEvents.subscribe(projectPath, (event) => {
-      if ((runId === null || event.runId === runId) && SIGNIFICANT_EVENTS.has(event.type)) { done(); respond(event) }
+      if ((runId === null || event.runId === runId) && isSignificant(event)) { done(); respond(event) }
     })
     const timer = setTimeout(() => { done(); respond({ type: 'timeout', since }) }, timeoutSec * 1000)
     const done = (): void => { clearTimeout(timer); unsubscribe() }

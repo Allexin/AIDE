@@ -46,6 +46,8 @@ export interface EngineDeps {
   emit(runId: string, type: PipelineEventType, data: Record<string, unknown>): void
   onStateChange?(state: RunState): void
   onTranscript?(runId: string, node: string, visit: number, entry: HistoryEntry): void
+  /** Whether the account pool switches this CLI to another account on a usage limit: the orchestrator is not told then. */
+  accountPool?(cli: string): boolean
   /** Output of a running check, after it is appended to the visit's check log. */
   onCheckOutput?(runId: string, node: string, visit: number, text: string): void
 }
@@ -307,7 +309,8 @@ export class PipelineRun {
     this.state.limitResumeAt = at
     this.save()
     this.scheduleLimitResume()
-    this.deps.emit(this.runId, 'run_stopped', { next: this.state.current, reason: 'usage_limit', cli: this.state.limitCli, resumeAt: at, rescheduled: true, summary })
+    // Only the account pool reschedules: it goes on with the run, the orchestrator is not told.
+    this.deps.emit(this.runId, 'run_stopped', { next: this.state.current, reason: 'usage_limit', cli: this.state.limitCli, resumeAt: at, rescheduled: true, quiet: true, summary })
     return true
   }
 
@@ -429,8 +432,18 @@ export class PipelineRun {
         continue
       }
 
-      const visit: NodeVisit = { node: id, visit: visits, outcome: null, startedAt: new Date().toISOString(), finishedAt: null, sessionId: null, costUsd: null, error: null }
-      this.state.history.push(visit)
+      // A visit cut off by an unavailable CLI or a usage limit goes on as the same record.
+      const cut = [...this.state.history].reverse().find((h) => h.node === id)
+      let visit: NodeVisit
+      if (cut?.pendingRetry && cut.visit === visits) {
+        visit = cut
+        visit.outcome = null
+        visit.finishedAt = null
+        delete visit.pendingRetry
+      } else {
+        visit = { node: id, visit: visits, outcome: null, startedAt: new Date().toISOString(), finishedAt: null, sessionId: null, costUsd: null, error: null }
+        this.state.history.push(visit)
+      }
       this.save()
       this.deps.emit(this.runId, 'node_started', { node: id, visit: visits, type: step.type, summary: `${id} started (visit ${visits})` })
 
@@ -450,12 +463,14 @@ export class PipelineRun {
           if (result.kind !== 'interrupted') this.state.unavailable = null
           break
         }
-        if (this.interruptRequested) { result = { kind: 'interrupted' }; break }
+        if (this.interruptRequested) { visit.pendingRetry = true; result = { kind: 'interrupted' }; break }
         const unavailable = this.noteUnavailable(id, visit, attempt)
         if (unavailable) { result = { kind: 'escalate', message: unavailable }; break }
+        visit.pendingRetry = true
         const next = await this.waitBeforeRetry()
         if (next === 'stop') { result = { kind: 'interrupted' }; break }
         if (next === 'pause') { result = { kind: 'interrupted' }; paused = true; break }
+        delete visit.pendingRetry
       }
       if (paused) {
         visit.finishedAt = new Date().toISOString()
@@ -479,6 +494,7 @@ export class PipelineRun {
       if (result.kind === 'limited') {
         visit.outcome = 'interrupted'
         visit.error = result.message
+        visit.pendingRetry = true
         this.state.visits[id] = visits - 1
         this.holdForLimit(id, result.message, result.cli, visit.startedAt)
         return
@@ -490,6 +506,8 @@ export class PipelineRun {
       }
 
       visit.outcome = result.outcome
+      // What cut the visit off before (an unavailable CLI, a usage limit) has passed; `retries` keeps the count.
+      visit.error = null
       if (result.sessionId) { visit.sessionId = result.sessionId; this.state.sessions[id] = result.sessionId }
       if (result.costUsd !== undefined) visit.costUsd = result.costUsd ?? null
       this.state.outputs[id] = result.output
@@ -829,6 +847,7 @@ export class PipelineRun {
       cli,
       visitStartedAt,
       resumeAt: this.state.limitResumeAt,
+      ...(this.deps.accountPool?.(cli) ? { quiet: true } : {}),
       message: clip(message, 400),
       summary: resumeAt
         ? `${node} hit a CLI usage limit; the run resumes by itself at ${resumeAt.toISOString()} (or earlier with pipeline_resume)`
@@ -851,7 +870,7 @@ export class PipelineRun {
     unavailable.lastError = clip(result.message, 400)
     this.state.unavailable = unavailable
     visit.error = result.message
-    visit.retries = unavailable.attempts
+    visit.retries = (visit.retries ?? 0) + 1
     this.save()
     const elapsed = now - Date.parse(unavailable.since)
     if (elapsed >= UNAVAILABLE_WINDOW_MS) {
