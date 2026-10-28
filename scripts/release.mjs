@@ -9,13 +9,20 @@
  * - Packages portable zip via electron-builder
  * - Creates git commit + tag
  * - Generates release notes via Claude Code
- * - Prints files to upload to GitHub Releases
+ * - Pushes the commit and tag, publishes the GitHub release with the zip attached
+ *
+ * Token: GITHUB_TOKEN, or `--token-file <path>` (the toolbar passes
+ * `${aideUserDir}/github-token`).
+ *
+ * Re-running after a failed publish (HEAD is the release commit, its tag exists,
+ * the GitHub release is missing or incomplete) skips the build and only publishes.
  */
 
-import { readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { execSync, spawnSync } from 'child_process'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { checkAccess, findRelease, isComplete, publishRelease, resolveToken } from './github-release.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
@@ -33,7 +40,37 @@ function readVersion() {
   return JSON.parse(readFileSync(PKG_PATH, 'utf8')).version
 }
 
+function fail(message) {
+  console.error(`\n❌ ${message}`)
+  process.exit(1)
+}
+
 console.log('\n📦 AIDE Release Tool\n')
+
+// Step 0: GitHub access (fail fast before any heavy work)
+console.log('🔑 Checking GitHub access...')
+let token
+try {
+  token = resolveToken(process.argv.slice(2))
+  await checkAccess(token)
+} catch (err) {
+  fail(err.message)
+}
+console.log('✓ GitHub token accepted')
+
+// A previous run that built and tagged but did not finish publishing is resumed.
+const headVersion = readVersion()
+const headTag = `v${headVersion}`
+const headIsRelease = runCapture('git log -1 --format=%s') === `chore: release ${headTag}` &&
+  runCapture(`git tag --list ${headTag}`) === headTag
+let resume = false
+if (headIsRelease) {
+  try {
+    resume = !isComplete(await findRelease(token, headTag), `AIDE-${headVersion}-portable.7z`)
+  } catch (err) {
+    fail(`Cannot read GitHub releases: ${err.message}`)
+  }
+}
 
 // Step 1: fetch previous stable release from GitHub (fail fast before any heavy work)
 console.log('🌐 Fetching previous stable release from GitHub...')
@@ -50,36 +87,52 @@ if (prevResult.status !== 0) {
 const prevVersion = prevResult.stdout.trim()
 console.log(`✓ Previous stable release: v${prevVersion}`)
 
-// Step 2: build (prebuild bumps patch version automatically)
-console.log('\n🔨 Building...')
-run('npm run build')
-const version = readVersion()
-console.log(`\n✓ Built v${version}`)
+let version
+if (resume) {
+  version = headVersion
+  console.log(`\n↻ v${version} is built and tagged but not published — resuming the publish`)
+} else {
+  // Step 2: build (prebuild bumps patch version automatically)
+  console.log('\n🔨 Building...')
+  run('npm run build')
+  version = readVersion()
+  console.log(`\n✓ Built v${version}`)
 
-// Step 3: package portable zip
-console.log('\n📦 Packaging portable zip...')
-run('npm run pack')
-console.log(`✓ Portable zip ready`)
+  // Step 3: package portable zip
+  console.log('\n📦 Packaging portable zip...')
+  run('npm run pack')
+  console.log(`✓ Portable zip ready`)
 
-// Step 4: git commit + tag
-console.log('\n🔖 Committing and tagging...')
-run(`git add package.json`)
-run(`git commit -m "chore: release v${version}"`)
-run(`git tag v${version}`)
-console.log(`✓ Tag v${version} created`)
-
-// Step 5: collect commit log since previous stable release (exclude the release commit itself)
-const commitLog = runCapture(
-  `git log v${prevVersion}..HEAD~1 --no-merges --format="--- %h %s%n%b"`
-)
-if (!commitLog) {
-  console.warn('⚠  No commits found since previous release. Release notes will be empty.')
+  // Step 4: git commit + tag
+  console.log('\n🔖 Committing and tagging...')
+  run(`git add package.json package-lock.json`)
+  run(`git commit -m "chore: release v${version}"`)
+  run(`git tag v${version}`)
+  console.log(`✓ Tag v${version} created`)
 }
 
-// Step 6: generate release notes via Claude Code
-console.log('\n🤖 Generating release notes via Claude Code...')
-const today = new Date().toISOString().slice(0, 10)
-const prompt = `You are generating release notes for AIDE (a desktop code editor).
+const assetPath = resolve(ROOT, `release/AIDE-${version}-portable.7z`)
+if (!existsSync(assetPath)) {
+  fail(`Portable zip not found: release/AIDE-${version}-portable.7z\n   Run "npm run pack" (no version bump) and retry.`)
+}
+const notesPath = resolve(ROOT, `release/AIDE-${version}-release-notes.txt`)
+let notes = resume && existsSync(notesPath) ? readFileSync(notesPath, 'utf8').trim() : ''
+
+if (notes) {
+  console.log(`✓ Reusing release/AIDE-${version}-release-notes.txt`)
+} else {
+  // Step 5: collect commit log since previous stable release (exclude the release commit itself)
+  const commitLog = runCapture(
+    `git log v${prevVersion}..HEAD~1 --no-merges --format="--- %h %s%n%b"`
+  )
+  if (!commitLog) {
+    console.warn('⚠  No commits found since previous release. Release notes will be empty.')
+  }
+
+  // Step 6: generate release notes via Claude Code
+  console.log('\n🤖 Generating release notes via Claude Code...')
+  const today = new Date().toISOString().slice(0, 10)
+  const prompt = `You are generating release notes for AIDE (a desktop code editor).
 
 Version: ${version}
 Date: ${today}
@@ -110,45 +163,56 @@ Rules:
 - Be concise — one line per change
 - Use the commit messages as source material; rephrase for clarity`
 
-const claudeExe = resolve(process.env.USERPROFILE || '', '.local', 'bin', 'claude.exe')
-// Proxy is required for Claude Code to reach Anthropic API.
-// Set HTTPS_PROXY in your environment to override the default.
-const proxyEnv = process.env.HTTPS_PROXY ? {} : {
-  HTTPS_PROXY: 'http://192.168.1.99:7897',
-  HTTP_PROXY:  'http://192.168.1.99:7897',
-  NO_PROXY:    'localhost,127.0.0.1'
-}
-const claudeResult = spawnSync(claudeExe, ['-p', prompt], {
-  cwd: ROOT,
-  encoding: 'utf8',
-  maxBuffer: 1024 * 1024,
-  env: { ...process.env, ...proxyEnv }
-})
-if (claudeResult.status !== 0 || !claudeResult.stdout.trim()) {
-  const err = claudeResult.stderr || claudeResult.error?.message || 'unknown error'
-  console.error(`\n❌ Claude Code failed: ${err}`)
-  console.error('   Ensure claude.exe is at %USERPROFILE%\\.local\\bin\\claude.exe')
-  console.error('   You can create release notes manually using docs/release-format.md')
-  process.exit(1)
+  const claudeExe = resolve(process.env.USERPROFILE || '', '.local', 'bin', 'claude.exe')
+  // Proxy is required for Claude Code to reach Anthropic API.
+  // Set HTTPS_PROXY in your environment to override the default.
+  const proxyEnv = process.env.HTTPS_PROXY ? {} : {
+    HTTPS_PROXY: 'http://192.168.1.99:7897',
+    HTTP_PROXY:  'http://192.168.1.99:7897',
+    NO_PROXY:    'localhost,127.0.0.1'
+  }
+  const claudeResult = spawnSync(claudeExe, ['-p', prompt], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024,
+    env: { ...process.env, ...proxyEnv }
+  })
+  if (claudeResult.status !== 0 || !claudeResult.stdout.trim()) {
+    const err = claudeResult.stderr || claudeResult.error?.message || 'unknown error'
+    console.error(`\n❌ Claude Code failed: ${err}`)
+    console.error('   Ensure claude.exe is at %USERPROFILE%\\.local\\bin\\claude.exe')
+    console.error('   You can create release notes manually using docs/release-format.md')
+    process.exit(1)
+  }
+
+  notes = claudeResult.stdout.trim()
+  writeFileSync(notesPath, notes, 'utf8')
+  console.log(`✓ Release notes written to release/AIDE-${version}-release-notes.txt`)
 }
 
-const notes = claudeResult.stdout.trim()
-const notesPath = resolve(ROOT, `release/AIDE-${version}-release-notes.txt`)
-writeFileSync(notesPath, notes, 'utf8')
-console.log(`✓ Release notes written to release/AIDE-${version}-release-notes.txt`)
+// Step 7: push commit + tag, publish the GitHub release
+console.log('\n🏷️  Pushing to origin...')
+run('git push origin HEAD')
+run(`git push origin v${version}`)
+console.log('✓ Pushed')
 
-// Step 7: summary
+console.log('\n🚀 Publishing GitHub release...')
+let releaseUrl
+try {
+  releaseUrl = await publishRelease(token, {
+    tag: `v${version}`,
+    name: `AIDE Stable ${version}`,
+    body: notes,
+    assetPath
+  })
+} catch (err) {
+  fail(`GitHub publish failed: ${err.message}\n   Press Release again to resume — it will not rebuild.`)
+}
+
 console.log(`
 ╔══════════════════════════════════════════╗
-║         Release v${version.padEnd(24)}║
+║         Released v${version.padEnd(23)}║
 ╚══════════════════════════════════════════╝
 
-📤 Upload to GitHub release:
-   release/AIDE-${version}-portable.7z
-
-📋 Paste into release description:
-   release/AIDE-${version}-release-notes.txt
-
-🏷️  Push to remote:
-   git push && git push --tags
+🔗 ${releaseUrl}
 `)
