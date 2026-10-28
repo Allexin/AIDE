@@ -12,6 +12,11 @@ import type { HeadlessCapability, HeadlessResult, HeadlessRunOptions, HeadlessRu
  * follows the `exec --json` event stream (thread.started / item.completed /
  * turn.completed / turn.failed / error). See docs/headless-cli-matrix.md.
  *
+ * - A top-level `error` event is not the end of the turn: Codex also reports
+ *   its reconnect attempts with it ("Reconnecting... 2/5 (stream disconnected
+ *   …)") and then goes on. It fails the step only when the turn never
+ *   completes; `turn.failed` always does.
+ *
  * - The session id is the `thread_id` of `thread.started`; resume uses
  *   `codex exec resume <id>`.
  * - Structured output: `--output-schema <file>` + `-o <file>`; Codex validates
@@ -148,6 +153,8 @@ export const codexHeadless: HeadlessCapability = {
     if (sessionId) options.onSessionId?.(sessionId)
     let lastAgentMessage: string | null = null
     let fatal: string | null = null
+    let streamError: string | null = null
+    let completed = false
     const warnings: string[] = []
 
     const handle = runProcess({
@@ -168,11 +175,14 @@ export const codexHeadless: HeadlessCapability = {
           if (item.type === 'error') warnings.push(str(item.message))
           if (item.type === 'agent_message') lastAgentMessage = str(item.text)
           for (const entry of codexItemEntries(item)) options.onEntry?.(entry)
+        } else if (event.type === 'turn.completed') {
+          completed = true
         } else if (event.type === 'turn.failed') {
           const error = event.error as Record<string, unknown> | undefined
           fatal = str(error?.message) || 'turn failed'
         } else if (event.type === 'error') {
-          fatal = str(event.message) || 'error'
+          streamError = str(event.message) || 'error'
+          warnings.push(streamError)
         }
       }
     })
@@ -182,7 +192,8 @@ export const codexHeadless: HeadlessCapability = {
       const base: HeadlessResult = { ok: false, sessionId, structured: null, finalText: lastMessage, costUsd: null, warnings, error: null }
       const exitError = processError(exit, 'Codex')
       if (exitError && !isClassifiedFailure(exitError)) return { ...base, error: exitError }
-      if (fatal) return { ...base, error: { code: classifyFailure(fatal), message: fatal } }
+      const failure = fatal ?? (completed ? null : streamError)
+      if (failure) return { ...base, error: { code: classifyFailure(failure), message: failure } }
       if (exitError) return { ...base, error: exitError }
       if (options.outputSchema) {
         try {

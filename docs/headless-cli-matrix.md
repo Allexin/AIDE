@@ -68,8 +68,11 @@ codex exec resume --json --skip-git-repo-check --ignore-user-config [--model M]
 ```
 
 - `--json` events (**prod** fixture): `thread.started {thread_id}`, `turn.started`,
-  `item.completed {item}`, `turn.completed {usage}`; failures as `turn.failed {error}`
-  or `error {message}`. Item types handled: `agent_message`, `reasoning`,
+  `item.completed {item}`, `turn.completed {usage}`; failures as `turn.failed {error}`.
+  A top-level `error {message}` is not necessarily a failure: Codex also reports its
+  reconnect attempts with it (`Reconnecting... 4/5 (stream disconnected …)`) and the
+  turn can still complete, so it fails the step only when no `turn.completed`
+  follows (otherwise it is a warning). Item types handled: `agent_message`, `reasoning`,
   `command_execution`, `file_change`, `mcp_tool_call`, `web_search`, `error`
   (non-fatal warnings). Types other than `agent_message`/`error` are from
   docs/memory and should be confirmed by the live test.

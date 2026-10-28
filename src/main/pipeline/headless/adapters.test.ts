@@ -164,6 +164,31 @@ describe('codex headless adapter', () => {
     expect(result.error?.code).toBe('limit')
   })
 
+  it('goes on after reconnect errors when the turn completes', async () => {
+    const reconnect = 'Reconnecting... 4/5 (stream disconnected before completion: os error 10065)'
+    const { result } = await run(codexHeadless, options([
+      line({ type: 'thread.started', thread_id: 't' }),
+      line({ type: 'item.completed', item: { id: 'i1', type: 'agent_message', text: '{"decision":"approve"}' } }),
+      line({ type: 'error', message: reconnect }),
+      { writeAfterFlag: '-o', content: '{"decision":"approve"}' },
+      line({ type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2 } })
+    ], { outputSchema: { type: 'object', required: ['decision'], properties: { decision: { type: 'string' } } } }))
+    expect(result.ok).toBe(true)
+    expect(result.structured).toEqual({ decision: 'approve' })
+    expect(result.warnings).toEqual([reconnect])
+  })
+
+  it('fails with the last reconnect error when the turn never completes', async () => {
+    const { result } = await run(codexHeadless, options([
+      line({ type: 'thread.started', thread_id: 't' }),
+      line({ type: 'error', message: 'Reconnecting... 5/5 (stream disconnected before completion)' }),
+      line({ type: 'error', message: 'stream disconnected before completion: retries exhausted' }),
+      { exit: 1 }
+    ]))
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatchObject({ code: 'unavailable', message: 'stream disconnected before completion: retries exhausted' })
+  })
+
   it('rejects prompts above the stdin limit without spawning', async () => {
     const { result } = await run(codexHeadless, options([], { prompt: 'x'.repeat(MAX_PROMPT_CHARS + 1) }))
     expect(result.error?.code).toBe('prompt_too_large')
