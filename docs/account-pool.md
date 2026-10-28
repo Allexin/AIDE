@@ -36,9 +36,13 @@ time:
 1. Skips the switch when AIDE changed this CLI's account after the step started —
    the limit belongs to the previous account — and only resumes the run.
 2. Marks the active account exhausted until `resumeAt`, or until it is loaded by
-   hand when the reset time is unknown.
+   hand when the reset time is unknown. The active account is the saved one the
+   CLI is logged in to, matched by its login (`currentAccount`): AIDE's record of
+   the active account is stale after a login outside AIDE, and is corrected then.
+   A login that is not a saved account marks nothing.
 3. Loads the next checked account that is not exhausted. The current credentials
-   are saved into the active account's record first, so a rotated token is kept.
+   are saved into the active account's record first, so a rotated token is kept —
+   only when the login is that account's, so another login never overwrites it.
 4. Restarts the CLI's tabs in every window (the credentials are the CLI's, shared by
    every session on the machine). An orchestrator in one of them is not told: its
    cut-off `pipeline_wait` is replaced by the event messages AIDE types into an

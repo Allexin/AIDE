@@ -2,7 +2,7 @@ import { getToolById } from '../pty/cliTools/registry'
 import { cliLog } from '../pty/cliTools/cliLogger'
 import { ptyRegistry } from '../pty/registry'
 import { getActiveAccount, listAccountInfos, markAccountExhausted, type CliAccountInfo } from '../config/accountStorage'
-import { lastAccountSwitch, loadSavedAccount } from '../accounts/accountSwitch'
+import { currentAccount, lastAccountSwitch, loadSavedAccount } from '../accounts/accountSwitch'
 import { logEvent } from '../diagnostics'
 import type { PipelineManager } from './manager'
 
@@ -91,7 +91,13 @@ export class AccountPool {
       return
     }
 
-    const activeId = getActiveAccount(cli)
+    // The account the CLI is logged in to hit the limit, not necessarily the one AIDE recorded as active.
+    const recordedId = getActiveAccount(cli)
+    const activeId = await currentAccount(cli)
+    if (activeId !== recordedId) {
+      const name = (id: string | null): string => listAccountInfos(cli).find((account) => account.id === id)?.name ?? 'an account that is not saved'
+      cliLog(LOG_CH, `${tool.name}: logged in to ${name(activeId)}, not ${name(recordedId)} as recorded; the limit is put on the account logged in to.`)
+    }
     const resumeAt = typeof data.resumeAt === 'string' ? Date.parse(data.resumeAt) : NaN
     if (activeId) markAccountExhausted(cli, activeId, Number.isNaN(resumeAt) ? null : resumeAt)
 
