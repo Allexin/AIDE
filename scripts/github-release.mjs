@@ -54,7 +54,10 @@ function request(token, method, url, { json, file, contentType } = {}) {
       headers['Content-Length'] = statSync(file).size
     }
 
-    const req = https.request(url, { method, headers }, (res) => {
+    // A fresh connection per request: the build blocks the event loop for minutes
+    // (execSync), so a pooled keep-alive socket is dead by the time it is reused
+    // and the next write fails with ECONNABORTED.
+    const req = https.request(url, { method, headers, agent: false }, (res) => {
       const chunks = []
       res.on('data', (chunk) => chunks.push(chunk))
       res.on('end', () => {
