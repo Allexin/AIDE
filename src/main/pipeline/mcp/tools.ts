@@ -37,6 +37,20 @@ export const ORCHESTRATOR_RULES = [
   'Every call you make re-reads your whole context, so keep each cycle to the few calls it needs. Do not re-verify what the machine\'s checks and reviewers already verified: the report\'s `checks` lists every check command with its last result, and a check that passed there ran on the final code — do not run it again. Inspect results yourself only on a signal (a reviewer flagged something, a first capture of a new visual stage, a failed run).'
 ]
 
+/**
+ * The server's instructions, shown by clients that read them: what AIDE's MCP
+ * server is and when to turn to it. The server carries pipeline orchestration
+ * today; other AIDE tools may join it.
+ */
+export function serverInstructions(docPath: string): string {
+  return [
+    "AIDE's MCP server: tools of the AIDE editor that has this project open.",
+    'Pipeline orchestration (pipeline_* tools): AIDE runs pipeline machines — multi-step agent work with checks, review loops and commits — deterministically, and you orchestrate them.',
+    'Turn to it when the user asks for orchestration or a pipeline, or when a task is big enough for several agent steps with checks and review (a feature across many files, a series of plan items).',
+    `Start with pipeline_hello: it returns the orchestrator rules and how to receive pipeline events. Reference: ${docPath}`
+  ].join(' ')
+}
+
 function eventDeliveryText(launcherPath: string): string {
   return [
     'Waiting for runs, cheapest first:',
@@ -119,7 +133,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
   const tools: ToolDefinition[] = [
     {
       name: 'pipeline_hello',
-      description: 'Handshake with AIDE. Call once after connecting: confirms the connection and returns the orchestrator rules and how to receive pipeline events.',
+      description: 'Start here for pipeline orchestration: when the user asks for orchestration or a pipeline, or a task is big enough for several agent steps with checks and review. Confirms the connection to AIDE and returns the orchestrator rules and how to receive pipeline events.',
       inputSchema: OBJECT({}),
       handler: (_args, context) => {
         const { aideVersion, launcherPath, docPath } = env()

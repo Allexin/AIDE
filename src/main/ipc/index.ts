@@ -19,7 +19,7 @@ import {
   type ToolbarItem
 } from '../config/toolbarConfig'
 import { openProjectAndTrack } from '../windows/editor'
-import { getOrchestrationSetup, pipelineView } from '../pipeline'
+import { pipelineView } from '../pipeline'
 import type { AnswerAction, RunControl } from '../pipeline/viewService'
 import { orchestrators } from '../pipeline/orchestrators'
 import { osDisplayName } from '../platform'
@@ -445,12 +445,6 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const tabInfo = await ptyMgr.createNewSessionWithPrompt(prompt, toolId, getActivatedTools())
     senderWin.webContents.send('terminal:new-tab', tabInfo)
     return tabInfo
-  })
-
-  // ── Pipeline: orchestration setup data for the wizard ─────────────────────────
-  ipcMain.handle('pipeline:get-setup', (event) => {
-    const projectPath = projectOf(event.sender)
-    return projectPath ? getOrchestrationSetup(projectPath) : null
   })
 
   // ── Pipeline: run view and controls (overlay) ─────────────────────────────────

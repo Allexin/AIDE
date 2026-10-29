@@ -364,14 +364,6 @@ export function rebuildMenu(): void {
       }
     },
     {
-      label: 'Orchestration',
-      click: (): void => {
-        const focused = BrowserWindow.getFocusedWindow()
-        const target = focused && openProjectsRef && [...openProjectsRef.values()].includes(focused) ? focused : getEditorWindow()
-        target?.webContents.send('pipeline:open-setup')
-      }
-    },
-    {
       label: 'File',
       submenu: [
         { label: 'New Window',    click: (): void => { createPickerWindow() } },

@@ -21,22 +21,6 @@ interface GitStatusResult {
   deleted: string[]
 }
 
-interface OrchestratorConnection {
-  projectPath: string
-  connectionId: string
-  tabId: string | null
-  client: { name: string; version: string } | null
-  connectedAt: string
-}
-
-interface OrchestrationSetup {
-  available: boolean
-  mcp: { command: string; args: string[]; env: Record<string, string> }
-  launcherPath: string
-  docPath: string
-  connected: OrchestratorConnection[]
-}
-
 interface SessionTabInfo {
   tabId: string
   sessionId: string | null
@@ -175,8 +159,6 @@ export interface EditorAPI {
   terminalCreateWithPrompt: (toolId: string, prompt: string) => Promise<SessionTabInfo | null>
 
   // Pipeline orchestration setup
-  pipelineGetSetup: () => Promise<OrchestrationSetup | null>
-  onPipelineOpenSetup: (cb: () => void) => () => void
 
   // Pipeline runs (overlay)
   pipelineGetRun: () => Promise<unknown>
@@ -441,12 +423,6 @@ const editorApi: EditorAPI = {
   terminalCreateWithPrompt: (toolId, prompt) =>
     ipcRenderer.invoke('terminal:create-with-prompt', toolId, prompt),
 
-  pipelineGetSetup: () => ipcRenderer.invoke('pipeline:get-setup'),
-  onPipelineOpenSetup: (cb: () => void): (() => void) => {
-    const handler = (): void => cb()
-    ipcRenderer.on('pipeline:open-setup', handler)
-    return () => ipcRenderer.removeListener('pipeline:open-setup', handler)
-  },
 
   pipelineGetRun: () => ipcRenderer.invoke('pipeline:get-run'),
   pipelineControl: (action) => ipcRenderer.invoke('pipeline:control', action),

@@ -58,6 +58,10 @@ Key decisions already taken:
 
 ## 1A. Orchestrator onboarding (wizard)
 
+> **Superseded (2026-10-29).** There is no wizard any more: AIDE adds its MCP
+> server to every CLI tab it launches, and the server itself tells the agent when
+> to turn to orchestration. See `docs/aide-mcp-launch.md`.
+
 ### 1A.1 Principle
 
 AIDE does not hard-wire any CLI as orchestrator. It ships:
@@ -583,7 +587,10 @@ Original scope:
 - Spike: long-lived event stream under Claude Code Monitor and background
   tasks; measure duration limits and reconnection.
 
-### 5.5 Orchestration MCP doc + wizard — **done** (UI awaits manual testing)
+### 5.5 Orchestration MCP doc + wizard — **done**, wizard since replaced
+
+The wizard was removed on 2026-10-29: AIDE gives its MCP server to CLI tabs at
+launch (`docs/aide-mcp-launch.md`).
 
 Implemented: `resources/docs/orchestration-mcp.md` (deployed to
 `.aide/docs/` on project open), **Orchestration** item in the main menu (next to Remote Connect) and

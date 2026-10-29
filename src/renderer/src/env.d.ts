@@ -108,22 +108,6 @@ interface ToolbarInfo {
   suggestedType: string | null
 }
 
-interface OrchestratorConnection {
-  projectPath: string
-  connectionId: string
-  tabId: string | null
-  client: { name: string; version: string } | null
-  connectedAt: string
-}
-
-interface OrchestrationSetup {
-  available: boolean
-  mcp: { command: string; args: string[]; env: Record<string, string> }
-  launcherPath: string
-  docPath: string
-  connected: OrchestratorConnection[]
-}
-
 /** The machine definition (a tree of steps); see src/shared/pipelineMachine.ts. */
 type PipelineMachine = import('../../shared/pipelineMachine').MachineDefinition
 
@@ -262,8 +246,6 @@ interface EditorAPI {
   terminalCreateWithPrompt: (toolId: string, prompt: string) => Promise<SessionTabInfo | null>
 
   // Pipeline orchestration setup
-  pipelineGetSetup: () => Promise<OrchestrationSetup | null>
-  onPipelineOpenSetup: (cb: () => void) => () => void
 
   // Pipeline runs (overlay)
   pipelineGetRun: () => Promise<PipelineRunSnapshot | null>

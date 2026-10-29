@@ -1,8 +1,8 @@
-# AIDE Orchestration — MCP Connection Guide
+# AIDE Orchestration — MCP Guide
 
-This document is for an **AI agent** that is asked to become the orchestrator of
-AIDE pipelines in this project. It explains how to connect AIDE's MCP server to
-yourself, what the orchestrator does, and how to receive pipeline events.
+This document is for an **AI agent** that becomes the orchestrator of AIDE
+pipelines in this project. It explains how AIDE's MCP server reaches you, what
+the orchestrator does, and how to receive pipeline events.
 
 AIDE keeps this file up to date; do not edit it.
 
@@ -18,14 +18,20 @@ project's plan, picks the next task, chooses a machine and its parameters,
 starts it, reads the report, updates the plan, and talks to the user. Any agent
 with MCP support can be the orchestrator.
 
-## 2. Connect the MCP server
+## 2. The MCP server is already connected
 
-AIDE exposes its MCP server through a small **stdio shim**. It finds the AIDE
-instance serving the current project by itself, so your configuration never
-contains a port, a token, or a project path.
+AIDE gives its MCP server, `aide`, to every CLI tab it launches (a per-CLI
+setting in AIDE, on by default), with the paths of the running AIDE. You do not
+register anything: if you run in an AIDE tab, the `pipeline_*` tools are there.
+The server carries pipeline orchestration and may carry other AIDE tools later.
 
-The exact command, arguments and environment are given to you in the setup
-prompt AIDE opened this session with. Their shape:
+Turn to orchestration when the user asks for it or for a pipeline, or when a
+task is big enough for several agent steps with checks and review (a feature
+across many files, a series of plan items).
+
+The server is a small **stdio shim** that finds the AIDE instance serving the
+project by itself; AIDE passes it the tab and the project. For a session
+started outside AIDE, the server entry is:
 
 | Field | Value |
 |---|---|
@@ -35,46 +41,21 @@ prompt AIDE opened this session with. Their shape:
 | env | `ELECTRON_RUN_AS_NODE=1`, `AIDE_RUNTIME_DIR=<AIDE runtime directory>` |
 | server name | `aide` |
 
-Register it in **your own** MCP configuration, preferably with **project
-scope**, so it applies only to this project. Use your CLI's normal mechanism.
-For reference:
+Such an entry holds paths of one AIDE installation and goes stale when AIDE
+moves; AIDE tabs do not need it.
 
-- **Claude Code**: `claude mcp add --scope project -e ELECTRON_RUN_AS_NODE=1 -e AIDE_RUNTIME_DIR=<dir> aide -- "<aide.exe>" "<aide-mcp.cjs>" mcp`
-  (writes `mcpServers.aide` into the project's `.mcp.json`).
-- **Codex**: `codex mcp add aide --env ELECTRON_RUN_AS_NODE=1 --env AIDE_RUNTIME_DIR=<dir> -- "<aide.exe>" "<aide-mcp.cjs>" mcp`
-  (writes `[mcp_servers.aide]` into the user config; this is fine — the shim
-  serves whichever AIDE project the session runs in).
-- **OpenCode 2**: `opencode mcp add aide --env ELECTRON_RUN_AS_NODE=1 --env AIDE_RUNTIME_DIR=<dir> -- "<aide.exe>" "<aide-mcp.cjs>" mcp`
-  (writes `mcp.aide` into the project's `opencode.json`; `--global` for the user config).
-- **Other CLIs**: the stdio server entry of their MCP configuration with the same command, args and env.
-
-Because the shim finds the project from the session's working directory, a
-user-scope registration works for every project; project scope is preferred
-only to keep other projects' agents from seeing an `aide` server.
-
-Do not add a `cwd`: the shim uses the working directory of your session to find
-the project.
-
-**Allow long tool calls.** Waiting for a run is a tool call that blocks for up to
-30 minutes (§5). Clients cut long calls at different points:
-
-- **Codex** stops MCP calls after 60 s by default: add `tool_timeout_sec = 1900`
-  to `[mcp_servers.aide]` in its config.
-- **Claude Code** (CLI) allows long calls by default; if yours cuts them, set
-  `MCP_TOOL_TIMEOUT` (milliseconds) in its environment.
-- Otherwise pass a smaller `timeoutSec` / `wait` than your client's limit.
-
-Most CLIs load MCP servers only when a session starts. If yours does, tell the
-user to restart your terminal tab and stop there; after the restart, continue
-with step 3.
+**Long tool calls.** Waiting for a run is a tool call that blocks for up to 30
+minutes (§5). AIDE raises Codex's MCP call timeout for its tabs; for other
+clients that cut long calls, pass a smaller `timeoutSec` / `wait` than their
+limit.
 
 ## 3. Verify
 
 Call the tool **`pipeline_hello`**. A successful call confirms the connection
-to AIDE (the setup dialog in AIDE shows it) and returns the orchestrator rules
-and the event-delivery options. If the tool is missing, the server is not
-loaded yet — restart the session. If it answers "AIDE is not running for this
-project", the project is not open in AIDE.
+to AIDE and returns the orchestrator rules and the event-delivery options. If
+the tool is missing, the server is off for this CLI in AIDE's settings, or the
+tab was started before AIDE's server was up — ask the user. If it answers "AIDE
+is not running for this project", the project is not open in AIDE.
 
 ## 4. Orchestrator rules
 

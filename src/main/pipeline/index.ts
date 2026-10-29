@@ -3,9 +3,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { logEvent } from '../diagnostics'
 import { pipelineServer } from './server/pipelineServer'
-import { shimLaunch, writeLauncher, type ShimLaunch } from './server/runtimeFiles'
-import { buildPipelineTools, ORCHESTRATOR_RULES } from './mcp/tools'
-import { orchestrators, type OrchestratorConnection } from './orchestrators'
+import { shimLaunch, writeLauncher } from './server/runtimeFiles'
+import { buildPipelineTools, serverInstructions } from './mcp/tools'
+import { orchestrators } from './orchestrators'
 import { setLaunchMcpProvider } from '../pty/ptyManager'
 import { aideMcpServers } from '../aideMcp/launch'
 import { PipelineManager } from './manager'
@@ -80,7 +80,7 @@ export async function startPipelineServer(): Promise<void> {
       runtimeDir: runtimeDir(),
       serverName: 'aide',
       serverVersion: app.getVersion(),
-      instructions: ORCHESTRATOR_RULES.join(' ') + ` Call pipeline_hello first. Reference: ${ORCHESTRATION_DOC}`,
+      instructions: serverInstructions(ORCHESTRATION_DOC),
       tools: () => buildPipelineTools(() => ({
         aideVersion: app.getVersion(),
         launcherPath,
@@ -142,25 +142,5 @@ export function attachPipelineProject(projectPath: string, win: BrowserWindow): 
     pipelineManager.forget(projectPath)
     orchestrators.forgetProject(projectPath)
     pipelineServer.unregisterProject(projectPath)
-  }
-}
-
-export interface OrchestrationSetup {
-  available: boolean
-  /** stdio MCP server launch spec to put into the agent's MCP configuration. */
-  mcp: ShimLaunch
-  /** Shell launcher for the event feed. */
-  launcherPath: string
-  docPath: string
-  connected: OrchestratorConnection[]
-}
-
-export function getOrchestrationSetup(projectPath: string): OrchestrationSetup {
-  return {
-    available: pipelineServer.isRunning(),
-    mcp: shimLaunch(process.execPath, shimPath(), runtimeDir()),
-    launcherPath,
-    docPath: ORCHESTRATION_DOC,
-    connected: orchestrators.forProject(projectPath)
   }
 }
