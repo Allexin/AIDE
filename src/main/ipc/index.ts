@@ -1,4 +1,5 @@
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
+import { AIDE_MCP_KEY, aideMcpEnabled, aideMcpField } from '../aideMcp/launch'
 import { currentAccountDisplay } from '../accounts/accountInfo'
 import { existsSync, readdirSync, readFileSync, writeFileSync, statSync, promises as fsAsync } from 'fs'
 import { join } from 'path'
@@ -525,9 +526,15 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const results = []
     for (const tool of getRegisteredTools()) {
       if (!activated.includes(tool.id)) continue
-      // Every CLI can be an orchestrator: the pipeline event messages setting is common to all.
-      const fields = [...(tool.settingsFields?.() ?? []), EVENT_MESSAGES_FIELD]
-      const values = { ...(tool.getSettings ? await tool.getSettings() : {}), [EVENT_MESSAGES_KEY]: eventMessagesEnabled(tool.id) }
+      // Every CLI can be an orchestrator: the pipeline event messages setting is common to all,
+      // as is AIDE's MCP server for the CLIs that declare whether they can take it.
+      const mcpField = aideMcpField(tool)
+      const fields = [...(tool.settingsFields?.() ?? []), ...(mcpField ? [mcpField] : []), EVENT_MESSAGES_FIELD]
+      const values = {
+        ...(tool.getSettings ? await tool.getSettings() : {}),
+        ...(mcpField ? { [AIDE_MCP_KEY]: aideMcpEnabled(tool) } : {}),
+        [EVENT_MESSAGES_KEY]: eventMessagesEnabled(tool.id)
+      }
       results.push({ toolId: tool.id, name: tool.name, fields, values })
     }
     return results
@@ -536,10 +543,11 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   // ── Tool settings: update ─────────────────────────────────────────────────────
   ipcMain.handle('tool-settings:update', async (_e, toolId: string, values: Record<string, unknown>) => {
     const tool = getToolById(toolId)
-    const { [EVENT_MESSAGES_KEY]: eventMessages, ...own } = values
+    const { [EVENT_MESSAGES_KEY]: eventMessages, [AIDE_MCP_KEY]: aideMcp, ...own } = values
     if (tool?.updateSettings) await tool.updateSettings(own)
-    // Tools replace their config with what they are given, so the common setting is written after them.
+    // Tools replace their config with what they are given, so the common settings are written after them.
     if (eventMessages !== undefined) updateToolConfig(toolId, { ...getToolConfig(toolId), [EVENT_MESSAGES_KEY]: eventMessages === true })
+    if (aideMcp !== undefined && tool?.aideMcp?.supported) updateToolConfig(toolId, { ...getToolConfig(toolId), [AIDE_MCP_KEY]: aideMcp === true })
   })
 
   // ── Project settings: get default tool ───────────────────────────────────────

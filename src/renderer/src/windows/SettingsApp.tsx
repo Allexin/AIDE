@@ -95,8 +95,8 @@ function ToolSettingsSection({ entry, onChange }: {
 
         if (field.type === 'boolean') {
           return (
-            <label key={field.key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
-              <input type="checkbox" checked={!!val} onChange={(e) => update(e.target.checked)} />
+            <label key={field.key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: field.disabled ? 'default' : 'pointer', marginBottom: 8, opacity: field.disabled ? 0.5 : 1 }}>
+              <input type="checkbox" checked={!!val} disabled={field.disabled} onChange={(e) => update(e.target.checked)} />
               {field.label}
               {field.description && <span style={{ color: '#777', fontSize: 11 }}>{field.description}</span>}
             </label>

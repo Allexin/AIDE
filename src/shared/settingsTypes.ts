@@ -5,6 +5,8 @@ export interface SettingsField {
   type: 'string' | 'boolean' | 'number' | 'password' | 'select'
   options?: Array<{ value: string; label: string }>
   default?: unknown
+  /** Shown, but cannot be changed (the description says why). */
+  disabled?: boolean
   /** Only render this field when the named sibling key equals the given value. */
   visibleWhen?: { key: string; value: unknown }
 }

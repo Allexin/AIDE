@@ -3,7 +3,7 @@ import { tabActivity } from './tabActivity'
 import { BrowserWindow } from 'electron'
 import { join } from 'path'
 import { appendFileSync } from 'fs'
-import type { CliTool } from './cliTools/types'
+import type { CliTool, LaunchAdditions, LaunchMcpServer } from './cliTools/types'
 import { getToolById, getDefaultTool } from './cliTools/registry'
 import { cliLog } from './cliTools/cliLogger'
 import { getHookServer } from '../hooks/hookServer'
@@ -52,6 +52,13 @@ const EXIT_TIMEOUT_MS = 5000
 let tabIdCounter = 0
 function nextTabId(): string {
   return `tab-${++tabIdCounter}`
+}
+
+/** The MCP servers AIDE gives a CLI tab at launch; set by the AIDE MCP server once it runs. */
+let launchMcpProvider: ((tool: CliTool, tabId: string, projectPath: string) => LaunchMcpServer[]) | null = null
+
+export function setLaunchMcpProvider(provider: typeof launchMcpProvider): void {
+  launchMcpProvider = provider
 }
 
 export class PtyManager {
@@ -443,13 +450,20 @@ export class PtyManager {
     this.onSessionAssigned?.(b.tabId, b.sessionId, tab.tool, b.transcriptPath)
   }
 
-  /** Register a tab with the hook server and return the tool's launch args
-   *  (e.g. ` --settings "<file>"`) that wire its hooks back to us. */
-  private wireHooks(tabId: string, tool: CliTool): string {
+  /** Register a tab with the hook server and ask the tool what to add to its launch:
+   *  the hook wiring (e.g. ` --settings "<file>"`) and the MCP servers AIDE gives it. */
+  private prepareLaunch(tabId: string, tool: CliTool): LaunchAdditions {
+    if (!tool.prepareLaunch) return {}
     const hs = getHookServer()
-    if (!hs || hs.getPort() === 0 || !tool.hookLaunchArgs) return ''
-    hs.register(tabId, (b) => this.handleHookBinding(b))
-    return tool.hookLaunchArgs({ tabId, hookPort: hs.getPort(), hookToken: hs.getToken() })
+    const hook = hs && hs.getPort() !== 0 ? { port: hs.getPort(), token: hs.getToken() } : null
+    if (hs && hook) hs.register(tabId, (b) => this.handleHookBinding(b))
+    const mcpServers = launchMcpProvider?.(tool, tabId, this.projectPath) ?? []
+    try {
+      return tool.prepareLaunch({ tabId, projectPath: this.projectPath, hook, mcpServers })
+    } catch (err) {
+      cliLog('PTY', `${tool.name}: preparing the launch of ${tabId} failed: ${err instanceof Error ? err.message : String(err)}`)
+      return {}
+    }
   }
 
   private unwireHooks(tabId: string): void {
@@ -461,7 +475,8 @@ export class PtyManager {
 
   private spawnNewSessionTab(tool: CliTool): SessionTabInfo {
     const tabId = nextTabId()
-    const pty = this.spawnPty(tabId, tool, this.launchCommand(tabId, tool, tool.newSessionCommand()))
+    const additions = this.prepareLaunch(tabId, tool)
+    const pty = this.spawnPty(tabId, tool, this.launchCommand(tool.newSessionCommand(), additions), additions.env)
     const tab: PtyTab = { tabId, sessionId: null, pty, tool, toolId: tool.id, toolName: tool.name }
     this.tabs.set(tabId, tab)
 
@@ -473,7 +488,8 @@ export class PtyManager {
 
   private spawnResumeTab(sessionId: string, silent = false, tool: CliTool): SessionTabInfo {
     const tabId = nextTabId()
-    const pty = this.spawnPty(tabId, tool, this.launchCommand(tabId, tool, tool.resumeCommand(sessionId)))
+    const additions = this.prepareLaunch(tabId, tool)
+    const pty = this.spawnPty(tabId, tool, this.launchCommand(tool.resumeCommand(sessionId), additions), additions.env)
     const tab: PtyTab = { tabId, sessionId, pty, tool, toolId: tool.id, toolName: tool.name }
     this.tabs.set(tabId, tab)
 
@@ -511,12 +527,12 @@ export class PtyManager {
     }
   }
 
-  /** The CLI's command line with its hook wiring, or undefined for a plain shell. */
-  private launchCommand(tabId: string, tool: CliTool, cmd: string): string | undefined {
-    return cmd ? `${cmd}${this.wireHooks(tabId, tool)}` : undefined
+  /** The CLI's command line with what AIDE adds to the launch, or undefined for a plain shell. */
+  private launchCommand(cmd: string, additions: LaunchAdditions): string | undefined {
+    return cmd ? `${cmd}${additions.args ?? ''}` : undefined
   }
 
-  private spawnPty(tabId: string, tool?: CliTool, command?: string): nodePty.IPty {
+  private spawnPty(tabId: string, tool?: CliTool, command?: string, launchEnv?: Record<string, string>): nodePty.IPty {
     const env = { ...process.env } as Record<string, string>
     // Lets the pipeline MCP shim, started by the agent in this tab, identify the tab.
     env.AIDE_TAB_ID = tabId
@@ -526,6 +542,7 @@ export class PtyManager {
     if (tool?.getEnvOverrides) {
       Object.assign(env, tool.getEnvOverrides())
     }
+    if (launchEnv) Object.assign(env, launchEnv)
 
     // Register per-tab signal handler so the tool can emit events (e.g. 'completeAndWait')
     tool?.registerSignalHandler?.(tabId, (event) => {

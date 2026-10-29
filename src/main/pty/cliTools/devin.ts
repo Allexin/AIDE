@@ -13,7 +13,9 @@
 import { execFile } from 'child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'fs'
 import { dirname, join, resolve } from 'path'
-import type { CliTool, CliSession, SettingsField, HistoryEntry, HookLaunchContext } from './types'
+import type { CliTool, CliSession, SettingsField, HistoryEntry, LaunchAdditions, LaunchContext } from './types'
+import { DEVIN_LOCAL_MCP_CONFIG, syncDevinMcpConfig } from './devinMcp'
+import { AIDE_MCP_SERVER_NAME } from '../../aideMcp/launch'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { findExecutable, listProcesses } from '../../platform'
 import { devinHeadless } from '../../pipeline/headless/devinHeadless'
@@ -228,17 +230,27 @@ export const devinTool: CliTool = {
 
   // ── Hooks ────────────────────────────────────────────────────────────────
 
-  hookLaunchArgs(ctx: HookLaunchContext): string {
+  aideMcp: {
+    supported: true,
+    note: "Devin reads MCP servers only from files: before each Devin launch AIDE creates or updates .devin/mcp_config.local.json in the project (Devin's local, not committed config) with access to AIDE's MCP server, keeping your own servers there; turning this off removes AIDE's entry"
+  },
+
+  prepareLaunch(ctx: LaunchContext): LaunchAdditions {
+    try {
+      if (syncDevinMcpConfig(ctx.projectPath, ctx.mcpServers, [AIDE_MCP_SERVER_NAME])) cliLog(LOG_CH, `[mcp] updated ${DEVIN_LOCAL_MCP_CONFIG} in ${ctx.projectPath}`)
+    } catch (err) {
+      cliLog(LOG_CH, `[mcp] ${err instanceof Error ? err.message : String(err)}`)
+    }
+    if (!ctx.hook) return {}
     // Per-tab merged user config wiring SessionStart/Stop hooks back to AIDE's
     // hook server — deterministic tab -> sessionId binding, even when several
     // Devin tabs are spawned at once (lock-file scanning can't order those).
     try {
-      const path = writeTabHookConfig(ctx.tabId, ctx.hookPort, ctx.hookToken)
-      if (!path) return ''
-      return ` --config "${path}"`
+      const path = writeTabHookConfig(ctx.tabId, ctx.hook.port, ctx.hook.token)
+      return path ? { args: ` --config "${path}"` } : {}
     } catch (err) {
       cliLog(LOG_CH, `[hooks] failed to write hook config for ${ctx.tabId}: ${err}`)
-      return ''
+      return {}
     }
   },
 

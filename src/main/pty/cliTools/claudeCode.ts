@@ -4,7 +4,8 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { session } from 'electron'
-import type { CliTool, CliSession, SettingsField, UsageInfo, HistoryEntry, HookLaunchContext } from './types'
+import type { CliTool, CliSession, SettingsField, UsageInfo, HistoryEntry, LaunchAdditions, LaunchContext, LaunchMcpServer } from './types'
+import { removeLaunchPath, tabLaunchPath, writeLaunchFile } from './launchFiles'
 import { writeTabHookSettings, cleanupTabHookSettings } from './claudeHooks'
 import { scanSessions as scanDiskSessions, watchSessionsDir, getSessionsDir, readSessionPreview, readSessionHistory, parseHistoryLine } from './claudeCodeScanner'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
@@ -165,6 +166,18 @@ function syncActiveClaudeCredentials(accountId: string, identifier: string): voi
   }
 }
 
+function mcpConfigPath(tabId: string): string {
+  return tabLaunchPath('claude-mcp', tabId, '.json')
+}
+
+/** A config for `--mcp-config`. */
+export function claudeMcpConfig(servers: LaunchMcpServer[]): string {
+  const mcpServers = Object.fromEntries(servers.map((server) => [server.name, {
+    type: 'stdio', command: server.command, args: server.args, env: { ...server.env, ...server.tabEnv }
+  }]))
+  return JSON.stringify({ mcpServers }, null, 2)
+}
+
 export const claudeCodeTool: CliTool = {
   id: 'claude-code',
   name: TOOL_NAME,
@@ -209,17 +222,30 @@ export const claudeCodeTool: CliTool = {
     }
   },
 
-  hookLaunchArgs(ctx: HookLaunchContext): string {
+  aideMcp: { supported: true },
+
+  prepareLaunch(ctx: LaunchContext): LaunchAdditions {
+    let args = ''
     // Write a per-tab settings file wiring SessionStart/Stop hooks back to AIDE's
     // hook server (deterministic tab -> transcript_path binding). Merges with the
     // user's project .claude/settings.json rather than replacing it.
-    try {
-      const path = writeTabHookSettings(ctx.tabId, ctx.hookPort, ctx.hookToken)
-      return ` --settings "${path}"`
-    } catch (err) {
-      cliLog(LOG_CH, `Failed to write hook settings for ${ctx.tabId}: ${String(err)}`)
-      return ''
+    if (ctx.hook) {
+      try {
+        args += ` --settings "${writeTabHookSettings(ctx.tabId, ctx.hook.port, ctx.hook.token)}"`
+      } catch (err) {
+        cliLog(LOG_CH, `Failed to write hook settings for ${ctx.tabId}: ${String(err)}`)
+      }
     }
+    // --mcp-config adds to the user's and the project's MCP servers. It takes several
+    // values, so it stays the last argument.
+    if (ctx.mcpServers.length > 0) {
+      try {
+        args += ` --mcp-config "${writeLaunchFile(mcpConfigPath(ctx.tabId), claudeMcpConfig(ctx.mcpServers))}"`
+      } catch (err) {
+        cliLog(LOG_CH, `Failed to write the MCP config for ${ctx.tabId}: ${String(err)}`)
+      }
+    }
+    return { args }
   },
 
   async prepareProject(projectPath: string): Promise<void> {
@@ -596,6 +622,7 @@ export const claudeCodeTool: CliTool = {
   deregisterTab(tabId: string): void {
     signalByTab.delete(tabId)
     cleanupTabHookSettings(tabId)
+    removeLaunchPath(mcpConfigPath(tabId))
   },
 
   getSessionPreview(projectPath: string, sessionId: string): Promise<Array<{ role: 'user' | 'assistant'; text: string }>> {

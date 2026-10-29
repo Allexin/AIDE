@@ -216,6 +216,8 @@ export const qwenCodeTool: CliTool = {
     return findExecutable('qwen')
   },
 
+  aideMcp: { supported: false, note: 'Qwen is legacy and not supported' },
+
   newSessionCommand(): string {
     return 'qwen'
   },

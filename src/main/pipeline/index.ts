@@ -6,6 +6,8 @@ import { pipelineServer } from './server/pipelineServer'
 import { shimLaunch, writeLauncher, type ShimLaunch } from './server/runtimeFiles'
 import { buildPipelineTools, ORCHESTRATOR_RULES } from './mcp/tools'
 import { orchestrators, type OrchestratorConnection } from './orchestrators'
+import { setLaunchMcpProvider } from '../pty/ptyManager'
+import { aideMcpServers } from '../aideMcp/launch'
 import { PipelineManager } from './manager'
 import { PipelineViewService } from './viewService'
 import { sharedPipelinesDir } from './engine/library'
@@ -89,6 +91,9 @@ export async function startPipelineServer(): Promise<void> {
       }))
     })
     logEvent('pipeline-server-started', { port: pipelineServer.getPort() })
+    // CLI tabs get AIDE's MCP server at launch, with the paths of this AIDE.
+    const launch = shimLaunch(process.execPath, shimPath(), runtimeDir())
+    setLaunchMcpProvider((tool, tabId, projectPath) => pipelineServer.isRunning() ? aideMcpServers(tool, tabId, projectPath, launch) : [])
   } catch (err) {
     // Orchestration becomes unavailable; the editor itself is unaffected.
     logEvent('pipeline-server-start-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn')

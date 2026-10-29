@@ -6,7 +6,8 @@ import { resolveOwnerPidFromSnapshot } from '../../platform/processTree'
 import { randomUUID } from 'crypto'
 import { session } from 'electron'
 import { cursorHeadless } from '../../pipeline/headless/cursorHeadless'
-import type { CliTool, SettingsField, UsageInfo } from './types'
+import type { CliTool, SettingsField, UsageInfo, LaunchAdditions, LaunchContext, LaunchMcpServer } from './types'
+import { removeLaunchPath, tabLaunchPath, writeLaunchFile } from './launchFiles'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
 import {
@@ -710,6 +711,22 @@ async function refreshCursorUsage(
   }
 }
 
+/**
+ * Cursor reads MCP servers only from mcp.json files, but loads a local plugin
+ * for one launch (`--plugin-dir`), and a plugin can carry MCP servers. Cursor
+ * loads them without asking for approval (verified against 2026.10.22).
+ */
+function mcpPluginDir(tabId: string): string {
+  return tabLaunchPath('cursor-mcp', tabId, '')
+}
+
+export function cursorMcpPlugin(servers: LaunchMcpServer[]): string {
+  const mcpServers = Object.fromEntries(servers.map((server) => [server.name, {
+    command: server.command, args: server.args, env: { ...server.env, ...server.tabEnv }
+  }]))
+  return JSON.stringify({ name: 'aide', version: '1.0.0', description: "AIDE's MCP server for this tab", mcpServers }, null, 2)
+}
+
 export const cursorAgentTool: CliTool = {
   id: TOOL_ID,
   name: TOOL_NAME,
@@ -719,6 +736,20 @@ export const cursorAgentTool: CliTool = {
 
   async isInstalled(): Promise<boolean> {
     return findExecutable('agent')
+  },
+
+  aideMcp: { supported: true },
+
+  prepareLaunch(ctx: LaunchContext): LaunchAdditions {
+    if (ctx.mcpServers.length === 0) return {}
+    try {
+      const dir = mcpPluginDir(ctx.tabId)
+      writeLaunchFile(join(dir, '.cursor-plugin', 'plugin.json'), cursorMcpPlugin(ctx.mcpServers))
+      return { args: ` --plugin-dir "${dir}"` }
+    } catch (err) {
+      cliLog(LOG_CH, `[mcp] failed to write the MCP plugin for ${ctx.tabId}: ${err instanceof Error ? err.message : String(err)}`)
+      return {}
+    }
   },
 
   newSessionCommand(): string {
@@ -829,6 +860,7 @@ export const cursorAgentTool: CliTool = {
 
   deregisterTab(tabId: string): void {
     cleanupInactivity(tabId)
+    removeLaunchPath(mcpPluginDir(tabId))
   },
 
   settingsFields(): SettingsField[] {

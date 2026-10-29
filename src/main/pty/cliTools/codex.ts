@@ -13,7 +13,8 @@ import { homedir } from 'os'
 import { findExecutable, listProcesses } from '../../platform'
 import { resolveOwnerPidFromSnapshot } from '../../platform/processTree'
 import { dirname, join } from 'path'
-import type { CliTool, CliSession, SettingsField, HistoryEntry, UsageInfo } from './types'
+import type { CliTool, CliSession, SettingsField, HistoryEntry, UsageInfo, LaunchAdditions, LaunchContext, LaunchMcpServer } from './types'
+import { shellLiteral } from './launchFiles'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import {
   findCodexSessionFile,
@@ -195,6 +196,27 @@ function isCodexBusyTitle(title: string): boolean {
   return leadingDotRun !== null
 }
 
+/**
+ * `-c` overrides that add MCP servers to one Codex launch (over a same-named
+ * server of the user's config). Values are TOML literal strings, so they need
+ * no escaping, but cannot contain a single quote.
+ */
+export function codexMcpArgs(servers: LaunchMcpServer[], platform: NodeJS.Platform = process.platform): string {
+  const literal = (value: string): string => {
+    if (value.includes("'")) throw new Error(`cannot pass ${value} to Codex (it contains a single quote)`)
+    return `'${value}'`
+  }
+  const overrides: string[] = []
+  for (const server of servers) {
+    const key = `mcp_servers.${server.name}`
+    const env = Object.entries({ ...server.env, ...server.tabEnv }).map(([name, value]) => `${name}=${literal(value)}`)
+    overrides.push(`${key}.command=${literal(server.command)}`, `${key}.args=[${server.args.map(literal).join(',')}]`, `${key}.env={${env.join(',')}}`)
+    // Codex stops MCP calls after 60 s by default.
+    if (server.toolTimeoutSec) overrides.push(`${key}.tool_timeout_sec=${server.toolTimeoutSec}`)
+  }
+  return overrides.map((override) => ` -c ${shellLiteral(override, platform)}`).join('')
+}
+
 export const codexTool: CliTool = {
   id: TOOL_ID,
   name: TOOL_NAME,
@@ -216,6 +238,18 @@ export const codexTool: CliTool = {
 
   resumeCommand(sessionId: string): string {
     return `codex resume${noDaemonArg()} ${sessionId}`
+  },
+
+  aideMcp: { supported: true },
+
+  prepareLaunch(ctx: LaunchContext): LaunchAdditions {
+    if (ctx.mcpServers.length === 0) return {}
+    try {
+      return { args: codexMcpArgs(ctx.mcpServers) }
+    } catch (err) {
+      cliLog(LOG_CH, `[mcp] ${err instanceof Error ? err.message : String(err)}`)
+      return {}
+    }
   },
 
   exitCommand(): string {

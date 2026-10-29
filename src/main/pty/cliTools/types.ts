@@ -10,11 +10,36 @@ export interface CliSession {
   lastModified: Date
 }
 
-/** Context passed to CliTool.hookLaunchArgs at spawn time. */
-export interface HookLaunchContext {
+/** A stdio MCP server AIDE gives a CLI for one launch. */
+export interface LaunchMcpServer {
+  name: string
+  command: string
+  args: string[]
+  env: Record<string, string>
+  /** Which tab and project the server serves. A CLI that writes the server into a
+   *  file shared by its tabs leaves these out; the tab's own environment carries
+   *  AIDE_TAB_ID to CLIs that pass their environment on to MCP servers. */
+  tabEnv: Record<string, string>
+  /** How long one tool call may take, for CLIs that cut long calls by default. */
+  toolTimeoutSec?: number
+}
+
+/** Context passed to CliTool.prepareLaunch at spawn time. */
+export interface LaunchContext {
   tabId: string
-  hookPort: number
-  hookToken: string
+  projectPath: string
+  /** AIDE's hook server for session binding, or null when it is not running. */
+  hook: { port: number; token: string } | null
+  /** MCP servers to add to this launch; empty when the user turned it off for the CLI or AIDE's server is down. */
+  mcpServers: LaunchMcpServer[]
+}
+
+/** What prepareLaunch adds to a launch. */
+export interface LaunchAdditions {
+  /** Extra CLI args, leading space included. */
+  args?: string
+  /** Extra environment variables for the PTY. */
+  env?: Record<string, string>
 }
 
 export interface CliTool {
@@ -51,12 +76,19 @@ export interface CliTool {
    */
   readonly headless?: HeadlessCapability
 
-  /** Return extra CLI args (leading space included) that wire this launch to
-   *  AIDE's hook server for deterministic session binding, writing any per-tab
-   *  state (e.g. a settings file) as a side effect. Returns '' when hooks are
-   *  unavailable. Tools that don't use hooks omit this method.
+  /** What AIDE adds to each launch of the CLI (args, environment): the wiring to
+   *  AIDE's hook server for deterministic session binding (`ctx.hook`) and the
+   *  MCP servers AIDE gives it (`ctx.mcpServers`), writing any per-tab state
+   *  (e.g. a settings file) as a side effect. Called before every spawn.
    */
-  hookLaunchArgs?(ctx: HookLaunchContext): string
+  prepareLaunch?(ctx: LaunchContext): LaunchAdditions
+
+  /** Whether the CLI takes AIDE's orchestration MCP server through prepareLaunch
+   *  (a per-CLI setting, on by default). `note` replaces the setting's
+   *  description: what it does beyond a launch argument, or why it is not
+   *  supported. CLIs that leave it out get no setting.
+   */
+  readonly aideMcp?: { supported: boolean; note?: string }
 
   /** Find existing sessions for a project on disk, sorted newest first. */
   scanSessions(projectPath: string): Promise<CliSession[]>

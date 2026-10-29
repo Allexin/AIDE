@@ -504,6 +504,7 @@ interface SettingsField {
   type: 'string' | 'boolean' | 'number' | 'password' | 'select'
   options?: Array<{ value: string; label: string }>
   default?: unknown
+  disabled?: boolean
   visibleWhen?: { key: string; value: unknown }
 }
 

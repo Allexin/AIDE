@@ -14,7 +14,7 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { listProcesses } from '../../platform'
 import { resolveOwnerPidFromSnapshot } from '../../platform/processTree'
-import type { CliTool, CliSession, UsageInfo, SettingsField, HistoryEntry } from './types'
+import type { CliTool, CliSession, UsageInfo, SettingsField, HistoryEntry, LaunchAdditions, LaunchContext, LaunchMcpServer } from './types'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import { cliLog } from './cliLogger'
 import { tuiReadyForInput } from './startupHealth'
@@ -114,6 +114,17 @@ async function installProblem(): Promise<string | null> {
 
 // ── Tool implementation ───────────────────────────────────────────────────────
 
+/** OPENCODE_CONFIG_CONTENT (merged over the user's and project's configs) adding MCP servers to one launch, over the user's own content. */
+export function openCodeMcpConfigContent(servers: LaunchMcpServer[], existing?: string): string {
+  let config: Record<string, unknown> = {}
+  try { if (existing) config = JSON.parse(existing) as Record<string, unknown> } catch { /* not JSON: replaced */ }
+  const mcp = { ...((config.mcp ?? {}) as Record<string, unknown>) }
+  for (const server of servers) {
+    mcp[server.name] = { type: 'local', command: [server.command, ...server.args], environment: { ...server.env, ...server.tabEnv }, enabled: true }
+  }
+  return JSON.stringify({ ...config, mcp })
+}
+
 export const openCodeTool: CliTool = {
   id: TOOL_ID,
   name: TOOL_NAME,
@@ -135,6 +146,13 @@ export const openCodeTool: CliTool = {
   // (`opencode serve --service`), which spawns the MCP servers itself — with the
   // environment of whichever tab started the service. AIDE's pipeline shim would
   // then report another tab's AIDE_TAB_ID. A private server inherits this tab's.
+
+  aideMcp: { supported: true },
+
+  prepareLaunch(ctx: LaunchContext): LaunchAdditions {
+    if (ctx.mcpServers.length === 0) return {}
+    return { env: { OPENCODE_CONFIG_CONTENT: openCodeMcpConfigContent(ctx.mcpServers, process.env.OPENCODE_CONFIG_CONTENT) } }
+  },
 
   newSessionCommand(): string {
     return 'opencode --standalone'
