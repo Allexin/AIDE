@@ -8,6 +8,11 @@
 <meta property="og:title" content="AIDE — AI-Driven Code Editor">
 <meta property="og:description" content="Say what you need. Agents build the toolbar, the pipeline, the feature.">
 <meta property="og:image" content="https://get-aide.org/img/orch-2-run.webp">
+<meta property="og:locale" content="en_US">
+<link rel="canonical" href="https://get-aide.org/">
+<link rel="alternate" hreflang="en" href="https://get-aide.org/">
+<link rel="alternate" hreflang="ru" href="https://get-aide.org/ru/">
+<link rel="alternate" hreflang="x-default" href="https://get-aide.org/">
 <link rel="icon" href="img/icon.png">
 <style>
   :root {
@@ -55,6 +60,11 @@
     background: #fff; border-radius: 6px;
   }
   .qr img { width: 100%; height: 100%; display: block; }
+  .lang { display: flex; gap: 2px; font-family: var(--mono); font-size: 13px; }
+  .lang a, .lang span { padding: 4px 7px; border-radius: 6px; }
+  .lang a { color: var(--muted); }
+  .lang a:hover { color: var(--text); text-decoration: none; background: var(--panel); }
+  .lang span { color: var(--text); background: var(--panel); }
   .qr-note { font-size: 12px; color: var(--muted); line-height: 1.3; max-width: 90px; }
 
   .btn {
@@ -93,7 +103,7 @@
     border-radius: 999px; border: 1px solid var(--line); background: var(--bg-2);
     color: var(--muted); font-size: 14px;
   }
-  .badge b { padding: 3px 10px; border-radius: 999px; background: rgba(63, 185, 80, 0.18); color: #8fe39b; font-weight: 600; }
+  .badge b { padding: 3px 10px; border-radius: 999px; background: rgba(63, 185, 80, 0.18); color: #8fe39b; font-weight: 600; white-space: nowrap; }
   a.badge:hover { text-decoration: none; border-color: var(--accent); }
 
   /* Showcase */
@@ -198,6 +208,8 @@
 
   .clis { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
   .chip { font-family: var(--mono); font-size: 14px; padding: 6px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
+  .chip.any { background: transparent; border-style: dashed; border-color: var(--accent); color: var(--accent); }
+  .add-cli { color: var(--muted); font-size: 15px; margin: 14px 0 0; }
 
   .final { text-align: center; }
   .final .qr-big { display: inline-block; background: #fff; padding: 10px; border-radius: 10px; margin: 20px 0 8px; }
@@ -230,6 +242,7 @@
       <a href="https://github.com/Allexin/AIDE">GitHub</a>
     </nav>
     <div class="head-cta">
+      <div class="lang"><span>EN</span><a href="ru/" hreflang="ru" lang="ru" data-lang="ru">RU</a></div>
       <a class="btn" href="https://github.com/Allexin/AIDE/releases/latest">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg>
         Download
@@ -285,7 +298,9 @@
       <div class="clis">
         <span class="chip">Claude Code</span><span class="chip">Codex</span><span class="chip">Cursor Agent</span>
         <span class="chip">Devin</span><span class="chip">OpenCode</span><span class="chip">Qwen Code</span><span class="chip">Terminal</span>
+        <span class="chip any">+ any other</span>
       </div>
+      <p class="add-cli">Missing yours? Ask your agent to add itself to AIDE: there is a <a href="https://github.com/Allexin/AIDE/blob/main/docs/new-cli-tool-spec.md">step-by-step guide</a>, and any top model handles it.</p>
     </div>
   </section>
 
@@ -306,6 +321,11 @@
 </footer>
 
 <script>
+  // The server sends / to /ru/ for Russian browsers; a language picked here overrides that.
+  document.querySelectorAll('[data-lang]').forEach((a) => a.addEventListener('click', () => {
+    document.cookie = 'lang=' + a.dataset.lang + '; path=/; max-age=31536000; samesite=lax';
+  }));
+
   // Each case is one wish and the frames that answer it. A frame's caption types out
   // while the frame is on screen, and the next frame comes only after the caption is
   // complete, so the caption doubles as the progress indicator. Labels: 'say' (the
@@ -317,7 +337,7 @@
         { src: 'img/cli-1-claude.webp', label: 'Claude Code', text: 'Claude Code adds a sprint to the character…', alt: 'AIDE with the Claude Code tab active and working' },
         { src: 'img/cli-2-codex.webp', label: 'Codex', text: '…Codex writes an automation test…', alt: 'AIDE with the Codex tab active and working' },
         { src: 'img/cli-3-cursor.webp', label: 'Cursor Agent', text: '…Cursor Agent reviews for frame-rate bugs…', alt: 'AIDE with the Cursor Agent tab active and working' },
-        { src: 'img/cli-4-opencode.webp', label: 'OpenCode', text: '…and OpenCode documents the classes. One window, four agents.', alt: 'AIDE with the OpenCode tab active and working' }
+        { src: 'img/cli-4-opencode.webp', label: 'OpenCode', text: '…and OpenCode documents the classes. One window, every agent you need.', alt: 'AIDE with the OpenCode tab active and working' }
       ]
     },
     {

@@ -1,6 +1,7 @@
 # get-aide.org landing
 
 - `index.html` — the page (no build step). Showcase frames are configured in the `scenarios` array at the bottom.
+- `ru/index.html` — the Russian page, generated: `python tools/build.py` applies `i18n/ru.json` (exact English fragment → translation) to `index.html`. Edit the English page and the dictionary, then rebuild; the build fails if a dictionary fragment is no longer in `index.html`, but a new English string must be added to the dictionary by hand. The server sends `/` to `/ru/` when the browser's first language is Russian, unless the visitor picked a language with the EN|RU switcher (`lang` cookie).
 - `img/` — published images: icon, download QR, showcase screenshots.
 - `deploy.sh`, `publish.sh`, `server/` — deployment scripts. They name the server account, so they are git-ignored and kept locally only.
 - `public/` on the server holds demo files; anything copied there is served at `https://get-aide.org/public/<name>`.
