@@ -1,0 +1,73 @@
+{
+  "id": "game-feature",
+  "name": "Game feature",
+  "description": "Implements one gameplay feature of the Unreal project with its art: C++ code and automation tests, code review, generated source textures and a visual review. Needs the feature description, acceptance criteria and an art brief. Produces one reviewed commit.",
+  "engineVersion": 5,
+  "params": {
+    "feature": { "type": "string", "description": "What the feature does in the game" },
+    "acceptance": { "type": "string[]", "description": "Acceptance criteria for the code" },
+    "artBrief": { "type": "string", "description": "The textures or sprites the feature needs, their style and sizes" }
+  },
+  "defaults": { "cli": "claude-code", "timeoutMin": 45 },
+  "steps": [
+    {
+      "type": "group", "id": "code", "name": "Code",
+      "steps": [
+        {
+          "type": "loop", "id": "codeLoop", "name": "Code, tests and review", "maxIterations": 3,
+          "steps": [
+            {
+              "type": "agent", "id": "implement",
+              "summary": "implements the feature in C++ and adds automation tests for it; on later iterations fixes the feedback",
+              "role": "roles/implementer.md", "output": "implementerReport", "effort": "high",
+              "inputs": ["params.feature", "params.acceptance"],
+              "escalateIf": "outputs.implement.status != 'done'",
+              "escalateMessage": "The implementer reports the feature is blocked or should not be done as specified."
+            },
+            { "type": "check", "id": "build", "command": "powershell -NoProfile -ExecutionPolicy Bypass -File aide/scripts/pipeline-ue.ps1 build-editor" },
+            { "type": "check", "id": "tests", "command": "powershell -NoProfile -ExecutionPolicy Bypass -File aide/scripts/pipeline-ue.ps1 tests" },
+            {
+              "type": "agent", "id": "codeReview",
+              "summary": "Codex reviews the C++ diff against the feature and the acceptance criteria; findings send the loop back to the implementer",
+              "role": "roles/code-reviewer.md", "cli": "codex", "permissions": "read-only", "output": "reviewVerdict",
+              "inputs": ["params.feature", "params.acceptance", { "ref": "run.diff", "include": ["Source/**"] }],
+              "repeatIf": "outputs.codeReview.verdict != 'accept'"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "group", "id": "graphics", "name": "Graphics",
+      "steps": [
+        {
+          "type": "loop", "id": "artLoop", "name": "Art and visual review", "maxIterations": 3,
+          "steps": [
+            {
+              "type": "agent", "id": "generateArt",
+              "summary": "generates the source textures from the art brief with a script under Tools/art/ and lists them in Art/manifest.json",
+              "role": "roles/tech-artist.md", "output": "implementerReport",
+              "inputs": ["params.feature", "params.artBrief"]
+            },
+            { "type": "check", "id": "validateArt", "command": "python aide/scripts/validate-art.py" },
+            {
+              "type": "agent", "id": "visualReview",
+              "summary": "looks at every generated image and checks it against the art brief; findings send the loop back to the artist",
+              "role": "roles/art-reviewer.md", "permissions": "read-only", "session": "new", "output": "reviewVerdict",
+              "inputs": ["params.artBrief", { "ref": "run.changedFiles", "include": ["Art/**", "Tools/art/**"] }],
+              "repeatIf": "outputs.visualReview.verdict != 'accept'"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "commit", "id": "commit", "review": "algorithmic",
+      "prep": {
+        "type": "agent", "id": "commitPrep", "summary": "stages the code, tests and art and writes the commit message",
+        "role": "roles/commit-prep.md", "session": "continue:implement", "output": "commitPrep", "effort": "low",
+        "inputs": ["outputs.codeReview.non_blocking", "outputs.visualReview.non_blocking"]
+      }
+    }
+  ]
+}

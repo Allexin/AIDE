@@ -12,3 +12,8 @@ IMPROVEMENTS_PLAN2.md
 start_dev.vbs
 .qwen/
 release/
+site/shots/
+site/mockups/
+site/deploy.sh
+site/publish.sh
+site/server/

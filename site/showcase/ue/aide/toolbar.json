@@ -1,0 +1,182 @@
+{
+  "projectType": "unreal",
+  "buttons": [
+    {
+      "id": "ue-genfiles",
+      "icon": "⚙",
+      "tooltip": "Generate Project Files",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File aide/scripts/ue.ps1 genfiles",
+      "cwd": "${projectRoot}",
+      "channels": {
+        "stdout": {
+          "name": "Project Files",
+          "flash": true
+        },
+        "stderr": {
+          "name": "Project Files Errors",
+          "attention": true,
+          "flash": true
+        }
+      },
+      "sound": true
+    },
+    {
+      "id": "ue-vs",
+      "icon": "💻",
+      "tooltip": "Open in Visual Studio",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File aide/scripts/ue.ps1 vs",
+      "cwd": "${projectRoot}",
+      "sound": false
+    },
+    {
+      "type": "splitter"
+    },
+    {
+      "id": "ue-build-editor",
+      "icon": "🔨",
+      "tooltip": "Build Editor (Win64 Development)",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File aide/scripts/ue.ps1 build-editor",
+      "cwd": "${projectRoot}",
+      "channels": {
+        "stdout": {
+          "name": "UE Build",
+          "flash": true
+        },
+        "stderr": {
+          "name": "UE Build Errors",
+          "attention": true,
+          "flash": true
+        }
+      },
+      "sound": true
+    },
+    {
+      "id": "ue-build-game",
+      "icon": "🧱",
+      "tooltip": "Build Game (Win64 Development)",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File aide/scripts/ue.ps1 build-game",
+      "cwd": "${projectRoot}",
+      "channels": {
+        "stdout": {
+          "name": "UE Build",
+          "flash": true
+        },
+        "stderr": {
+          "name": "UE Build Errors",
+          "attention": true,
+          "flash": true
+        }
+      },
+      "sound": true
+    },
+    {
+      "id": "ue-clean",
+      "icon": "🧹",
+      "tooltip": "Clean Binaries and Intermediate",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File aide/scripts/ue.ps1 clean",
+      "cwd": "${projectRoot}",
+      "channels": {
+        "stdout": {
+          "name": "Clean",
+          "flash": true
+        },
+        "stderr": {
+          "name": "Clean Errors",
+          "attention": true,
+          "flash": true
+        }
+      },
+      "sound": true
+    },
+    {
+      "type": "splitter"
+    },
+    {
+      "id": "ue-editor",
+      "icon": "🎮",
+      "tooltip": "Open in Unreal Editor",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File aide/scripts/ue.ps1 editor",
+      "cwd": "${projectRoot}",
+      "sound": false
+    },
+    {
+      "id": "ue-play",
+      "icon": "▶",
+      "tooltip": "Play standalone (-game, 1280x720)",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File aide/scripts/ue.ps1 play",
+      "cwd": "${projectRoot}",
+      "sound": false
+    },
+    {
+      "type": "splitter"
+    },
+    {
+      "id": "ue-tests",
+      "icon": "🧪",
+      "tooltip": "Run Automation Tests",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File aide/scripts/ue.ps1 tests",
+      "cwd": "${projectRoot}",
+      "channels": {
+        "stdout": {
+          "name": "UE Tests",
+          "flash": true
+        },
+        "stderr": {
+          "name": "UE Tests Errors",
+          "attention": true,
+          "flash": true
+        }
+      },
+      "sound": true
+    },
+    {
+      "id": "ue-log",
+      "icon": "📜",
+      "tooltip": "Open Last Game Log",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File aide/scripts/ue.ps1 log",
+      "cwd": "${projectRoot}",
+      "sound": false
+    },
+    {
+      "type": "splitter"
+    },
+    {
+      "id": "ue-cook",
+      "icon": "🍳",
+      "tooltip": "Cook Content (Windows)",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File aide/scripts/ue.ps1 cook",
+      "cwd": "${projectRoot}",
+      "channels": {
+        "stdout": {
+          "name": "UE Cook",
+          "flash": true
+        },
+        "stderr": {
+          "name": "UE Cook Errors",
+          "attention": true,
+          "flash": true
+        }
+      },
+      "sound": true
+    },
+    {
+      "id": "ue-package",
+      "icon": "📦",
+      "tooltip": "Package Win64 (Shipping)",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File aide/scripts/ue.ps1 package",
+      "cwd": "${projectRoot}",
+      "channels": {
+        "stdout": {
+          "name": "UE Package",
+          "flash": true
+        },
+        "stderr": {
+          "name": "UE Package Errors",
+          "attention": true,
+          "flash": true
+        }
+      },
+      "sound": true
+    }
+  ]
+}
