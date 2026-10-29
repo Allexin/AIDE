@@ -34,7 +34,7 @@
   "<h3>Remote access</h3><p>Continue a terminal session from your phone or tablet — scan a QR code and keep going.</p>": "<h3>Удалённый доступ</h3><p>Продолжайте терминальную сессию с телефона или планшета: отсканируйте QR-код и работайте дальше.</p>",
 
   "<span class=\"chip any\">+ any other</span>": "<span class=\"chip any\">+ любой другой</span>",
-  "Missing yours? Ask your agent to add itself to AIDE: there is a <a href=\"https://github.com/Allexin/AIDE/blob/main/docs/multi-cli-implementation-steps.md\">step-by-step guide</a>, and any top model handles it.": "Нет вашего? Попросите агента добавить себя в AIDE: для этого есть <a href=\"https://github.com/Allexin/AIDE/blob/main/docs/multi-cli-implementation-steps.md\">пошаговая инструкция</a>, и любая топовая модель с ней справляется.",
+  "Missing yours? Ask your agent to add itself to AIDE: there is a <a href=\"https://github.com/Allexin/AIDE/blob/main/docs/new-cli-tool-spec.md\">step-by-step guide</a>, and any top model handles it.": "Нет вашего? Попросите агента добавить себя в AIDE: для этого есть <a href=\"https://github.com/Allexin/AIDE/blob/main/docs/new-cli-tool-spec.md\">пошаговая инструкция</a>, и любая топовая модель с ней справляется.",
 
   "<h2>Get AIDE</h2>": "<h2>Скачать AIDE</h2>",
   "Portable build — unpack and run.": "Портативная сборка: распакуйте и запускайте.",
