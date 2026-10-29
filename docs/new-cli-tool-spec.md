@@ -34,9 +34,11 @@ PtyManager.createNewSessionTab(toolId)
     │
     ├─ tool.prepareProject(projectPath)   // one-time setup (if needed)
     │
+    ├─ tool.prepareLaunch(ctx)            // args/env for this launch: hooks, AIDE's MCP server
+    │
     ├─ spawn PowerShell PTY
     │
-    ├─ write tool.newSessionCommand()     // start the CLI in the PTY
+    ├─ write tool.newSessionCommand() + prepareLaunch args   // start the CLI in the PTY
     │
     ├─ tool.checkStartupHealth(output)    // monitor readiness
     │
@@ -114,6 +116,7 @@ Full interface (`src/main/pty/cliTools/types.ts`):
 | Field | Type | Description |
 |-------|------|-------------|
 | `installUrl` | `string` | Link to installation instructions. Shown in CLI Tools Manager next to the Activate button. |
+| `aideMcp` | `{ supported: boolean; note?: string }` | Whether the CLI takes AIDE's MCP server through `prepareLaunch`. Adds the per-CLI setting *Give AIDE's MCP server to this CLI* (on by default); `supported: false` shows it disabled with `note` as the reason. See [AIDE's MCP server](#preparelaunch). |
 
 ### Optional methods — startup and runtime
 
@@ -122,6 +125,7 @@ Full interface (`src/main/pty/cliTools/types.ts`):
 | `prepareProject` | `(projectPath) => Promise<void>` | One-time setup before the first session. Example: write a config file so the CLI skips permission prompts. |
 | `checkStartupHealth` | `(accumulated, elapsedMs) => 'ok' \| 'dead' \| 'pending'` | Inspects accumulated PTY output. Return `'ok'` when the CLI is ready, `'dead'` on a fatal error. |
 | `getEnvOverrides` | `() => Record<string, string>` | Environment variables merged into the PTY environment at every spawn. |
+| `prepareLaunch` | `(ctx: LaunchContext) => { args?, env? }` | What AIDE adds to each launch: the hook wiring (`ctx.hook`) and AIDE's MCP server (`ctx.mcpServers`). See [`prepareLaunch`](#preparelaunch). |
 | `resolveOwnerPid` | `(candidatePids: number[]) => Promise<number \| null>` | When multiple tabs exist, determines which PTY spawned the new session file. |
 | `watchSessionLabel` | `(projectPath, sessionId, onLabel) => () => void` | Streams title updates for a running session. Returns unsubscribe. |
 | `detectTitleEvent` | `(prevTitle, newTitle) => string \| null` | Returns an event name when an OSC title transition is notable. |
@@ -363,6 +367,38 @@ checkStartupHealth(accumulated: string, elapsedMs: number): 'ok' | 'dead' | 'pen
 ```
 
 **Important:** Return `'dead'` only on clear error signals. When in doubt, return `'pending'` until the timeout.
+
+### `prepareLaunch`
+
+Called before every spawn of a tab. Returns extra arguments (leading space
+included) appended to the command line and extra environment variables for the
+PTY. `ctx` carries:
+
+- `hook` — AIDE's hook server (`port`, `token`) for deterministic session
+  binding, or `null`.
+- `mcpServers` — the stdio MCP servers AIDE gives this launch: `name`,
+  `command`, `args`, `env`, `tabEnv` (`AIDE_TAB_ID`, `AIDE_PROJECT`) and
+  `toolTimeoutSec`. Empty when the user turned the setting off or AIDE's server
+  is down. Pass them the way your CLI takes MCP servers for one launch (a flag
+  with a config file, config overrides, an environment variable, a plugin
+  directory) — never by editing the user's config. Merge `env` and `tabEnv`,
+  unless the servers go into a file shared by several tabs.
+
+Declare `aideMcp: { supported: true }` when you do. How each built-in CLI does
+it, with what was verified live, is in `docs/aide-mcp-launch.md`.
+
+```typescript
+aideMcp: { supported: true },
+
+prepareLaunch(ctx: LaunchContext): LaunchAdditions {
+  if (ctx.mcpServers.length === 0) return {}
+  const path = writeLaunchFile(tabLaunchPath('mytool-mcp', ctx.tabId, '.json'), myMcpConfig(ctx.mcpServers))
+  return { args: ` --mcp-config "${path}"` }
+}
+```
+
+Per-tab files go through `launchFiles.ts` (`tabLaunchPath`, `writeLaunchFile`)
+and are removed in `deregisterTab` (`removeLaunchPath`).
 
 ### `getEnvOverrides`
 
@@ -766,7 +802,7 @@ settingsFields(): SettingsField[] {
 |------|-------------|-------|
 | `'string'` | Text input | |
 | `'password'` | Password input | Value is masked |
-| `'boolean'` | Checkbox | |
+| `'boolean'` | Checkbox | `disabled: true` shows it greyed out; say why in `description` |
 | `'number'` | Number input | |
 | `'select'` | Dropdown | Requires `options` |
 
