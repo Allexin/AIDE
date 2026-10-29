@@ -107,7 +107,9 @@ The project's pipeline run is a page of its own, `/pipeline?port&project&tab`
 (served by the aggregator like `/terminal`). It shows the run header with the
 controls (pause, stop now, resume, abandon), the pending escalation with the
 answers its kind takes, the CLI-unavailable and usage-limit waits, the last
-decision, the step list with step states and loop progress, and the report of a
+decision, the current account and limits of every CLI the machine uses (as the
+desktop pipeline tab shows them; refreshed every minute while the page is shown,
+usage from the same caches as the status bar), the step list with step states and loop progress, and the report of a
 finished run. Tapping a step that ran opens its visit (a full-screen panel on a
 phone, a right column on a wide screen): an agent step's live transcript, what its
 agent was sent (Input) and its output; a check's live log. Visit chips switch
@@ -128,6 +130,7 @@ Client → Server:
   { type: 'pipeline-control', action: 'pause' | 'stop' | 'resume' | 'abandon' }
   { type: 'pipeline-answer', escalationId, action: 'continue' | 'retry' | 'reject' | 'stop', text }
   { type: 'pipeline-report', runId }
+  { type: 'pipeline-accounts' }                       ← accounts and limits of the run's CLIs
   { type: 'pipeline-visit', runId, node, visit }     ← open a visit; replaces the open one
   { type: 'pipeline-visit-close' }
   { type: 'pipeline-agent-input', runId, node, visit }
@@ -137,6 +140,7 @@ Server → Client:
   { type: 'pipeline-control-result', action, error: string | null }
   { type: 'pipeline-answer-result', escalationId, error: string | null }
   { type: 'pipeline-report', runId, report }
+  { type: 'pipeline-accounts', clis: Array<{ id, name, account: { label, saved } | null, usage: { summary, tooltip, level, fetchedAt, hasLimit? } | null }> }
   { type: 'pipeline-visit', runId, node, visit, entries, skippedEntries, log, skippedLog, output }
   { type: 'pipeline-visit-entry', runId, node, visit, entry }  ← live transcript of the open visit
   { type: 'pipeline-visit-log', runId, node, visit, text }     ← live check output of the open visit

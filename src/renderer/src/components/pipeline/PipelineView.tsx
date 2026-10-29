@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { isRunActive, liveKey, usePipelineStore, type VisitRef } from '../../store/usePipelineStore'
 import { TranscriptView } from '../history/TranscriptView'
-import { blockTitle, walkSteps, type AgentInputRecord, type Step } from '../../../../shared/pipelineMachine'
+import { blockTitle, machineClis, walkSteps, type AgentInputRecord, type Step } from '../../../../shared/pipelineMachine'
 import { AccountLabel, UsageLabel, useAccountUsage } from '../cli/AccountUsage'
 
 /**
@@ -140,17 +140,6 @@ export default function PipelineView(): React.ReactElement | null {
     {pending && <EscalationPanel escalation={pending} />}
     <CliAccounts machine={machine} />
   </div>
-}
-
-/** CLI tool ids the machine runs: agent steps and commit reviewers, falling back to the machine default. */
-function machineClis(machine: PipelineMachine): string[] {
-  const ids = new Set<string>()
-  const fallback = machine.defaults?.cli
-  walkSteps(machine.steps, (step) => {
-    const cli = step.type === 'agent' ? step.cli ?? fallback : step.type === 'commit' && step.review === 'agent' ? step.reviewer?.cli ?? fallback : undefined
-    if (cli) ids.add(cli)
-  })
-  return [...ids]
 }
 
 const LABEL_STYLE: React.CSSProperties = { fontSize: 11, whiteSpace: 'nowrap', userSelect: 'none' }

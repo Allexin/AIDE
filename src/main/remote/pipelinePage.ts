@@ -40,7 +40,12 @@ export function makePipelineHtml(port: number, projectId: string, projectName: s
     .note.error { color: #f48771; background: #3a1f1f; }
     .note.info { color: #dcdcaa; background: #2f2f22; }
     .note.muted { color: #888; background: #252526; }
-    #escalation:empty, #report:empty { display: none; }
+    #escalation:empty, #report:empty, #accounts:empty { display: none; }
+    #accounts { margin: 6px 12px; padding: 6px 10px; background: #252526; border-radius: 4px; font-size: 12px; }
+    .acc-head { color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
+    .acc-row { display: flex; flex-wrap: wrap; gap: 2px 8px; padding: 2px 0; overflow-wrap: anywhere; }
+    .acc-name { color: #cccccc; font-weight: 600; }
+    .acc-age { opacity: 0.6; }
     .esc-card { margin: 8px 12px; padding: 10px 12px; background: #2b1d1d; border: 1px solid #a33; border-radius: 6px; animation: attention 1.2s ease-in-out infinite alternate; }
     @keyframes attention { from { border-color: #a33; } to { border-color: #f0a500; } }
     .esc-title { color: #ffb3b3; font-weight: 600; }
@@ -124,6 +129,7 @@ ${HISTORY_STYLE}
   <div id="sub">Connecting...</div>
   <div id="controls"></div>
   <div id="notices"></div>
+  <section id="accounts"></section>
   <section id="escalation"></section>
   <section id="report"></section>
   <main id="steps"></main>
@@ -166,6 +172,10 @@ ${HISTORY_STYLE}
     var visitInputs = null
     var visitPane = null
     var visitFinished = false
+    // The current account and limits of the CLIs the run's machine uses (as the editor's pipeline tab shows them).
+    var accounts = null
+    var accountsRunId = null
+    var ACCOUNTS_REFRESH_MS = 60000
 
     document.getElementById('project').textContent = projectName
     var back = document.getElementById('back')
@@ -405,10 +415,54 @@ ${HISTORY_STYLE}
       })
     }
 
+    // --- Accounts and limits ---
+    function requestAccounts() {
+      accountsRunId = run ? run.runId : null
+      if (run) sendWs({ type: 'pipeline-accounts' })
+    }
+    function usageAge(fetchedAt) {
+      if (!fetchedAt) return ''
+      var sec = Math.floor((Date.now() - fetchedAt) / 1000)
+      if (sec < 5) return ''
+      if (sec < 60) return sec + 's ago'
+      var min = Math.floor(sec / 60)
+      return min < 60 ? min + 'm ago' : Math.floor(min / 60) + 'h' + (min % 60) + 'm ago'
+    }
+    function renderAccounts() {
+      var box = document.getElementById('accounts')
+      box.innerHTML = ''
+      if (!run || !accounts || accounts.length === 0) return
+      box.appendChild(el('div', 'acc-head', 'Current accounts and limits'))
+      accounts.forEach(function(cli) {
+        var row = el('div', 'acc-row')
+        row.appendChild(el('span', 'acc-name', cli.name))
+        if (cli.account) {
+          var account = el('span', '', cli.account.label)
+          account.style.color = cli.account.saved ? '#e6e6e6' : '#cca700'
+          account.title = cli.account.saved ? 'CLI account' : 'CLI account not saved in AIDE'
+          row.appendChild(account)
+        }
+        if (cli.usage) {
+          var usage = el('span', '', cli.usage.summary)
+          var u = cli.usage
+          usage.style.color = u.hasLimit === false ? '#e6e6e6' : u.level === 'critical' ? '#f44747' : u.level === 'warn' ? '#cca700' : '#e6e6e6'
+          usage.title = u.tooltip || ''
+          var age = usageAge(u.fetchedAt)
+          if (age) usage.appendChild(el('span', 'acc-age', ' (' + age + ')'))
+          row.appendChild(usage)
+        }
+        if (!cli.account && !cli.usage) row.appendChild(el('span', 'acc-age', '—'))
+        box.appendChild(row)
+      })
+    }
+    setInterval(function() { if (!document.hidden) requestAccounts() }, ACCOUNTS_REFRESH_MS)
+    document.addEventListener('visibilitychange', function() { if (!document.hidden) requestAccounts() })
+
     function render() {
       renderHeader()
       renderControls()
       renderNotices()
+      renderAccounts()
       renderEscalation()
       renderReport()
       renderSteps()
@@ -613,6 +667,7 @@ ${HISTORY_RENDER_SCRIPT}
         wsReady = true
         reconnectDelay = 1000
         reportRunId = null
+        accountsRunId = null
         sendWs({ type: 'pipeline-subscribe' })
         if (openVisit) requestVisit()
       } else if (msg.type === 'auth-fail') {
@@ -621,7 +676,12 @@ ${HISTORY_RENDER_SCRIPT}
         var previous = run ? run.runId : null
         run = msg.run
         if (!run || run.runId !== previous) shownEscalationId = null
+        if (!run) accounts = null
+        else if (run.runId !== accountsRunId) { accounts = null; requestAccounts() }
         render()
+      } else if (msg.type === 'pipeline-accounts') {
+        accounts = msg.clis
+        renderAccounts()
       } else if (msg.type === 'pipeline-control-result') {
         controlError = msg.error || null
         renderNotices()

@@ -1,4 +1,5 @@
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
+import { currentAccountDisplay } from '../accounts/accountInfo'
 import { existsSync, readdirSync, readFileSync, writeFileSync, statSync, promises as fsAsync } from 'fs'
 import { join } from 'path'
 import { spawn } from 'child_process'
@@ -1040,34 +1041,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   })
 
   // ── Accounts: get current account display info ──────────────────────────────
-  ipcMain.handle('accounts:get-current-info', async (_event, toolId: string) => {
-    const tool = getToolById(toolId)
-    if (!tool?.getLoginIdentifier) return null
-
-    const identifier = await tool.getLoginIdentifier()
-    if (!identifier) return null
-
-    // Tools without account system (e.g. OpenCode) — show identifier without "not saved"
-    if (!tool.hasAccountSystem()) {
-      return { label: identifier, saved: true }
-    }
-
-    // First: check tracked active account
-    const activeId = getActiveAccount(toolId)
-    if (activeId) {
-      const active = listAccounts(toolId).find((a) => a.id === activeId)
-      if (active) return { label: `${active.name} (${identifier})`, saved: true }
-    }
-
-    // Fallback: find by identifier string match (e.g. email for Claude Code)
-    const byIdentifier = listAccounts(toolId).find((a) => a.identifier === identifier)
-    if (byIdentifier) {
-      setActiveAccount(toolId, byIdentifier.id)
-      return { label: `${byIdentifier.name} (${identifier})`, saved: true }
-    }
-
-    return { label: `account not saved (${identifier})`, saved: false }
-  })
+  ipcMain.handle('accounts:get-current-info', (_event, toolId: string) => currentAccountDisplay(toolId))
 
   // ── Usage info: get usage/limits for a CLI tool ────────────────────────────
   ipcMain.handle('usage:get-info', async (event, toolId: string) => {

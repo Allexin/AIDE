@@ -28,6 +28,8 @@ import { buildRemoteRunView } from './pipelineRunView'
 import { makePipelineHtml } from './pipelinePage'
 import { HISTORY_RENDER_SCRIPT, HISTORY_STYLE } from './historyRender'
 import { escapeHtml, safeJsJson } from './pageUtil'
+import { currentAccountDisplay } from '../accounts/accountInfo'
+import { machineClis } from '../../shared/pipelineMachine'
 
 const AGGREGATOR_PORT = 3847
 // Retry pacing while another process holds the aggregator port: doubles per attempt.
@@ -35,6 +37,32 @@ const AGGREGATOR_RETRY_MIN_MS = 500
 const AGGREGATOR_RETRY_MAX_MS = 30_000
 const SESSION_TTL = 24 * 60 * 60 * 1000  // 24 hours
 const REMOTE_FILE_MAX_BYTES = 5 * 1024 * 1024
+/** Usage data older than this is fetched again for the remote pipeline page (the editor's own focused refresh). */
+const ACCOUNT_USAGE_MAX_AGE_MS = 5 * 60_000
+
+export interface RemoteCliAccount {
+  id: string
+  name: string
+  account: { label: string; saved: boolean } | null
+  usage: { summary: string; tooltip: string; level: 'normal' | 'warn' | 'critical'; fetchedAt: number; hasLimit?: boolean } | null
+}
+
+async function pipelineAccounts(ids: string[]): Promise<RemoteCliAccount[]> {
+  return Promise.all(ids.map(async (id): Promise<RemoteCliAccount> => {
+    const tool = getToolById(id)
+    const [account, usage] = await Promise.all([
+      currentAccountDisplay(id).catch(() => null),
+      Promise.resolve(tool?.getUsageInfo?.(ACCOUNT_USAGE_MAX_AGE_MS) ?? null).catch(() => null)
+    ])
+    return {
+      id,
+      name: tool?.name ?? id,
+      account,
+      usage: usage ? { summary: usage.summary, tooltip: usage.tooltip, level: usage.level, fetchedAt: usage.fetchedAt, hasLimit: usage.hasLimit } : null
+    }
+  }))
+}
+
 const RUN_CONTROLS: readonly string[] = ['pause', 'stop', 'resume', 'abandon'] satisfies RunControl[]
 const ANSWER_ACTIONS: readonly string[] = ['continue', 'retry', 'reject', 'stop'] satisfies AnswerAction[]
 // What the pipeline page gets of a step visit when it opens it: the end of a long transcript or check log.
@@ -1548,6 +1576,12 @@ export class RemoteServer {
             if (!projectPath) { push(null); break }
             pipelineCleanup = pipelineView.subscribe(projectPath, { onState: push })
             push(pipelineView.snapshot(projectPath))
+            break
+          }
+          // The current account and limits of every CLI the run's machine uses, as the pipeline tab shows them.
+          case 'pipeline-accounts': {
+            const snapshot = projectPath ? pipelineView.snapshot(projectPath) : null
+            void pipelineAccounts(snapshot ? machineClis(snapshot.machine) : []).then((clis) => send({ type: 'pipeline-accounts', clis }))
             break
           }
           case 'pipeline-control': {

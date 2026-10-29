@@ -206,6 +206,17 @@ export function walkSteps(steps: Step[], visit: (step: Step, ancestors: Step[]) 
   }
 }
 
+/** CLI tool ids the machine runs: agent steps and commit reviewers, falling back to the machine default. */
+export function machineClis(machine: Pick<MachineDefinition, 'steps' | 'defaults'>): string[] {
+  const ids = new Set<string>()
+  const fallback = machine.defaults?.cli
+  walkSteps(machine.steps, (step) => {
+    const cli = step.type === 'agent' ? step.cli ?? fallback : step.type === 'commit' && step.review === 'agent' ? step.reviewer?.cli ?? fallback : undefined
+    if (cli) ids.add(cli)
+  })
+  return [...ids]
+}
+
 /** The display title of a block. */
 export function blockTitle(step: Step): string {
   if ((step.type === 'loop' || step.type === 'group') && step.name) return step.name
