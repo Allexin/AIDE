@@ -165,6 +165,10 @@ interface PipelineRunState {
   result: 'success' | 'failure' | null
   startedAt: string
   finishedAt: string | null
+  /** When a run stopped on a CLI usage limit resumes by itself. */
+  limitResumeAt?: string | null
+  /** The CLI whose usage limit the run waits for. */
+  limitCli?: string | null
 }
 
 interface PipelineRunSnapshot {

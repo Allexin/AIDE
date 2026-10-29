@@ -117,6 +117,9 @@ export default function PipelineView(): React.ReactElement | null {
     <div style={{ height: 34, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '0 10px', background: '#252526', borderBottom: '1px solid #3d3d3d', fontSize: 12 }}>
       <span style={{ fontWeight: 600, fontSize: 13 }}>{machine.name}</span>
       <span style={{ color: STATUS_COLOR[state.status] }}>● {STATUS_LABEL[state.status]}</span>
+      {state.status === 'stopped' && state.limitResumeAt && <span style={{ color: '#dcdcaa', whiteSpace: 'nowrap' }} title={`The run waits for the ${state.limitCli ?? 'CLI'} usage limit to reset and resumes by itself (or earlier with Resume)`}>
+        {state.limitCli ?? 'CLI'} usage limit · resumes at {clockTime(state.limitResumeAt)}
+      </span>}
       <span style={{ color: '#888' }}>{elapsed(state.startedAt, state.finishedAt)}</span>
       <span style={{ color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{state.runId}</span>
       <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
@@ -140,6 +143,13 @@ export default function PipelineView(): React.ReactElement | null {
     {pending && <EscalationPanel escalation={pending} />}
     <CliAccounts machine={machine} />
   </div>
+}
+
+/** "16:22", or "Oct 30 16:22" when not today. */
+function clockTime(iso: string): string {
+  const date = new Date(iso)
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return date.toDateString() === new Date().toDateString() ? time : `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
 }
 
 const LABEL_STYLE: React.CSSProperties = { fontSize: 11, whiteSpace: 'nowrap', userSelect: 'none' }
