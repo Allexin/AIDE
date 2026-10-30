@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron'
+import { accountText } from '../../accounts/accountDisplay'
 
 type WindowProvider = () => Iterable<BrowserWindow>
 type LogObserver = (channel: string, message: string) => void
@@ -18,10 +19,11 @@ export function addLogObserver(fn: LogObserver): () => void {
 
 /** Send a log line to every renderer's LogPanel under the given channel. */
 export function cliLog(channel: string, message: string): void {
-  for (const obs of logObservers) obs(channel, message)
+  const shown = accountText(message)
+  for (const obs of logObservers) obs(channel, shown)
   for (const win of getWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send('cli:log', { channel, message })
+      win.webContents.send('cli:log', { channel, message: shown })
     }
   }
 }

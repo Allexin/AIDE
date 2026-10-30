@@ -68,11 +68,18 @@ export interface AgentStep extends StepBase {
   repeatIf?: string
   /** Which enclosing loop `repeatIf` repeats; defaults to the innermost one. */
   repeatLoop?: string
-  /** Hands the run to the orchestrator/user when true (e.g. the implementer reports `plan_wrong`). */
+  /** Hands the run to the agents or the user when true (e.g. the implementer reports `plan_wrong`). */
   escalateIf?: string
   escalateMessage?: string
-  escalateTo?: 'user' | 'orchestrator'
+  escalateTo?: EscalationTo
 }
+
+/**
+ * Who a decision of a run goes to. `agent`: the agents that manage the run — the
+ * plan's Orchestrator when the plan lets it answer, the Strategist otherwise.
+ * `orchestrator` is the name of `agent` in machines written for engine 5 or older.
+ */
+export type EscalationTo = 'agent' | 'user' | 'orchestrator'
 
 /** An input with a path filter; filters apply to `run.diff`, `run.stagedDiff` and `run.changedFiles`. */
 export interface AgentInput {
@@ -115,7 +122,7 @@ export interface CheckStep extends StepBase {
 export interface GateStep extends StepBase {
   type: 'gate'
   question: string
-  to?: 'user' | 'orchestrator'
+  to?: EscalationTo
   /** Which enclosing loop a rejection repeats; defaults to the innermost one. */
   repeatLoop?: string
 }

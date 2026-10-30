@@ -6,7 +6,7 @@ import { join } from 'path'
 import { spawn } from 'child_process'
 import { removeRecentProject, getAppState, loadOpenSessions, getActivatedTools, setActivatedTools } from '../config/appState'
 import { getAppConfig, getToolConfig, updateAppConfig, updateToolConfig } from '../config/appConfig'
-import type { ReasoningConfig, SessionsConfig, UpdatesConfig } from '../config/appConfig'
+import type { PrivacyConfig, ReasoningConfig, SessionsConfig, UpdatesConfig } from '../config/appConfig'
 import { getUpdateStatus, skipVersion, dismissNotification, RELEASES_URL } from '../updater/updater'
 import { readProjectSettings, writeProjectSettings } from '../config/projectConfig'
 import {
@@ -19,7 +19,7 @@ import {
   type ToolbarItem
 } from '../config/toolbarConfig'
 import { openProjectAndTrack } from '../windows/editor'
-import { pipelineView } from '../pipeline'
+import { pipelineView, planService } from '../pipeline'
 import type { AnswerAction, RunControl } from '../pipeline/viewService'
 import { orchestrators } from '../pipeline/orchestrators'
 import { osDisplayName } from '../platform'
@@ -471,6 +471,23 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   ipcMain.handle('pipeline:get-check-log', (event, runId: string, node: string, visit: number) => {
     const projectPath = projectOf(event.sender)
     return projectPath ? pipelineView.checkLog(projectPath, runId, node, visit) : ''
+  })
+  // ── Plans: the plan tab ─────────────────────────────────────────────────────────
+  ipcMain.handle('plan:get', (event) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? planService.snapshot(projectPath) : null
+  })
+  ipcMain.handle('plan:control', async (event, action: string, options: { planId?: string; note?: string; redecide?: boolean }) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? planService.control(projectPath, action, options ?? {}) : 'No project.'
+  })
+  ipcMain.handle('plan:run-snapshot', (event, runId: string) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? planService.runSnapshot(projectPath, runId) : null
+  })
+  ipcMain.handle('plan:decision', (event, planId: string, decision: number) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? planService.decisionRecord(projectPath, planId, decision) : null
   })
   ipcMain.handle('pipeline:get-report', (event, runId: string) => {
     const projectPath = projectOf(event.sender)
@@ -1249,6 +1266,18 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
 
   ipcMain.handle('settings:save-reasoning', (_event, reasoning: ReasoningConfig) => {
     updateAppConfig({ reasoning })
+  })
+
+  // ── Settings: get/save privacy config ────────────────────────────────────────
+  ipcMain.handle('settings:get-privacy', () => getAppConfig().privacy)
+
+  ipcMain.handle('settings:save-privacy', (_event, privacy: PrivacyConfig) => {
+    const changed = privacy.maskEmails !== getAppConfig().privacy.maskEmails
+    updateAppConfig({ privacy })
+    if (!changed) return
+    // The status bar, the pipeline tab and the Load Account menu show account data.
+    broadcastAccountsChanged()
+    rebuildMenu()
   })
 
   // ── Settings: get/save sessions config ───────────────────────────────────────

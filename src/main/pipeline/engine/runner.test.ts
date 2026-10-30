@@ -19,7 +19,7 @@ const MACHINE: MachineDefinition = {
   id: 'content-and-code',
   name: 'Content and code',
   description: 'Generates content, then integrates it.',
-  engineVersion: 5,
+  engineVersion: 6,
   params: { taskSpec: { type: 'string' } },
   defaults: { cli: 'claude-code' },
   steps: [
@@ -326,7 +326,7 @@ describe('PipelineRun', () => {
     expect(limit).toMatchObject({ node: 'build', kind: 'limit' })
     expect(limit.message).toContain('did not pass in 3 iterations')
     expect(limit.message).toContain('missing null check')
-    await h.run.answer(limit.id, { action: 'retry', text: 'one more try', by: 'orchestrator' })
+    await h.run.answer(limit.id, { action: 'retry', text: 'one more try', by: 'strategist' })
     await waitFor(() => h.run.isFinal())
     expect(h.state().result).toBe('success')
     expect(h.state().iterations.build).toBe(4)
@@ -336,7 +336,7 @@ describe('PipelineRun', () => {
 
     const stuck = harness({ agent: (req) => req.label.endsWith(':review') ? reject : happy(req) })
     await stuck.run.run()
-    await stuck.run.answer(stuck.run.pendingEscalation()!.id, { action: 'stop', text: 'give up', by: 'orchestrator' })
+    await stuck.run.answer(stuck.run.pendingEscalation()!.id, { action: 'stop', text: 'give up', by: 'strategist' })
     expect(stuck.state().status).toBe('failed')
   })
 
@@ -374,14 +374,25 @@ describe('PipelineRun', () => {
     expect(escalation).toMatchObject({ node: 'implement', kind: 'step' })
     expect(escalation.message).toContain('The implementer cannot do the task as specified.')
     expect(escalation.message).toContain('the spec contradicts itself')
-    await h.run.answer(escalation.id, { action: 'continue', text: 'proceed anyway', by: 'orchestrator' })
+    await h.run.answer(escalation.id, { action: 'continue', text: 'proceed anyway', by: 'strategist' })
     await waitFor(() => h.run.isFinal() || h.state().status === 'waiting')
     expect(h.labels().slice(2)).toEqual(['implement', 'review', 'commitPrep'])
 
     const stopped = harness({ agent: (req) => req.label.endsWith(':implement') ? planWrong : happy(req) })
     await stopped.run.run()
-    await stopped.run.answer(stopped.run.pendingEscalation()!.id, { action: 'stop', text: 'drop it', by: 'orchestrator' })
+    await stopped.run.answer(stopped.run.pendingEscalation()!.id, { action: 'stop', text: 'drop it', by: 'strategist' })
     expect(stopped.state().result).toBe('failure')
+  })
+
+  it('a retry ordered on an escalated step runs it again in the same iteration of its loop', async () => {
+    let implementVisits = 0
+    const h = harness({ agent: (req) => req.label.endsWith(':implement') ? (++implementVisits === 1 ? planWrong : done) : req.label.endsWith(':review') ? (implementVisits < 4 ? reject : accept) : happy(req) })
+    await h.run.run()
+    await h.run.answer(h.run.pendingEscalation()!.id, { action: 'retry', text: 'do it as written', by: 'strategist' })
+    await waitFor(() => h.run.isFinal() || h.state().status === 'waiting')
+    // Iteration 1: the escalated visit and its retry; iterations 2 and 3: one visit each; the third review accepts.
+    expect(h.labels().filter((l) => l === 'implement' || l === 'review')).toEqual(['implement', 'implement', 'review', 'implement', 'review', 'implement', 'review'])
+    expect(h.state().result).toBe('success')
   })
 
   it('raises an engine escalation on agent failure; retry continues the failed session without resending the task', async () => {
@@ -476,17 +487,17 @@ describe('PipelineRun', () => {
     const loop = h.run.run()
     await waitFor(() => h.state().current === 'implement' && h.requests.length === 3)
     hang = false
-    expect(await h.run.amend('Buildings can be built in the air.', 'orchestrator')).toBe('restarted')
+    expect(await h.run.amend('Buildings can be built in the air.', 'strategist')).toBe('restarted')
     await loop
     await waitFor(() => h.run.isFinal())
     expect(h.state().result).toBe('success')
     expect(h.events.map((e) => e.type)).not.toContain('run_stopped')
     const [first, second] = h.requests.filter((r) => r.label.endsWith(':implement'))
     expect(second.resumeSessionId).toBe('session-3')
-    expect(second.prompt).toContain('New instructions from the orchestrator')
+    expect(second.prompt).toContain('New instructions from the Strategist')
     expect(second.prompt).toContain('- Buildings can be built in the air.')
     expect(first.prompt).toContain('Add feature X')
-    expect(h.requests.find((r) => r.label.endsWith(':review'))!.systemAppend).toContain('Instruction from the orchestrator (given during "implement"): Buildings can be built in the air.')
+    expect(h.requests.find((r) => r.label.endsWith(':review'))!.systemAppend).toContain('Instruction from the Strategist (the agent that manages the work) (given during "implement"): Buildings can be built in the air.')
     const report = h.store.readReport('run-1') as { amendments: Array<{ text: string }> }
     expect(report.amendments.map((a) => a.text)).toEqual(['Buildings can be built in the air.'])
   })
@@ -653,9 +664,9 @@ describe('PipelineRun', () => {
     const h = harness({ agent: () => done }, machine, { stageId: 'S5.7' })
     await h.run.run()
     const id = h.run.pendingEscalation()!.id
-    expect(await h.run.answer(id, { action: 'continue', text: 'Part A only', by: 'orchestrator', params: { stageId: 5 } })).toContain('must be string')
+    expect(await h.run.answer(id, { action: 'continue', text: 'Part A only', by: 'strategist', params: { stageId: 5 } })).toContain('must be string')
     expect(h.run.pendingEscalation()?.id).toBe(id)
-    await h.run.answer(id, { action: 'continue', text: 'Part A only', by: 'orchestrator', params: { stageId: 'S5.7a' } })
+    await h.run.answer(id, { action: 'continue', text: 'Part A only', by: 'strategist', params: { stageId: 'S5.7a' } })
     await waitFor(() => h.state().status === 'finished')
     expect(h.requests[0].prompt).toContain('stage S5.7a')
     expect(h.requests[0].systemAppend).toContain('Part A only (params changed for the rest of the run: stageId = "S5.7a")')
@@ -707,13 +718,13 @@ describe('PipelineRun', () => {
     expect(h.requests[1].prompt).toContain('make it shorter')
     await h.run.answer(h.run.pendingEscalation()!.id, { action: 'continue', text: '', by: 'user' })
     await waitFor(() => h.run.pendingEscalation()?.node === 'ship')
-    await h.run.answer(h.run.pendingEscalation()!.id, { action: 'reject', text: 'not now', by: 'orchestrator' })
+    await h.run.answer(h.run.pendingEscalation()!.id, { action: 'reject', text: 'not now', by: 'strategist' })
     expect(h.state().result).toBeNull()
     expect(h.state()).toMatchObject({ status: 'stopped', current: 'ship' })
     expect(h.events.at(-1)!.type).toBe('run_stopped')
     await h.run.run()
     expect(h.run.pendingEscalation()?.node).toBe('ship')
-    await h.run.answer(h.run.pendingEscalation()!.id, { action: 'continue', text: 'now', by: 'orchestrator' })
+    await h.run.answer(h.run.pendingEscalation()!.id, { action: 'continue', text: 'now', by: 'strategist' })
     expect(h.state().result).toBe('success')
     expect(h.state().history.filter((v) => v.node === 'approveDraft').map((v) => v.outcome)).toEqual(['fail', 'ok'])
   })
@@ -768,7 +779,7 @@ describe('PipelineRun with an unavailable CLI', () => {
     expect(h.state().visits.implement).toBe(0)
 
     const before = h.requests.length
-    await h.run.answer(escalation.id, { action: 'retry', text: 'try again', by: 'orchestrator' })
+    await h.run.answer(escalation.id, { action: 'retry', text: 'try again', by: 'strategist' })
     await vi.advanceTimersByTimeAsync(0)
     expect(h.requests.length).toBe(before + 1)
     expect(h.run.pendingEscalation()).toMatchObject({ node: 'implement', kind: 'engine' })
@@ -815,3 +826,25 @@ async function waitFor(condition: () => boolean, timeoutMs = 5000): Promise<void
     await new Promise((r) => setTimeout(r, 10))
   }
 }
+
+describe('withPlanTrailer', () => {
+  it('adds the trailer once, also when the prep agent copied it from the log', async () => {
+    const { withPlanTrailer } = await import('./runner')
+    const link = { plan: 'p', task: 't' }
+    expect(withPlanTrailer('Subject\n\nBody.\n\nCo-Authored-By: X <x@y>', link)).toBe('Subject\n\nBody.\n\nCo-Authored-By: X <x@y>\nPlan-Task: p/t\n')
+    expect(withPlanTrailer('Subject\n\nBody.\n\nPlan-Task: p/t\nCo-Authored-By: X <x@y>', link)).toBe('Subject\n\nBody.\n\nCo-Authored-By: X <x@y>\nPlan-Task: p/t\n')
+    expect(withPlanTrailer('Subject', link)).toBe('Subject\n\nPlan-Task: p/t\n')
+  })
+})
+
+describe('runs from before engine 6', () => {
+  it('read "orchestrator" as the Strategist', async () => {
+    const { currentActors } = await import('./runStore')
+    const legacy = { escalations: [{ to: 'orchestrator', answer: { by: 'orchestrator' } }, { to: 'user', answer: { by: 'user' } }], amendments: [{ by: 'orchestrator' }] } as unknown as RunState
+    const state = currentActors(legacy)
+    expect(state.escalations.map((e) => [e.to, e.answer?.by])).toEqual([['agent', 'strategist'], ['user', 'user']])
+    expect(state.amendments![0].by).toBe('strategist')
+    // A current run is left alone: there "orchestrator" is the plan's.
+    expect(currentActors({ ...state, escalations: [{ to: 'agent', answer: { by: 'orchestrator' } }] } as unknown as RunState).escalations[0].answer?.by).toBe('orchestrator')
+  })
+})

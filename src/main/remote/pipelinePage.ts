@@ -7,7 +7,9 @@ import { escapeHtml, safeJsJson } from './pageUtil'
  * the report of a finished run) and any step visit opened from the list: its
  * live transcript, what its agent was sent, its output, a check's live log. Served by the aggregator like the terminal
  * page; its WebSocket goes through the aggregator to the instance. `tab` in the
- * URL is the terminal tab the "Agent" button goes back to.
+ * URL is the terminal tab the "Agent" button goes back to. Above the run: the
+ * active plan, each task with its execution history, down to the transcript of any
+ * step visit of any of its runs and of every Orchestrator call.
  * The script is inside a template literal: no backticks, no backslashes.
  */
 
@@ -111,6 +113,39 @@ export function makePipelineHtml(port: number, projectId: string, projectName: s
     .input-record details { margin-top: 4px; font-size: 12px; }
     .input-record summary { color: #888; cursor: pointer; }
     .input-record .vpre { padding: 4px 0; }
+    #plan:empty { display: none; }
+    .plan-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 8px 12px 2px; }
+    .plan-title { color: #e0e0e0; font-weight: 600; }
+    .plan-meta { color: #888; font-size: 11px; }
+    .plan-goal { padding: 0 12px 4px; color: #999; font-size: 12px; overflow-wrap: anywhere; }
+    .plan-bar { height: 3px; margin: 2px 12px 6px; background: #333; border-radius: 2px; overflow: hidden; }
+    .plan-bar div { height: 100%; background: #4ec9b0; }
+    .plan-controls { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 12px 6px; }
+    .plan-attention { margin: 6px 12px; padding: 9px 11px; background: #2f2a1c; border: 1px solid #a78a2a; border-radius: 6px; }
+    .plan-attention.quiet { background: #252526; border-color: #444; }
+    .plan-attention b { color: #f0c674; }
+    .plan-attention .why { margin: 5px 0; color: #ddd; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .plan-phase { padding: 7px 12px 2px; color: #9cdcfe; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+    .task { border-left: 2px solid transparent; }
+    .task.live { border-left-color: #4ec9b0; background: #2a2d2e; }
+    .task-head { display: flex; align-items: baseline; gap: 8px; padding: 4px 12px; cursor: pointer; }
+    .task-head .leaf-id { flex-shrink: 0; color: #888; font-size: 11px; }
+    .task-title { min-width: 0; color: #ccc; overflow-wrap: anywhere; }
+    .task.done .task-title, .task.dropped .task-title { color: #888; }
+    .task-count { margin-left: auto; flex-shrink: 0; color: #777; font-size: 11px; }
+    .task-body { padding: 2px 12px 8px 34px; font-size: 12px; overflow-wrap: anywhere; }
+    .task-line { color: #999; margin: 2px 0; }
+    .hist { margin-top: 5px; padding: 5px 8px; background: #252526; border-radius: 4px; }
+    .hist.link { cursor: pointer; }
+    .hist.link:active { background: #37373d; }
+    .hist-head { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; }
+    .hist-kind { font-weight: 600; }
+    .hist-time { margin-left: auto; color: #777; font-size: 11px; }
+    .hist-text { margin-top: 2px; color: #aaa; white-space: pre-wrap; }
+    .visit-line { display: flex; gap: 8px; align-items: baseline; padding: 3px 0 3px 4px; border-top: 1px solid #2f2f2f; }
+    .visit-line.link { cursor: pointer; }
+    .visit-line .when { margin-left: auto; color: #777; font-size: 11px; white-space: nowrap; }
+    .followup { padding: 2px 12px; color: #999; font-size: 12px; overflow-wrap: anywhere; }
     @media (min-width: 900px) {
       #visit { left: 45%; border-left: 1px solid #3d3d3d; }
       body.visit-open { overflow: auto; }
@@ -132,6 +167,7 @@ ${HISTORY_STYLE}
   <section id="accounts"></section>
   <section id="escalation"></section>
   <section id="report"></section>
+  <section id="plan"></section>
   <main id="steps"></main>
   </div>
   <section id="visit">
@@ -176,6 +212,17 @@ ${HISTORY_STYLE}
     var accounts = null
     var accountsRunId = null
     var ACCOUNTS_REFRESH_MS = 60000
+    // The project's plans; which tasks and runs are open; the visits of the runs asked for.
+    var planView = null
+    var planError = null
+    var openTasks = {}
+    var openRuns = {}
+    var runVisits = {}
+    var shownAttention = null
+    var TASK_ICON = { pending: '○', done: '✓', blocked: '!', dropped: '–' }
+    var TASK_COLOR = { pending: '#666', done: '#4ec9b0', blocked: '#f48771', dropped: '#666' }
+    var AUTOPILOT_LABEL = { idle: 'Autopilot off', deciding: 'Orchestrator deciding', running: 'Running', held: 'Held', finished: 'Finished' }
+    var ATTENTION_TITLE = { run_failed: 'A run failed', wake: 'The Orchestrator asks for you', checkpoint: 'Checkpoint', review_due: 'Time for a review', no_machine: 'A task cannot start', stuck: 'No task can start', finished: 'The plan is finished', shadow: 'Shadow mode: decision to confirm', orchestrator_failed: 'The Orchestrator failed', paused: 'Paused', outside_run: 'Held for a run outside the plan' }
 
     document.getElementById('project').textContent = projectName
     var back = document.getElementById('back')
@@ -283,7 +330,8 @@ ${HISTORY_STYLE}
       box.innerHTML = ''
       var card = el('div', 'esc-card')
       card.appendChild(el('div', 'esc-title', pending.title + ' — ' + pending.node))
-      card.appendChild(el('div', 'esc-meta', 'For the ' + pending.to + ', whoever answers first · ' + clock(pending.raisedAt)))
+      card.appendChild(el('div', 'esc-meta', 'For ' + (pending.audience || pending.to) + ', whoever answers first · ' + clock(pending.raisedAt)))
+      if (pending.orchestratorNote) card.appendChild(el('div', 'esc-meta', 'Orchestrator: ' + pending.orchestratorNote))
       card.appendChild(el('div', 'esc-message', pending.message))
       var text = el('textarea', 'esc-text')
       text.placeholder = 'Answer (available to the next steps)'
@@ -394,7 +442,7 @@ ${HISTORY_STYLE}
       var box = document.getElementById('steps')
       box.innerHTML = ''
       if (!run) {
-        if (wsReady) box.appendChild(el('div', 'empty', 'Nothing to show: the orchestrator has not started a run in this project yet.'))
+        if (wsReady && !planView) box.appendChild(el('div', 'empty', 'Nothing to show: no plan and no run in this project yet.'))
         return
       }
       box.appendChild(el('div', 'section', 'Flow'))
@@ -458,6 +506,212 @@ ${HISTORY_STYLE}
     setInterval(function() { if (!document.hidden) requestAccounts() }, ACCOUNTS_REFRESH_MS)
     document.addEventListener('visibilitychange', function() { if (!document.hidden) requestAccounts() })
 
+    // --- Plan ---
+    function planControl(action, extra) {
+      planError = null
+      var msg = { type: 'plan-control', action: action }
+      if (extra) Object.keys(extra).forEach(function(key) { msg[key] = extra[key] })
+      if (!sendWs(msg)) planError = 'Not connected.'
+      shownAttention = null
+      renderPlan()
+    }
+    function orchestratorRecord(item, active) {
+      return {
+        row: { type: 'orchestrator', agent: true, cli: active.orchestratorCli, visits: [] },
+        record: { outcome: item.verdict || null, startedAt: item.startedAt || item.at, finishedAt: item.finished === false ? null : item.at, costUsd: item.costUsd, error: null }
+      }
+    }
+    function openOrchestrator(number, item, active) {
+      var past = orchestratorRecord(item, active)
+      showPastVisit('plan:' + active.id, 'orchestrator', number, past.row, past.record)
+    }
+    function attentionCard(active) {
+      var a = active.attention
+      if (!a) return null
+      var quiet = a.kind === 'paused' || a.kind === 'outside_run' || a.kind === 'finished'
+      var card = el('div', 'plan-attention' + (quiet ? ' quiet' : ''))
+      card.appendChild(el('b', '', (ATTENTION_TITLE[a.kind] || a.kind) + (a.task ? ' — ' + a.task : '')))
+      card.appendChild(el('div', 'why', a.reason))
+      if (a.proposal) card.appendChild(el('div', 'why', 'Proposal: ' + a.proposal))
+      if (active.pendingDecision) {
+        var d = active.pendingDecision
+        var params = Object.keys(d.decision.params || {}).filter(function(k) { return d.decision.params[k] !== null }).map(function(k) { return k + ': ' + JSON.stringify(d.decision.params[k]) }).join(', ')
+        card.appendChild(el('div', 'why', 'Would start ' + d.task + (params ? ' with ' + params : '') + (d.decision.handoff ? '. Handoff: ' + d.decision.handoff : '')))
+      }
+      if (a.decision) {
+        var link = el('button', 'btn', 'Orchestrator transcript')
+        link.addEventListener('click', function() { openOrchestrator(a.decision, { at: a.at, costUsd: null }, active) })
+        card.appendChild(link)
+      }
+      if (a.kind !== 'finished') {
+        var text = el('textarea', 'esc-text')
+        text.placeholder = 'Note for the Orchestrator (why it can go on)'
+        text.style.marginTop = '6px'
+        card.appendChild(text)
+        var actions = el('div', 'esc-actions')
+        var go = el('button', 'btn primary', active.pendingDecision ? 'Carry it out' : 'Continue the plan')
+        go.addEventListener('click', function() { planControl('run', { note: text.value }) })
+        actions.appendChild(go)
+        card.appendChild(actions)
+      }
+      return card
+    }
+    function visitLine(runId, v) {
+      var openable = v.agent || v.type === 'check'
+      var line = el('div', 'visit-line' + (openable ? ' link' : ''))
+      var icon = el('span', '', !v.finishedAt ? '●' : v.outcome === 'ok' ? '✓' : v.outcome === 'fail' ? '✗' : '·')
+      icon.style.color = !v.finishedAt ? '#4ec9b0' : v.outcome === 'ok' ? '#4ec9b0' : v.outcome === 'fail' ? '#f48771' : '#dcdcaa'
+      line.appendChild(icon)
+      line.appendChild(el('span', '', v.node + (v.visit > 1 ? ' #' + v.visit : '')))
+      line.appendChild(el('span', 'leaf-type', v.type + (v.cli ? ' · ' + v.cli : '')))
+      line.appendChild(el('span', 'when', elapsed(v.startedAt, v.finishedAt) + (v.costUsd ? ' · $' + v.costUsd.toFixed(3) : '')))
+      if (openable) line.addEventListener('click', function(e) {
+        e.stopPropagation()
+        showPastVisit(runId, v.node, v.visit, { type: v.type, agent: v.agent, cli: v.cli, visits: [] }, { outcome: v.outcome, startedAt: v.startedAt, finishedAt: v.finishedAt, costUsd: v.costUsd, error: v.error })
+      })
+      return line
+    }
+    function runBlock(runId, title, color, meta) {
+      var box = el('div', 'hist link')
+      var head = el('div', 'hist-head')
+      var kind = el('span', 'hist-kind', title)
+      kind.style.color = color
+      head.appendChild(kind)
+      if (meta) head.appendChild(el('span', 'hist-time', meta))
+      box.appendChild(head)
+      box.addEventListener('click', function() {
+        openRuns[runId] = !openRuns[runId]
+        if (openRuns[runId]) sendWs({ type: 'plan-run-visits', runId: runId })
+        renderPlan()
+      })
+      if (openRuns[runId]) {
+        var visits = runVisits[runId]
+        if (!visits) box.appendChild(el('div', 'hist-text', 'Loading...'))
+        else if (!visits.length) box.appendChild(el('div', 'hist-text', 'No steps recorded.'))
+        else visits.forEach(function(v) { box.appendChild(visitLine(runId, v)) })
+      }
+      return box
+    }
+    function historyBlock(item, active) {
+      if (item.kind === 'run') {
+        var meta = clock(item.at) + (item.costUsd ? ' · $' + item.costUsd.toFixed(2) : '')
+        var box = runBlock(item.runId, 'Run: ' + item.result, item.result === 'success' ? '#4ec9b0' : '#f48771', meta)
+        if (item.commits.length) box.insertBefore(el('div', 'hist-text', 'Commits: ' + item.commits.map(function(c) { return String(c).slice(0, 8) }).join(', ')), box.children[1] || null)
+        return box
+      }
+      var openable = item.kind === 'decision' || !!item.decision
+      var block = el('div', 'hist' + (openable ? ' link' : ''))
+      var head = el('div', 'hist-head')
+      if (item.kind === 'decision') {
+        var about = item.escalation ? ' (' + item.escalation.kind + ' escalation at ' + item.escalation.node + ')' : ''
+        var kind = el('span', 'hist-kind', 'Orchestrator: ' + item.verdict + (item.escalation && item.escalation.action ? ' ' + item.escalation.action : '') + about + (item.shadow ? ' (shadow)' : ''))
+        kind.style.color = item.verdict === 'next' || item.verdict === 'answer' ? '#4ec9b0' : '#f0c674'
+        head.appendChild(kind)
+      } else {
+        var attention = el('span', 'hist-kind', ATTENTION_TITLE[item.attentionKind] || item.attentionKind)
+        attention.style.color = '#f0c674'
+        head.appendChild(attention)
+      }
+      head.appendChild(el('span', 'hist-time', clock(item.at) + (item.costUsd ? ' · $' + item.costUsd.toFixed(3) : '')))
+      block.appendChild(head)
+      block.appendChild(el('div', 'hist-text', item.reason))
+      if (item.proposal) block.appendChild(el('div', 'hist-text', 'Proposal: ' + item.proposal))
+      if (item.handoff) block.appendChild(el('div', 'hist-text', 'Handoff: ' + item.handoff))
+      if (openable) block.addEventListener('click', function() { openOrchestrator(item.decision, item, active) })
+      return block
+    }
+    function taskBlock(task, active) {
+      var node = el('div', 'task ' + task.status + (task.live ? ' live' : ''))
+      var head = el('div', 'task-head')
+      var icon = el('span', 'leaf-icon' + (task.live ? ' pulse' : ''), task.live ? '●' : TASK_ICON[task.status] || '·')
+      icon.style.color = task.live ? '#4ec9b0' : TASK_COLOR[task.status] || '#888'
+      head.appendChild(icon)
+      head.appendChild(el('span', 'task-title', task.title))
+      head.appendChild(el('span', 'leaf-id', task.id))
+      if (task.history.length) head.appendChild(el('span', 'task-count', task.history.length + ' ›'))
+      head.addEventListener('click', function() { openTasks[task.id] = !openTasks[task.id]; renderPlan() })
+      node.appendChild(head)
+      if (!openTasks[task.id]) return node
+      var body = el('div', 'task-body')
+      if (task.reason) body.appendChild(el('div', 'task-line', task.reason))
+      if (task.machine) body.appendChild(el('div', 'task-line', 'Machine: ' + task.machine))
+      if (task.spec) body.appendChild(el('div', 'task-line', 'Spec: ' + task.spec))
+      if (task.after && task.after.length) body.appendChild(el('div', 'task-line', 'After: ' + task.after.join(', ')))
+      if (task.acceptance && task.acceptance.length) body.appendChild(el('div', 'task-line', 'Acceptance: ' + task.acceptance.join('; ')))
+      task.history.forEach(function(item) { body.appendChild(historyBlock(item, active)) })
+      if (task.live && active.runId) body.appendChild(runBlock(active.runId, 'Run in progress', '#4ec9b0', ''))
+      if (!task.history.length && !task.live) body.appendChild(el('div', 'task-line', 'Not started yet.'))
+      node.appendChild(body)
+      return node
+    }
+    function renderPlan() {
+      var box = document.getElementById('plan')
+      // A state change does not wipe a note being typed.
+      var typing = document.activeElement && document.activeElement.classList.contains('esc-text') && box.contains(document.activeElement)
+      if (typing) return
+      box.innerHTML = ''
+      if (!planView) return
+      box.appendChild(el('div', 'section', 'Plan'))
+      if (planError) box.appendChild(el('div', 'note error', planError))
+      var active = planView.active
+      planView.plans.filter(function(p) { return !p.active }).forEach(function(p) {
+        var line = el('div', 'followup')
+        line.textContent = (p.title || p.id) + (p.state ? ' · ' + p.state + ' · ' + p.done + '/' + p.total : '') + (p.error ? ' · ' + p.error : '') + ' '
+        if (p.state === 'draft') {
+          var approve = el('button', 'chip', 'Approve')
+          approve.addEventListener('click', function() { planControl('approve', { planId: p.id }) })
+          line.appendChild(approve)
+        } else if (p.state === 'approved') {
+          var activate = el('button', 'chip', 'Activate')
+          activate.addEventListener('click', function() { planControl('activate', { planId: p.id }) })
+          line.appendChild(activate)
+        }
+        box.appendChild(line)
+      })
+      if (!active) return
+      var head = el('div', 'plan-head')
+      head.appendChild(el('span', 'plan-title', active.title))
+      head.appendChild(el('span', 'plan-meta', active.done + '/' + active.total + ' · ' + (AUTOPILOT_LABEL[active.status] || active.status) + (active.shadow ? ' · shadow' : '')))
+      box.appendChild(head)
+      if (active.goal) box.appendChild(el('div', 'plan-goal', active.goal))
+      var bar = el('div', 'plan-bar')
+      var fill = el('div')
+      fill.style.width = (active.total ? Math.round(active.done * 100 / active.total) : 0) + '%'
+      bar.appendChild(fill)
+      box.appendChild(bar)
+      var controls = el('div', 'plan-controls')
+      if (active.status === 'deciding' || active.status === 'running') {
+        var pause = el('button', 'btn', 'Pause the plan')
+        pause.addEventListener('click', function() { planControl('pause') })
+        controls.appendChild(pause)
+      }
+      if (active.status === 'idle' && active.state === 'approved') {
+        var start = el('button', 'btn primary', 'Run the plan')
+        start.addEventListener('click', function() { planControl('run') })
+        controls.appendChild(start)
+      }
+      if (active.deciding) {
+        var live = el('button', 'btn', 'Orchestrator transcript')
+        live.addEventListener('click', function() { openOrchestrator(active.deciding, { at: new Date().toISOString(), finished: false, costUsd: null }, active) })
+        controls.appendChild(live)
+      }
+      if (controls.children.length) box.appendChild(controls)
+      var card = attentionCard(active)
+      if (card) box.appendChild(card)
+      var phase = null
+      active.tasks.forEach(function(task) {
+        if ((task.phase || null) !== phase) {
+          phase = task.phase || null
+          if (phase) box.appendChild(el('div', 'plan-phase', phase))
+        }
+        box.appendChild(taskBlock(task, active))
+      })
+      if (active.followups.length) {
+        box.appendChild(el('div', 'section', 'Follow-ups (' + active.followups.length + ')'))
+        active.followups.slice(0, 30).forEach(function(f) { box.appendChild(el('div', 'followup', f.from + ': ' + f.text)) })
+      }
+    }
+
     function render() {
       renderHeader()
       renderControls()
@@ -465,6 +719,7 @@ ${HISTORY_STYLE}
       renderAccounts()
       renderEscalation()
       renderReport()
+      renderPlan()
       renderSteps()
       renderVisitMeta()
     }
@@ -477,8 +732,13 @@ ${HISTORY_RENDER_SCRIPT}
       for (var i = 0; i < rows.length; i++) if (rows[i].kind === 'leaf' && rows[i].id === node) return rows[i]
       return null
     }
+    function visitRow() {
+      if (!openVisit) return null
+      return openVisit.past ? openVisit.past.row : leafOf(openVisit.node)
+    }
     function visitRecord() {
-      var row = openVisit && leafOf(openVisit.node)
+      if (openVisit && openVisit.past) return openVisit.past.record
+      var row = visitRow()
       if (!row) return null
       for (var i = 0; i < row.visits.length; i++) if (row.visits[i].visit === openVisit.visit) return row.visits[i]
       return null
@@ -501,6 +761,19 @@ ${HISTORY_RENDER_SCRIPT}
       renderVisitMeta()
       renderVisitBody()
     }
+    // A visit from a plan task's history, of any run, or an Orchestrator call (run "plan:<id>").
+    function showPastVisit(runId, node, visit, row, record) {
+      openVisit = { runId: runId, node: node, visit: visit, past: { row: row, record: record } }
+      visitData = null
+      visitInputs = null
+      visitPane = row.agent ? 'transcript' : row.type === 'check' ? 'log' : 'output'
+      visitFinished = !!record.finishedAt
+      document.body.classList.add('visit-open')
+      requestVisit()
+      renderSteps()
+      renderVisitMeta()
+      renderVisitBody()
+    }
     function closeVisit() {
       openVisit = null
       visitData = null
@@ -512,15 +785,15 @@ ${HISTORY_RENDER_SCRIPT}
     document.getElementById('visit-close').addEventListener('click', closeVisit)
     function renderVisitMeta() {
       if (!openVisit) return
-      if (!run || run.runId !== openVisit.runId) { closeVisit(); return }
-      var row = leafOf(openVisit.node)
+      if (!openVisit.past && (!run || run.runId !== openVisit.runId)) { closeVisit(); return }
+      var row = visitRow()
       var record = visitRecord()
       // A visit that ends while open gets its output now.
       if (record && record.finishedAt && !visitFinished) {
         visitFinished = true
         requestVisit()
       }
-      document.getElementById('visit-title').textContent = openVisit.node + ' · visit ' + openVisit.visit
+      document.getElementById('visit-title').textContent = openVisit.node === 'orchestrator' && openVisit.past ? 'Orchestrator · call ' + openVisit.visit : openVisit.node + ' · visit ' + openVisit.visit
       var meta = document.getElementById('visit-meta')
       meta.innerHTML = ''
       var parts = []
@@ -672,6 +945,27 @@ ${HISTORY_RENDER_SCRIPT}
         if (openVisit) requestVisit()
       } else if (msg.type === 'auth-fail') {
         setSub('Auth failed — session expired, reload the page')
+      } else if (msg.type === 'plan-view') {
+        var wasDeciding = planView && planView.active ? planView.active.deciding : null
+        planView = msg.plan
+        var nowDeciding = planView && planView.active ? planView.active.deciding : null
+        // The Orchestrator call open in the panel has ended: its answer is there now.
+        if (openVisit && openVisit.past && openVisit.node === 'orchestrator' && openVisit.visit === wasDeciding && nowDeciding !== wasDeciding) {
+          openVisit.past.record.finishedAt = new Date().toISOString()
+          requestVisit()
+          renderVisitMeta()
+        }
+        // A run in progress that is open keeps its visits current.
+        var liveRun = planView && planView.active ? planView.active.runId : null
+        if (liveRun && openRuns[liveRun]) sendWs({ type: 'plan-run-visits', runId: liveRun })
+        renderPlan()
+        if (!run) renderSteps()
+      } else if (msg.type === 'plan-run-visits') {
+        runVisits[msg.runId] = msg.visits
+        renderPlan()
+      } else if (msg.type === 'plan-control-result') {
+        planError = msg.error || null
+        renderPlan()
       } else if (msg.type === 'pipeline-run') {
         var previous = run ? run.runId : null
         run = msg.run

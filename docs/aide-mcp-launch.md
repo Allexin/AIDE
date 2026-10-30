@@ -18,8 +18,8 @@ the server in its own config.
   (`aideMcpServers`, `src/main/aideMcp/launch.ts`): AIDE's executable running
   the shim (`resources/mcp/aide-mcp.cjs mcp`) with `ELECTRON_RUN_AS_NODE` and
   `AIDE_RUNTIME_DIR` in `env`, the tab and project in `tabEnv`
-  (`AIDE_TAB_ID`, `AIDE_PROJECT`), and a tool timeout of 1900 s (waiting for a
-  run blocks a call for up to 30 minutes).
+  (`AIDE_TAB_ID`, `AIDE_PROJECT`), and a tool timeout of 3100 s (waiting for a
+  run blocks a call for up to 50 minutes).
 - **Module.** `CliTool.prepareLaunch(ctx)` (it replaced `hookLaunchArgs`)
   returns what to add to the launch, `{ args?, env? }`, for the hook wiring
   (`ctx.hook`) and for the servers (`ctx.mcpServers`). The module knows only how

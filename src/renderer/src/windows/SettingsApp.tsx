@@ -1,8 +1,13 @@
 import React, { useEffect, useState } from 'react'
 import type { SettingsField } from '../../../shared/settingsTypes'
+import { maskEmails } from '../../../shared/emailMask'
 
 interface ReasoningConfig {
   showPanel: boolean
+}
+
+interface PrivacyConfig {
+  maskEmails: boolean
 }
 
 interface UpdatesConfig {
@@ -137,6 +142,7 @@ function ToolSettingsSection({ entry, onChange }: {
 export default function SettingsApp(): React.ReactElement {
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [reasoning, setReasoning] = useState<ReasoningConfig>({ showPanel: false })
+  const [privacy, setPrivacy] = useState<PrivacyConfig>({ maskEmails: false })
   const [updates, setUpdates] = useState<UpdatesConfig>({ notifyFrequency: 'daily' })
   const [sessions, setSessions] = useState<SessionsConfig>({ maxSessionsInPicker: 20, maxRecentProjects: 20 })
   const [remote, setRemote] = useState<RemoteConfig>({ enabled: false, remoteHost: '', buttonSize: 'medium', buttonRows: [] })
@@ -150,6 +156,7 @@ export default function SettingsApp(): React.ReactElement {
 
   useEffect(() => {
     window.settingsApi.getReasoningConfig().then(setReasoning)
+    window.settingsApi.getPrivacyConfig().then(setPrivacy)
     window.settingsApi.getUpdatesConfig().then(setUpdates)
     window.settingsApi.getSessionsConfig().then(setSessions)
     window.settingsApi.getRemoteConfig().then((cfg) => {
@@ -176,6 +183,7 @@ export default function SettingsApp(): React.ReactElement {
   const handleSave = async (): Promise<void> => {
     const saves: Promise<void>[] = [
       window.settingsApi.saveReasoningConfig(reasoning),
+      window.settingsApi.savePrivacyConfig(privacy),
       window.settingsApi.saveUpdatesConfig(updates),
       window.settingsApi.saveSessionsConfig(sessions),
       window.settingsApi.saveRemoteConfig(remote)
@@ -239,12 +247,32 @@ export default function SettingsApp(): React.ReactElement {
                   <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                     <span style={{ fontWeight: 600, color: '#d4d4d4' }}>{tool.name}</span>
                     <span style={{ fontSize: 12, color: '#999' }}>
-                      {accountIdentifiers[tool.id] ?? 'Not logged in'}
+                      {(() => {
+                        const identifier = accountIdentifiers[tool.id]
+                        if (!identifier) return 'Not logged in'
+                        return privacy.maskEmails ? maskEmails(identifier) : identifier
+                      })()}
                     </span>
                   </div>
                 ))}
               </fieldset>
             )}
+
+            <fieldset style={fieldsetStyle}>
+              <legend style={legendStyle}>Privacy</legend>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={privacy.maskEmails}
+                  onChange={(e) => setPrivacy({ ...privacy, maskEmails: e.target.checked })}
+                />
+                Hide account emails
+              </label>
+              <p style={{ margin: 0, fontSize: 11, color: '#777', lineHeight: 1.5 }}>
+                Shows ***@****.*** instead of account emails in AIDE and on the remote pages.<br />
+                The Account Manager still shows them. Output of the CLIs in terminals is not changed.
+              </p>
+            </fieldset>
 
             <fieldset style={fieldsetStyle}>
               <legend style={legendStyle}>Updates</legend>

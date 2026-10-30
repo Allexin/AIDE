@@ -2,11 +2,16 @@ import { execFile } from 'child_process'
 import { copyFileSync, existsSync, rmSync, statSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
+import { PLANS_DIR, isPlanPath } from './plan/planStore'
 
 /**
  * Git operations the pipeline engine needs (plan §5.7, §3.3). Read-only except
- * `commitIndex`. Every call has a timeout so a hung git never stalls a run.
+ * `commitIndex` and `stagePaths`. Every call has a timeout so a hung git never
+ * stalls a run.
  */
+
+/** Pathspec of a diff that leaves plan files out. */
+const NOT_PLANS = ['--', '.', `:(exclude)${PLANS_DIR}`]
 
 const GIT_TIMEOUT_MS = 15_000
 /** Commit hooks (formatters, linters) can take minutes. */
@@ -74,10 +79,11 @@ export function parsePorcelain(output: string): FileChange[] {
 /**
  * Changed files. A modified file whose only difference is line endings (CRLF in
  * the working tree, LF in the index) is left out: it is noise to reviewers and
- * to the commit coverage check.
+ * to the commit coverage check. So are plan files: AIDE edits them while a run
+ * works, and they are not part of its work.
  */
 export async function status(cwd: string): Promise<FileChange[]> {
-  const changes = parsePorcelain(await gitOk(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']))
+  const changes = parsePorcelain(await gitOk(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])).filter((c) => !isPlanPath(c.path))
   if (!changes.some((c) => c.kind === 'modified')) return changes
   const real = new Set<string>()
   for (const args of [['diff', '--numstat', '-z', '--ignore-cr-at-eol'], ['diff', '--cached', '--numstat', '-z', '--ignore-cr-at-eol']]) {
@@ -112,7 +118,7 @@ export async function headSha(cwd: string): Promise<string | null> {
  */
 export async function workingDiff(cwd: string): Promise<string> {
   const hasHead = (await headSha(cwd)) !== null
-  const untracked = (await gitOk(cwd, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean)
+  const untracked = (await gitOk(cwd, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter((path) => path && !isPlanPath(path))
   if (hasHead && untracked.length) {
     // A file moved without `git mv` is a deleted tracked file plus an untracked one.
     const deleted = (await gitOk(cwd, ['ls-files', '--deleted', '-z'])).split('\0').filter(Boolean)
@@ -121,7 +127,7 @@ export async function workingDiff(cwd: string): Promise<string> {
       if (diff !== null) return diff
     }
   }
-  const tracked = hasHead ? await gitOk(cwd, ['diff', 'HEAD', '--no-color']) : await gitOk(cwd, ['diff', '--cached', '--no-color'])
+  const tracked = hasHead ? await gitOk(cwd, ['diff', 'HEAD', '--no-color', ...NOT_PLANS]) : await gitOk(cwd, ['diff', '--cached', '--no-color', ...NOT_PLANS])
   const sections = [tracked.trimEnd()]
   for (const path of untracked) sections.push(await untrackedDiff(cwd, path))
   return sections.filter(Boolean).join('\n') + '\n'
@@ -140,7 +146,7 @@ async function renameAwareDiff(cwd: string, untracked: string[]): Promise<string
     if (existsSync(index)) copyFileSync(index, temp)
     const env = { ...process.env, GIT_INDEX_FILE: temp }
     await gitOk(cwd, ['add', '-A', '--', '.', ...big.map((path) => `:(exclude)${path}`)], undefined, env)
-    const diff = await gitOk(cwd, ['diff', '--cached', '-M', '--no-color', 'HEAD'], undefined, env)
+    const diff = await gitOk(cwd, ['diff', '--cached', '-M', '--no-color', 'HEAD', ...NOT_PLANS], undefined, env)
     const sections = [diff.trimEnd(), ...big.map((path) => bigFileStub(cwd, path))]
     return sections.filter(Boolean).join('\n') + '\n'
   } finally {
@@ -164,7 +170,18 @@ async function untrackedDiff(cwd: string, path: string): Promise<string> {
 }
 
 export async function stagedDiff(cwd: string): Promise<string> {
-  return gitOk(cwd, ['diff', '--cached', '--no-color'])
+  return gitOk(cwd, ['diff', '--cached', '--no-color', ...NOT_PLANS])
+}
+
+/** Add these project-relative paths to the index. */
+export async function stagePaths(cwd: string, paths: string[]): Promise<void> {
+  await gitOk(cwd, ['add', '--', ...paths])
+}
+
+/** Commits after `since` (exclusive) as "<short sha> <subject>", newest first; empty when `since` is unknown. */
+export async function commitsSince(cwd: string, since: string): Promise<string[]> {
+  const result = await git(cwd, ['log', '--format=%h %s', `${since}..HEAD`])
+  return result.code === 0 ? result.stdout.split('\n').filter(Boolean) : []
 }
 
 export interface CommitCoverage {

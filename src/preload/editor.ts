@@ -169,6 +169,13 @@ export interface EditorAPI {
   pipelineGetCheckLog: (runId: string, node: string, visit: number) => Promise<string>
   pipelineGetReport: (runId: string) => Promise<unknown>
   onPipelineRunState: (cb: (snapshot: unknown) => void) => () => void
+  // Plans
+  planGet: () => Promise<unknown>
+  planControl: (action: 'run' | 'pause' | 'approve' | 'activate', options?: { planId?: string; note?: string; redecide?: boolean }) => Promise<string | null>
+  planGetRunSnapshot: (runId: string) => Promise<unknown>
+  planGetDecision: (planId: string, decision: number) => Promise<unknown>
+  onPlanSnapshot: (cb: (snapshot: unknown) => void) => () => void
+  onPlanDecisionEntry: (cb: (event: { planId: string; decision: number }) => void) => () => void
   onPipelineTranscript: (cb: (event: { runId: string; node: string; visit: number; entry: unknown }) => void) => () => void
 
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
@@ -431,6 +438,20 @@ const editorApi: EditorAPI = {
   pipelineGetAgentInput: (runId, node, visit) => ipcRenderer.invoke('pipeline:get-agent-input', runId, node, visit),
   pipelineGetCheckLog: (runId, node, visit) => ipcRenderer.invoke('pipeline:get-check-log', runId, node, visit),
   pipelineGetReport: (runId) => ipcRenderer.invoke('pipeline:get-report', runId),
+  planGet: () => ipcRenderer.invoke('plan:get'),
+  planControl: (action, options) => ipcRenderer.invoke('plan:control', action, options ?? {}),
+  planGetRunSnapshot: (runId) => ipcRenderer.invoke('plan:run-snapshot', runId),
+  planGetDecision: (planId, decision) => ipcRenderer.invoke('plan:decision', planId, decision),
+  onPlanDecisionEntry: (cb: (event: { planId: string; decision: number }) => void): (() => void) => {
+    const handler = (_: unknown, event: { planId: string; decision: number }): void => cb(event)
+    ipcRenderer.on('plan:decision-entry', handler)
+    return () => ipcRenderer.removeListener('plan:decision-entry', handler)
+  },
+  onPlanSnapshot: (cb: (snapshot: unknown) => void): (() => void) => {
+    const handler = (_: unknown, snapshot: unknown): void => cb(snapshot)
+    ipcRenderer.on('plan:snapshot', handler)
+    return () => ipcRenderer.removeListener('plan:snapshot', handler)
+  },
   onPipelineRunState: (cb: (snapshot: unknown) => void): (() => void) => {
     const handler = (_: unknown, snapshot: unknown): void => cb(snapshot)
     ipcRenderer.on('pipeline:run-state', handler)

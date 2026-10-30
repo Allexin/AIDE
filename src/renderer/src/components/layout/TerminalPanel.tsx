@@ -9,6 +9,7 @@ import { useFileTreeStore } from '../../store/useFileTreeStore'
 import RunStateBanner from '../pipeline/RunStateBanner'
 import PipelineView, { PipelineTabButton } from '../pipeline/PipelineView'
 import { hasPipelineTab, usePipelineStore } from '../../store/usePipelineStore'
+import { hasPlans, usePlanStore } from '../../store/usePlanStore'
 
 // VS Dark terminal theme
 const VS_DARK_THEME = {
@@ -315,7 +316,9 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
 
   // The pipeline tab sits in the same strip but outside the session store: while it is
   // selected the session tabs keep their selection (PTY input, history, remote stay bound to it).
-  const pipelineTab = usePipelineStore(hasPipelineTab)
+  // The plan is the parent of the pipeline in this tab, so it is there as soon as the project has a plan.
+  const planExists = usePlanStore(hasPlans)
+  const pipelineTab = usePipelineStore(hasPipelineTab) || planExists
   const pipelineActive = usePipelineStore((s) => s.viewActive) && pipelineTab
   const setPipelineActive = usePipelineStore((s) => s.setViewActive)
   const terminalVisible = !pipelineActive

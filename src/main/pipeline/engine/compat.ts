@@ -72,6 +72,19 @@ export const ENGINE_CHANGES: readonly EngineChange[] = [
     actions: [
       'Remove "run the tests / verify before you finish" from tasks and roles where it means the machine\'s own check commands; keep it only where a step must run a check itself (blessing goldens, measuring), and say so explicitly.'
     ]
+  },
+  {
+    version: 6,
+    changes: [
+      'Decisions of a run go to "agent" (escalateTo, gate "to"; the default) or "user". "orchestrator" is the old name of "agent" and is refused in machines of engine 6.',
+      'An "agent" decision in a step of a plan\'s autopilot is answered first by the plan\'s Orchestrator when the plan lets it answer that kind (orchestrator.escalations): it answers with continue, retry or reject, or passes the decision on to the Strategist. It never stops a run. Outside such a plan the Strategist decides, as before.',
+      'The pipeline context says a gate is approved "by the agent that manages the run" (it said "by the orchestrator").',
+      'Answers and instructions are by "strategist", "orchestrator" (the plan\'s) or "user" in run state and reports; older runs are read with "orchestrator" as "strategist".'
+    ],
+    actions: [
+      'Replace "escalateTo": "orchestrator" and gate "to": "orchestrator" with "agent", or drop them (agent is the default).',
+      'Escalation messages (escalateMessage) may now be read by the plan\'s Orchestrator, a fresh session without the Strategist\'s context: make them say what is being decided and what each answer means.'
+    ]
   }
 ]
 

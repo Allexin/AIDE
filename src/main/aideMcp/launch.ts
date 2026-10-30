@@ -12,8 +12,8 @@ import type { CliTool, LaunchMcpServer, SettingsField } from '../pty/cliTools/ty
 export const AIDE_MCP_KEY = 'aideMcpServer'
 export const AIDE_MCP_SERVER_NAME = 'aide'
 
-/** Waiting for a pipeline run blocks a tool call for up to 30 minutes. */
-const TOOL_TIMEOUT_SEC = 1900
+/** Waiting for a pipeline run blocks a tool call for up to 50 minutes. */
+const TOOL_TIMEOUT_SEC = 3100
 
 const DEFAULT_NOTE = "Adds AIDE's MCP server (pipeline orchestration and other AIDE tools) to every launch of this CLI from AIDE, with the paths of the running AIDE; the CLI's own config is not changed"
 

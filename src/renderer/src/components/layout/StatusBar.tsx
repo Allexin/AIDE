@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { PlanSensor } from '../pipeline/PlanView'
 import { useFileTreeStore } from '../../store/useFileTreeStore'
 import { useEditorStore } from '../../store/useEditorStore'
 import { useSessionStore } from '../../store/useSessionStore'
@@ -114,6 +115,7 @@ export default function StatusBar(): React.ReactElement {
             {fileStatus}
           </span>
         )}
+        <PlanSensor style={sensorStyle} />
         <AccountLabel info={accountUsage} style={sensorStyle} />
         <UsageLabel info={accountUsage} style={sensorStyle} />
       </div>

@@ -92,7 +92,7 @@ describe('pipeline server + stdio shim', () => {
     const connected = new Promise<unknown>((resolveConnected) => orchestrators.once('connected', resolveConnected))
     const hello = await shim.request({ id: 3, method: 'tools/call', params: { name: 'pipeline_hello', arguments: {} } })
     const result = hello.result as { content: Array<{ text: string }>; structuredContent?: unknown }
-    expect(result.content[0].text).toContain('orchestrator')
+    expect(result.content[0].text).toContain('Strategist')
     // Results are text only — nothing is duplicated into the agent's context.
     expect(result.structuredContent).toBeUndefined()
     expect(await connected).toMatchObject({ projectPath: project, tabId: 'tab-7', client: { name: 'test-client', version: '1.2.3' } })

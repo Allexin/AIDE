@@ -2,6 +2,7 @@ import { getToolById } from '../pty/cliTools/registry'
 import { cliLog } from '../pty/cliTools/cliLogger'
 import { ptyRegistry } from '../pty/registry'
 import { getActiveAccount, listAccountInfos, markAccountExhausted, type CliAccountInfo } from '../config/accountStorage'
+import { accountText } from '../accounts/accountDisplay'
 import { currentAccount, lastAccountSwitch, loadSavedAccount } from '../accounts/accountSwitch'
 import { logEvent } from '../diagnostics'
 import type { PipelineManager } from './manager'
@@ -103,7 +104,8 @@ export class AccountPool {
 
     const accounts = listAccountInfos(cli)
     const choice = choosePoolAccount(accounts, activeId)
-    const fromName = accounts.find((account) => account.id === activeId)?.name ?? 'the current account'
+    // The names reach the pipeline tab and the remote page in events, and a name may be an email.
+    const fromName = accountText(accounts.find((account) => account.id === activeId)?.name ?? 'the current account')
     if (!choice) {
       cliLog(LOG_CH, `${tool.name}: every checked account has hit its limit and none reports when it resets; run ${runId} stays stopped.`)
       this.stuck(projectPath, runId, node, `every checked ${tool.name} account has hit its usage limit and none says when it resets; the run stays stopped — resume with pipeline_resume once one has reset`)
@@ -112,12 +114,13 @@ export class AccountPool {
 
     let toName = fromName
     if (choice.load) {
+      const loadName = accountText(choice.load.name)
       if (!(await loadSavedAccount(cli, choice.load.id))) {
-        cliLog(LOG_CH, `${tool.name}: could not load account ${choice.load.name}; run ${runId} stays stopped.`)
-        this.stuck(projectPath, runId, node, `${tool.name} hit its usage limit and AIDE could not switch to the account ${choice.load.name}; the run stays stopped — resume with pipeline_resume`)
+        cliLog(LOG_CH, `${tool.name}: could not load account ${loadName}; run ${runId} stays stopped.`)
+        this.stuck(projectPath, runId, node, `${tool.name} hit its usage limit and AIDE could not switch to the account ${loadName}; the run stays stopped — resume with pipeline_resume`)
         return
       }
-      toName = choice.load.name
+      toName = loadName
       for (const win of ptyRegistry.keys()) if (!win.isDestroyed()) win.webContents.send('accounts:changed')
       if (tool.accountSwitchNeedsRestart?.() !== false) {
         for (const mgr of ptyRegistry.values()) await mgr.restartToolTabs(cli)

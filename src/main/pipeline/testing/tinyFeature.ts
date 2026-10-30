@@ -13,7 +13,7 @@ export const TINY_FEATURE: MachineDefinition = {
   id: 'tiny-feature',
   name: 'Tiny feature',
   description: 'Implements a very small change in the repository and commits it after a check and a review. Param taskSpec: what to do.',
-  engineVersion: 5,
+  engineVersion: 6,
   params: { taskSpec: { type: 'string', description: 'What to implement' } },
   defaults: { cli: 'claude-code', model: 'haiku', timeoutMin: 10 },
   steps: [

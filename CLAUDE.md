@@ -78,6 +78,12 @@ Electron + React + TypeScript desktop code editor. Windows only.
 ### Status Bar
 - Sensors based
 
+### Plans
+- `aide/plans/<id>.json`, written by AIDE through MCP (`plan_*`) and the pipeline tab; one plan is active per user
+- The Strategist (long-context CLI tab) writes plans; the Orchestrator (a fresh headless session per call) says next or wake after each task and, when the plan lists the kinds, answers escalations inside a step or passes them on; it never changes the plan or stops a run; AIDE walks the tasks
+- Machines send decisions to `agent` (Orchestrator first when the plan allows, else the Strategist) or `user`; "orchestrator" is the engine-5 name of `agent`
+- The plan is the parent of the pipeline in the pipeline tab and on the remote page. See `docs/plan-mode-spec.md`
+
 ## Conventions
 
 - **Versioning**: `package.json` (and `package-lock.json`) auto-increment the `version` on each build. These bumped files MUST be committed together with the code changes they correspond to, so the committed version matches the commit. Do NOT leave the version bump uncommitted or split it into a separate commit — `git add` the package files alongside your edits.

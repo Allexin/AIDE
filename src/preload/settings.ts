@@ -20,6 +20,10 @@ export interface AccountToolEntry {
   hasAccount: boolean
 }
 
+export interface PrivacyConfig {
+  maskEmails: boolean
+}
+
 export interface UpdatesConfig {
   notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly'
 }
@@ -48,6 +52,8 @@ export interface RemoteConfig {
 export interface SettingsAPI {
   getReasoningConfig: () => Promise<ReasoningConfig>
   saveReasoningConfig: (config: ReasoningConfig) => Promise<void>
+  getPrivacyConfig: () => Promise<PrivacyConfig>
+  savePrivacyConfig: (config: PrivacyConfig) => Promise<void>
   getToolSettings: () => Promise<ToolSettingsEntry[]>
   updateToolSettings: (toolId: string, values: Record<string, unknown>) => Promise<void>
   getAccountTools: () => Promise<AccountToolEntry[]>
@@ -66,6 +72,8 @@ export interface SettingsAPI {
 const settingsApi: SettingsAPI = {
   getReasoningConfig: () => ipcRenderer.invoke('settings:get-reasoning'),
   saveReasoningConfig: (config) => ipcRenderer.invoke('settings:save-reasoning', config),
+  getPrivacyConfig: () => ipcRenderer.invoke('settings:get-privacy'),
+  savePrivacyConfig: (config) => ipcRenderer.invoke('settings:save-privacy', config),
   getToolSettings: () => ipcRenderer.invoke('tool-settings:get-all'),
   updateToolSettings: (toolId, values) => ipcRenderer.invoke('tool-settings:update', toolId, values),
   getAccountTools: () => ipcRenderer.invoke('accounts:get-tools'),

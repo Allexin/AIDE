@@ -1,8 +1,11 @@
 # AIDE Orchestration — MCP Guide
 
-This document is for an **AI agent** that becomes the orchestrator of AIDE
-pipelines in this project. It explains how AIDE's MCP server reaches you, what
-the orchestrator does, and how to receive pipeline events.
+This document is for an **AI agent** that drives AIDE pipelines in this project:
+the **Strategist**. It explains how AIDE's MCP server reaches you, what you do,
+and how to receive pipeline events. In a plan, the **Orchestrator** is a separate
+short-lived agent: it checks each task, and when the plan lets it, answers the
+decisions inside a step before they reach you (see `plan_guide`). Machine files
+send decisions to `agent` (you, or the plan's Orchestrator first) or `user`.
 
 AIDE keeps this file up to date; do not edit it.
 
@@ -13,10 +16,13 @@ deterministic trees of steps run by headless agents — e.g. a loop of implement
 checks → review, then commit — defined per task type in `aide/pipelines/*.json`.
 AIDE runs the steps and repeats the loops; it makes no judgement calls.
 
-The **orchestrator** is the agent that decides what to run: it reads the
-project's plan, picks the next task, chooses a machine and its parameters,
-starts it, reads the report, updates the plan, and talks to the user. Any agent
-with MCP support can be the orchestrator.
+The **Strategist** is the agent that decides what gets done. Work of several tasks
+goes into an AIDE plan (`aide/plans/*.json`, `plan_guide`): AIDE walks it, and after
+each task an Orchestrator, a headless agent with no context of its own, checks the
+result and starts the next machine or wakes you; it can also answer escalations
+inside a task's run and pass on to you what it cannot decide. For one concrete task, plan or no
+plan, you start a machine yourself with `pipeline_start`. Any agent with MCP support
+can be the Strategist.
 
 ## 2. The MCP server is already connected
 
@@ -44,7 +50,7 @@ started outside AIDE, the server entry is:
 Such an entry holds paths of one AIDE installation and goes stale when AIDE
 moves; AIDE tabs do not need it.
 
-**Long tool calls.** Waiting for a run is a tool call that blocks for up to 30
+**Long tool calls.** Waiting for a run is a tool call that blocks for up to 50
 minutes (§5). AIDE raises Codex's MCP call timeout for its tabs; for other
 clients that cut long calls, pass a smaller `timeoutSec` / `wait` than their
 limit.
@@ -52,12 +58,12 @@ limit.
 ## 3. Verify
 
 Call the tool **`pipeline_hello`**. A successful call confirms the connection
-to AIDE and returns the orchestrator rules and the event-delivery options. If
+to AIDE and returns the Strategist's rules and the event-delivery options. If
 the tool is missing, the server is off for this CLI in AIDE's settings, or the
 tab was started before AIDE's server was up — ask the user. If it answers "AIDE
 is not running for this project", the project is not open in AIDE.
 
-## 4. Orchestrator rules
+## 4. Strategist rules
 
 1. AIDE runs machines; you choose them. Do not re-implement a machine's work
    yourself while it runs.
@@ -76,9 +82,9 @@ is not running for this project", the project is not open in AIDE.
    do not run its command again;
    look yourself only on a signal (a reviewer flagged something, the first
    capture of a new visual stage, a failed run).
-6. Keep the plan and its progress in the project's documents, not only in
-   your context — your session may be restarted at any time. Prefer machines
-   that do the bookkeeping themselves (see `pipeline_guide`).
+6. Keep the plan in an AIDE plan (`plan_create`, `plan_edit`), not only in your
+   context — your session may be restarted at any time. A run linked to a task
+   marks it done in its own commit, so nobody does that bookkeeping by hand.
 7. **Do not give step agents a way out.** Task texts and params such as "if
    you cannot finish, escalate" are taken within a minute. Real obstacles have
    `blocked` / `plan_wrong` and escalations. When an implementer reports
@@ -110,7 +116,19 @@ most of the cost. Cheapest first:
    calls (read the output, subscribe again, end the turn).
 3. **Polling**: `pipeline_status`.
 
-Always pass the last event id you have seen as `since`. Ids continue across
+**While a plan's autopilot is on, call `pipeline_wait` without `runId`**: runs change,
+and without `runId` the wait covers every run and the plan.
+
+**A timeout is part of waiting.** After 50 minutes the wait returns one line of state.
+It means nothing needs checking: wait again with the same `since`. The tick reads your
+cached context and keeps it warm, which costs far less than a cold wake. If it says your
+cache lives only 5 minutes, stop waiting and end your turn: AIDE types events into your
+terminal instead.
+
+Always pass the last event id you have seen as `since`, also when you wait
+without `runId`; without it the wait starts from the oldest event still kept. An
+event dealt with since (the escalation answered, the plan continued, the run
+resumed) is not handed out again. Ids continue across
 AIDE restarts; after a restart AIDE re-announces a pending escalation or the
 paused run, so a wait that was cut by the restart picks it up.
 
@@ -119,9 +137,10 @@ your context:
 
 | Event | What to do |
 |---|---|
-| `escalation` | Decide: answer with `pipeline_answer`, or ask the user |
+| `plan_attention` | A plan holds and needs you (`kind`, `reason`, `proposal`): change it with `plan_edit` if needed, then `plan_run` with a `note` |
+| `escalation` | Decide: answer with `pipeline_answer`, or ask the user. One the plan's Orchestrator passed on carries `orchestrator`: its `reason`, its `proposal`, or in shadow mode `wouldAnswer` |
 | `run_paused`, `run_stopped` | The run changed hands (possibly the user paused or stopped it in AIDE, or a gate was rejected outside loops); resume when appropriate. `reason: "usage_limit"`: a CLI hit its usage limit — the run resumes by itself at `resumeAt` (when the CLI said when) in the same session; otherwise resume once it has reset. When the user set up several accounts of that CLI, AIDE switches to another one and goes on without telling you (it restarts that CLI's tabs, yours included: wait again afterwards); you get `run_stopped` only when none of them can go on |
-| `run_finished`, `run_failed` | The event's `report` has the result; update the plan (`pipeline_report detail: true` only when you need every visit) |
+| `run_finished`, `run_failed` | The event's `report` has the result (`pipeline_report detail: true` only when you need every visit). A step of a plan's autopilot does not send these: the plan goes on, or sends `plan_attention` |
 
 Step progress (`node_started`, `node_finished`, `check_failed`, `loop_repeated`,
 `commit_done`) is not delivered: loops handle failed checks and review findings
@@ -169,9 +188,9 @@ sees it. This replaces stop, abandon, edit and restart.
 |---|---|
 | `pipeline_hello` | Handshake; returns rules and event delivery options |
 | `pipeline_list` | Machines with descriptions (when to use them), params, validity |
-| `pipeline_start` | Start a run: `{ machine, params, wait?, acceptOutdated? }` → run id (and with `wait`, its next event). A machine written for an older pipeline engine is refused with what changed since; review it with the user, raise its `engineVersion`, or pass `acceptOutdated: true` |
+| `pipeline_start` | Start a run: `{ machine, params, planTask?, wait?, acceptOutdated? }` → run id (and with `wait`, its next event). A machine written for an older pipeline engine is refused with what changed since; review it with the user, raise its `engineVersion`, or pass `acceptOutdated: true` |
 | `pipeline_status` | Current step, loop iterations, visits per step, pending escalation, last events |
-| `pipeline_wait` | Block until the next event that needs you, the user typing (`user_input`), or a timeout |
+| `pipeline_wait` | Block until the next event that needs you, the user typing (`user_input`), or a timeout (one line of state). Without `runId`: the whole project |
 | `pipeline_answer` | Answer an escalation: `continue` (go on; approve a gate; leave an exhausted loop as it is), `retry` (run the step again; one more loop iteration), `reject` (gates), `stop` (ends the run). `params` changes machine params for the rest of the run (e.g. the stage id after approving a split) |
 | `pipeline_amend` | Add an instruction to the run; a running agent step continues with it in its session |
 | `pipeline_reload` | The active run uses its edited machine file for the steps to come (paused, stopped or waiting runs). Role files are read at every visit and need no reload |
@@ -182,30 +201,36 @@ sees it. This replaces stop, abandon, edit and restart.
 | `pipeline_runs` | Recent runs |
 | `pipeline_guide` / `pipeline_schema` | How to author machines; the machine file schema |
 | `pipeline_validate` / `pipeline_smoke` | Check machines statically / on this computer |
+| `plan_guide` | How plans work; read before writing one |
+| `plan_list` / `plan_status` / `plan_get` | The plans; progress in a few fields; a plan or one task |
+| `plan_create` / `plan_edit` | Create a draft; change a plan with a batch of operations (`baseRevision`, `ops`) |
+| `plan_approve` / `plan_activate` | A draft becomes approved once the user agrees; one approved plan is active |
+| `plan_run` / `plan_pause` | Start or continue the autopilot of the active plan (`note`, `wait`); hold it after the running step |
 
 ## 7. Typical session
 
-1. `pipeline_list` — pick the machine that fits the next task of the plan.
-2. `pipeline_start` with its params and `wait`.
-3. On `escalation`: answer it with `pipeline_answer` (with `wait`) if the plan
-   decides it, otherwise ask the user. On `run_finished` / `run_failed`: read the
-   event's report, update the plan if the machine did not, start the next task
-   with `wait`.
-4. If the project has no machines yet, read `pipeline_guide` and prepare them
-   with the user first.
+1. If the project has no machines yet, read `pipeline_guide` and prepare them with
+   the user first.
+2. Several tasks: `plan_guide`, `plan_create`, the user agrees, `plan_approve`,
+   `plan_activate`, `plan_run` with `wait`, then `pipeline_wait` without `runId`.
+3. On `plan_attention`: decide, `plan_edit` if the plan must change, `plan_run` with a
+   note. On `escalation`: `pipeline_answer` (with `wait`) if the plan decides it,
+   otherwise ask the user.
+4. One concrete task: `pipeline_list`, `pipeline_start` with its params and `wait`
+   (`plan_pause` first if an autopilot is on).
 
 `tools/list` always shows what the running AIDE version actually provides.
 
 ## 8. Orchestrating economically
 
-The orchestrator's knowledge of the project — its decisions and their reasons —
+The Strategist's knowledge of the project — its decisions and their reasons —
 is what makes it effective, so its context is usually large and keeps growing.
 **Every API call you make re-reads that whole context** (from the prompt cache,
 but still in full). The cost of orchestration is therefore *calls per cycle ×
 context size*, and the lever is the number of calls, not the context.
 
 Measured in a real project: with a ~250–300k context, about 45 of 62
-orchestrator calls over six runs were overhead, and orchestration used more of
+Strategist calls over six runs were overhead, and orchestration used more of
 the Claude limit than all pipeline agents together. Prompt-cache expiry was not
 the cause: with a 1-hour cache, wake-ups after 4–10 minute waits were all
 cache hits.

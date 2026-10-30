@@ -1,6 +1,7 @@
 import type { RunSnapshot } from '../pipeline/manager'
 import type { Escalation, EscalationAnswer, NodeVisit, RunState, RunStatus } from '../pipeline/engine/types'
 import { blockTitle, walkSteps, type Step } from '../../shared/pipelineMachine'
+import { escalationAudience } from '../../shared/plan'
 
 /**
  * The remote pipeline page's view of a run: the machine's step tree flattened
@@ -37,6 +38,10 @@ export interface RemoteEscalation {
   kind: Escalation['kind']
   node: string
   to: Escalation['to']
+  /** Who it waits for, e.g. "the Strategist, passed on by the Orchestrator". */
+  audience: string
+  /** What the plan's Orchestrator said about it, when it was asked. */
+  orchestratorNote?: string
   title: string
   message: string
   raisedAt: string
@@ -206,7 +211,8 @@ export function buildRemoteRunView(snapshot: RunSnapshot, options: { brief?: boo
     finishedAt: state.finishedAt,
     result: state.result,
     pending: pending && {
-      id: pending.id, kind: pending.kind, node: pending.node, to: pending.to, title: ESCALATION_TITLE[pending.kind],
+      id: pending.id, kind: pending.kind, node: pending.node, to: pending.to, audience: escalationAudience(pending), title: ESCALATION_TITLE[pending.kind],
+      ...(pending.orchestrator?.reason ? { orchestratorNote: [pending.orchestrator.reason, pending.orchestrator.proposal ? `Proposal: ${pending.orchestrator.proposal}` : '', pending.orchestrator.answer ? `Would answer ${pending.orchestrator.answer.action}: ${pending.orchestrator.answer.text}` : ''].filter(Boolean).join(' ') } : {}),
       message: pending.message, raisedAt: pending.raisedAt, actions: escalationActions(pending.kind)
     },
     lastAnswer: answered?.answer

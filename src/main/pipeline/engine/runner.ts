@@ -6,10 +6,11 @@ import type { CommitResult, FileChange } from '../git'
 import { checkCommitCoverage } from '../git'
 import { clip, type PipelineEventType } from '../events'
 import { inputRef, type AgentInputRecord } from '../../../shared/pipelineMachine'
-import type { AgentStep, Amendment, CheckStep, CommitStep, Escalation, EscalationAnswer, LoopFeedback, MachineDefinition, NodeVisit, Outcome, RunState } from './types'
+import { walkSteps } from '../../../shared/pipelineMachine'
+import type { Actor, AgentStep, Amendment, CheckStep, EscalationTo, OrchestratorHandling, CommitStep, Escalation, EscalationAnswer, LoopFeedback, MachineDefinition, NodeVisit, Outcome, PlanTaskLink, RunState } from './types'
 import { evaluateCondition, renderCommand, stringifyValue, templateRefs, type Scope } from './expressions'
 import { resolveSchema, validateAgainstSchema, BUILTIN_SCHEMAS } from './schema'
-import { DEFAULT_TIMEOUT_MIN, buildPipelineContext, buildSystemAppend, buildTaskPrompt, describeCondition, feedbackSections, invalidOutputPrompt, outputContract, stepSummary, stepSwitchPrompt } from './context'
+import { DEFAULT_TIMEOUT_MIN, actorName, buildPipelineContext, buildSystemAppend, buildTaskPrompt, describeCondition, feedbackSections, invalidOutputPrompt, outputContract, stepSummary, stepSwitchPrompt } from './context'
 import { MachineTree, blockLimit, type DescendContext, type TreeBlock, type TreeLeaf, type TreeNode } from './tree'
 import type { RunStore, StoredMachine } from './runStore'
 import { compactReport } from './reportView'
@@ -50,6 +51,12 @@ export interface EngineDeps {
   accountPool?(cli: string): boolean
   /** Output of a running check, after it is appended to the visit's check log. */
   onCheckOutput?(runId: string, node: string, visit: number, text: string): void
+  /**
+   * Called right before the last commit of a run linked to a plan task: marks the
+   * task done and stages the plan file, so the status goes in with the work.
+   * Returns how to take it back if the commit fails.
+   */
+  planCommit?(link: PlanTaskLink, findings: string[]): Promise<() => void>
 }
 
 const CHECK_OUTPUT_TAIL = 8000
@@ -79,7 +86,8 @@ export interface RunReport {
   loops: Record<string, number>
   visits: Array<{ node: string; visit: number; outcome: string | null; durationMs: number | null; costUsd: number | null; error: string | null }>
   commits: CommitResult[]
-  summaries: Array<{ node: string; summary: string }>
+  /** The last summary of each agent step, ordered by when that visit ended (visit and at absent in older reports). */
+  summaries: Array<{ node: string; visit?: number; at?: string; summary: string }>
   nonBlockingFindings: string[]
   /** Every check step that ran: the command and its last result (absent in reports from before it existed). */
   checks?: Array<{ node: string; command: string; passed: boolean; runs: number }>
@@ -87,7 +95,10 @@ export interface RunReport {
   pipelineIssues: Array<{ step: string; visit: number; issue: string }>
   amendments: Amendment[]
   escalations: Escalation[]
+  /** What the CLIs reported; agent visits whose CLI reports no cost (Codex, Cursor, Devin) are not in it. */
   costUsd: number
+  /** Agent visits without a reported cost (absent in older reports). */
+  uncostedVisits?: number
 }
 
 const ESCALATION_ACTIONS: Record<Escalation['kind'], string[]> = {
@@ -107,6 +118,7 @@ export function compactEscalation(e: Escalation): Record<string, unknown> {
     message: clip(e.message, 1200),
     actions: ESCALATION_ACTIONS[e.kind],
     ...(e.source ? { source: e.source, more: `pipeline_output step "${e.source.step}" visit ${e.source.visit}` } : {}),
+    ...(e.orchestrator ? { orchestrator: { status: e.orchestrator.status, ...(e.orchestrator.reason ? { reason: clip(e.orchestrator.reason, 800) } : {}), ...(e.orchestrator.proposal ? { proposal: clip(e.orchestrator.proposal, 800) } : {}), ...(e.orchestrator.answer ? { wouldAnswer: { action: e.orchestrator.answer.action, text: clip(e.orchestrator.answer.text, 800) } } : {}) } } : {}),
     summary: `${e.kind} escalation at ${e.node}: ${clip(e.message.split('\n')[0], 160)}`
   }
 }
@@ -142,12 +154,15 @@ export class PipelineRun {
     state.amendments ??= []
   }
 
-  static create(stored: StoredMachine, params: Record<string, unknown>, runId: string, projectPath: string, store: RunStore, deps: EngineDeps): PipelineRun {
+  static create(stored: StoredMachine, params: Record<string, unknown>, runId: string, projectPath: string, store: RunStore, deps: EngineDeps, plan: { planTask?: PlanTaskLink; auto?: boolean; instructions?: string[] } = {}): PipelineRun {
     const now = new Date().toISOString()
     const state: RunState = {
       runId,
       machineId: stored.machine.id,
       projectPath,
+      ...(plan.planTask ? { planTask: plan.planTask } : {}),
+      ...(plan.auto ? { planAuto: true } : {}),
+      actors: 2,
       status: 'paused',
       current: null,
       visits: {},
@@ -155,7 +170,7 @@ export class PipelineRun {
       bonus: {},
       feedback: {},
       iterationStart: {},
-      amendments: [],
+      amendments: (plan.instructions ?? []).map((text) => ({ node: null, text, by: (plan.auto ? 'orchestrator' : 'strategist') as Actor, at: now })),
       limitResumeAt: null,
       outputs: {},
       history: [],
@@ -299,6 +314,23 @@ export class PipelineRun {
     this.deps.emit(this.runId, type, data)
   }
 
+  /** Record what the plan's Orchestrator does with an open escalation. False when it is no longer open. */
+  setOrchestratorHandling(escalationId: string, handling: OrchestratorHandling): boolean {
+    const escalation = this.state.escalations.find((e) => e.id === escalationId)
+    if (!escalation || escalation.answer) return false
+    escalation.orchestrator = handling
+    this.save()
+    return true
+  }
+
+  /** Hand an open escalation to the Strategist after the Orchestrator passed it on (or could not decide). */
+  forwardEscalation(escalationId: string, summary: string): boolean {
+    const escalation = this.state.escalations.find((e) => e.id === escalationId)
+    if (!escalation || escalation.answer) return false
+    this.deps.emit(this.runId, 'escalation', { ...compactEscalation(escalation), forwarded: true, summary })
+    return true
+  }
+
   /**
    * Move the automatic resume of a run that waits for a usage limit — the account
    * pool switched the CLI to the account that is available soonest. Returns false
@@ -380,7 +412,7 @@ export class PipelineRun {
           this.deps.emit(this.runId, 'run_stopped', { node, summary: `the gate "${node}" was rejected; the run holds there — pipeline_resume asks it again, abandon ends the run` })
           return null
         }
-        this.repeat(target, { from: node, reason: `the gate "${node}" was rejected by the ${answer.by}`, details: answer.text })
+        this.repeat(target, { from: node, reason: `the gate "${node}" was rejected by ${actorName(answer.by)}`, details: answer.text })
         break
       }
       case 'limit': {
@@ -388,7 +420,7 @@ export class PipelineRun {
         if (!block) break
         if (answer.action === 'retry') {
           this.state.bonus[node] = (this.state.bonus[node] ?? 0) + 1
-          this.repeat(block, this.state.feedback[node] ?? { from: node, reason: `the ${answer.by} asked for another iteration`, details: answer.text })
+          this.repeat(block, this.state.feedback[node] ?? { from: node, reason: `${actorName(answer.by)} asked for another iteration`, details: answer.text })
         } else {
           this.state.current = this.tree.next(block, this.descendContext())
         }
@@ -417,7 +449,7 @@ export class PipelineRun {
 
       if (step.type === 'gate') {
         this.recordVisit(id, visits, null)
-        this.raise({ node: id, kind: 'gate', to: step.to ?? 'orchestrator', message: step.question })
+        this.raise({ node: id, kind: 'gate', to: target(step.to), message: step.question })
         return
       }
       if (step.type === 'repeat') {
@@ -536,7 +568,7 @@ export class PipelineRun {
       if (step.escalateIf && evaluateCondition(step.escalateIf, this.scope({}))) {
         const summary = (output as { summary?: unknown } | null)?.summary
         const message = (step.escalateMessage ?? `Step "${id}" asks for a decision (${describeCondition(step.escalateIf)}).`) + (typeof summary === 'string' && summary ? `\n\n${summary}` : '')
-        this.raise({ node: id, kind: 'step', to: step.escalateTo ?? 'orchestrator', message: `${message}\n\nContinue goes on with the next step; retry runs "${id}" again.`, source: { step: id, visit: this.state.visits[id] ?? 1 } })
+        this.raise({ node: id, kind: 'step', to: target(step.escalateTo), message: `${message}\n\nContinue goes on with the next step; retry runs "${id}" again.`, source: { step: id, visit: this.state.visits[id] ?? 1 } })
         return
       }
       if (step.repeatIf && evaluateCondition(step.repeatIf, this.scope({}))) {
@@ -549,7 +581,7 @@ export class PipelineRun {
       const command = result.command ?? step.command
       const target = this.repeatTarget(leaf, step.repeatLoop)
       if (target) this.repeat(target, { from: id, reason: `the check "${id}" (\`${command}\`) failed`, details: checkFeedback(result) })
-      else this.raise({ node: id, kind: 'step', to: 'orchestrator', message: `Check "${id}" (\`${command}\`) failed outside any loop. Continue ignores the failure; retry runs the check again.\n\n${checkFeedback(result, 2000)}`, source: { step: id, visit: this.state.visits[id] ?? 1 } })
+      else this.raise({ node: id, kind: 'step', to: 'agent', message: `Check "${id}" (\`${command}\`) failed outside any loop. Continue ignores the failure; retry runs the check again.\n\n${checkFeedback(result, 2000)}`, source: { step: id, visit: this.state.visits[id] ?? 1 } })
       return
     }
     if (step.type === 'commit' && outcome === 'fail') {
@@ -577,7 +609,7 @@ export class PipelineRun {
       if (onLimit === 'fail') { this.finish('failure', message); return }
       const what = block.kind === 'commit' ? 'commit step' : 'loop'
       const source = this.state.visits[feedback.from] ? { step: feedback.from, visit: this.state.visits[feedback.from] } : undefined
-      this.raise({ node: block.id, kind: 'limit', to: 'orchestrator', message: `${message}\n\n${feedback.details.slice(-3000)}\n\nRetry grants one more ${unit}; continue leaves the ${what} as if it passed.`, source })
+      this.raise({ node: block.id, kind: 'limit', to: 'agent', message: `${message}\n\n${feedback.details.slice(-3000)}\n\nRetry grants one more ${unit}; continue leaves the ${what} as if it passed.`, source })
       return
     }
     this.state.iterations[block.id] = next
@@ -680,7 +712,7 @@ export class PipelineRun {
       const added = (this.state.amendments ?? []).filter((a) => a.at >= earlier.startedAt).map((a) => `- ${a.text}`)
       prompt = [
         `Your previous attempt at this step ${why}. Continue from where you stopped: the work you already did is in the working tree, so check it and do not redo it.`,
-        ...(added.length ? [`New instructions from the ${this.state.amendments!.at(-1)!.by}; they take precedence over the task where they conflict:`, ...added] : []),
+        ...(added.length ? [`New instructions from ${actorName(this.state.amendments!.at(-1)!.by)}; they take precedence over the task where they conflict:`, ...added] : []),
         'Finish the step and give the final answer in the required format.'
       ].join('\n')
     }
@@ -827,10 +859,33 @@ export class PipelineRun {
       if (verdict.verdict !== 'accept') return { kind: 'done', outcome: 'fail', output: { issues: verdict.issues }, costUsd: result.costUsd }
     }
 
-    const commit = await this.deps.git.commitIndex(cwd, message)
+    // The last commit of a run on a plan task carries the task's status with the work.
+    const link = this.state.planTask
+    const undo = link && this.isLastCommit(id) ? await this.deps.planCommit?.(link, this.nonBlockingFindings()) : undefined
+    let commit: CommitResult
+    try {
+      commit = await this.deps.git.commitIndex(cwd, link ? withPlanTrailer(message, link) : message)
+    } catch (err) {
+      undo?.()
+      throw err
+    }
     this.commits.push(commit)
     this.deps.emit(this.runId, 'commit_done', { node: id, sha: commit.sha, summary: `committed ${commit.sha.slice(0, 10)} ${commit.message.split('\n')[0]} (${commit.files.length} files)` })
     return { kind: 'done', outcome: 'ok', output: { ...commit, issues: [] } }
+  }
+
+  /** Whether no commit step follows this one in the machine. */
+  private isLastCommit(id: string): boolean {
+    let last: string | null = null
+    walkSteps(this.machine.steps, (step) => { if (step.type === 'commit') last = step.id })
+    return last === id
+  }
+
+  private nonBlockingFindings(): string[] {
+    return Object.values(this.state.outputs).flatMap((output) => {
+      const findings = (output as { non_blocking?: unknown } | null)?.non_blocking
+      return Array.isArray(findings) ? findings.filter((f): f is string => typeof f === 'string') : []
+    })
   }
 
   // ── State transitions ─────────────────────────────────────────────────────
@@ -928,7 +983,7 @@ export class PipelineRun {
   private raiseEngineEscalation(node: string, message: string, refundVisit = false): void {
     if (refundVisit && this.state.visits[node]) this.state.visits[node] -= 1
     this.state.current = node
-    this.raise({ node, kind: 'engine', to: 'orchestrator', message })
+    this.raise({ node, kind: 'engine', to: 'agent', message })
   }
 
   private finish(result: 'success' | 'failure', reason: string | null): void {
@@ -958,12 +1013,18 @@ export class PipelineRun {
       costUsd: h.costUsd,
       error: h.error
     }))
-    const summaries: Array<{ node: string; summary: string }> = []
     const nonBlocking: string[] = []
-    for (const [node, output] of Object.entries(this.state.outputs)) {
+    for (const output of Object.values(this.state.outputs)) {
       const o = output as Record<string, unknown> | null
-      if (o && typeof o.summary === 'string' && this.tree.leaf(node)?.step.type === 'agent') summaries.push({ node, summary: o.summary })
       if (o && Array.isArray(o.non_blocking)) for (const f of o.non_blocking) if (typeof f === 'string') nonBlocking.push(f)
+    }
+    // The last summary of each agent step, in the order those visits ended: a later step's word supersedes an earlier one's.
+    const lastVisit = new Map<string, NodeVisit>()
+    for (const h of this.state.history) if (h.finishedAt && h.outcome !== 'interrupted') { lastVisit.delete(h.node); lastVisit.set(h.node, h) }
+    const summaries: RunReport['summaries'] = []
+    for (const [node, h] of lastVisit) {
+      const o = this.state.outputs[node] as Record<string, unknown> | null | undefined
+      if (o && typeof o.summary === 'string' && this.tree.leaf(node)?.step.type === 'agent') summaries.push({ node, visit: h.visit, at: h.finishedAt!, summary: o.summary })
     }
     // Pipeline issues from every visit, not only the last one of each step.
     const pipelineIssues: RunReport['pipelineIssues'] = []
@@ -1007,8 +1068,15 @@ export class PipelineRun {
       pipelineIssues,
       amendments: this.state.amendments ?? [],
       escalations: this.state.escalations,
-      costUsd: this.state.history.reduce((sum, h) => sum + (h.costUsd ?? 0), 0)
+      costUsd: this.state.history.reduce((sum, h) => sum + (h.costUsd ?? 0), 0),
+      uncostedVisits: this.state.history.filter((h) => h.finishedAt && h.costUsd === null && this.isAgentVisit(h.node)).length
     }
+  }
+
+  /** A visit that ran an agent CLI (an agent step, or a commit block with a reviewer). */
+  private isAgentVisit(node: string): boolean {
+    const step = this.tree.leaf(node)?.step
+    return step?.type === 'agent' || (step?.type === 'commit' && !!step.reviewer)
   }
 
   /** Short status for the orchestrator; outputs are fetched separately (`pipeline_output`). */
@@ -1041,6 +1109,21 @@ export class PipelineRun {
     this.store.saveState(this.state)
     this.deps.onStateChange?.(this.state)
   }
+}
+
+/** Where a machine sends a decision; "orchestrator" is the pre-engine-6 name of "agent". */
+function target(to: EscalationTo | undefined): Escalation['to'] {
+  return to === 'user' ? 'user' : 'agent'
+}
+
+/** The commit message with the plan task as a trailer, in the message's trailer block when it ends with one. */
+export function withPlanTrailer(message: string, link: PlanTaskLink): string {
+  // The trailer is AIDE's: a prep agent that copied it from earlier commits in the log does not get it twice.
+  const trimmed = message.split('\n').filter((line) => !/^Plan-Task:/i.test(line.trim())).join('\n').trimEnd()
+  const lastParagraph = trimmed.split(/\n\s*\n/).pop() ?? ''
+  const hasBody = /\n\s*\n/.test(trimmed)
+  const isTrailers = hasBody && lastParagraph.split('\n').every((line) => /^[A-Za-z0-9-]+: /.test(line))
+  return `${trimmed}${isTrailers ? '\n' : '\n\n'}Plan-Task: ${link.plan}/${link.task}\n`
 }
 
 /** Output of a check visit. */

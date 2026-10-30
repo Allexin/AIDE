@@ -24,7 +24,7 @@ const server: LaunchMcpServer = {
   args: [String.raw`C:\Program Files\AIDE\resources\app.asar.unpacked\resources\mcp\aide-mcp.cjs`, 'mcp'],
   env: { ELECTRON_RUN_AS_NODE: '1', AIDE_RUNTIME_DIR: String.raw`C:\Users\me\AppData\Roaming\aide\runtime` },
   tabEnv: { AIDE_TAB_ID: 'tab-3', AIDE_PROJECT: String.raw`D:\Games\Re Engine` },
-  toolTimeoutSec: 1900
+  toolTimeoutSec: 3100
 }
 
 describe('AIDE MCP server at launch', () => {
@@ -40,7 +40,7 @@ describe('AIDE MCP server at launch', () => {
       String.raw` -c 'mcp_servers.aide.command=''C:\Program Files\AIDE\AIDE.exe'''` +
       String.raw` -c 'mcp_servers.aide.args=[''C:\Program Files\AIDE\resources\app.asar.unpacked\resources\mcp\aide-mcp.cjs'',''mcp'']'` +
       String.raw` -c 'mcp_servers.aide.env={ELECTRON_RUN_AS_NODE=''1'',AIDE_RUNTIME_DIR=''C:\Users\me\AppData\Roaming\aide\runtime'',AIDE_TAB_ID=''tab-3'',AIDE_PROJECT=''D:\Games\Re Engine''}'` +
-      " -c 'mcp_servers.aide.tool_timeout_sec=1900'"
+      " -c 'mcp_servers.aide.tool_timeout_sec=3100'"
     )
     expect(() => codexMcpArgs([{ ...server, command: String.raw`C:\O'Brien\AIDE.exe` }], 'win32')).toThrow(/single quote/)
   })

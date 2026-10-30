@@ -1,5 +1,8 @@
 # Pipeline Orchestration — Implementation Plan
 
+> Plans, the Strategist and the short-lived Orchestrator came later: see
+> `docs/plan-mode-spec.md`. "Orchestrator" below is what is now the Strategist.
+>
 > Status: **Plan.** Captures the design agreed in discussion (2026-10-09) and the
 > phased path to build it. Items marked **[verify]** are assumptions about
 > third-party CLIs that Phase 0 must confirm against current documentation and

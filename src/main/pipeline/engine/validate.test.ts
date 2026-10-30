@@ -20,6 +20,14 @@ describe('validateMachine', () => {
     expect(validateMachine(machine([agent('a')]), env)).toEqual({ errors: [], warnings: [] })
   })
 
+  it('sends decisions to "agent" or "user"; "orchestrator" is accepted only in machines of engine 5 or older', () => {
+    const gate = (to: string): Step => ({ type: 'gate', id: 'g', question: 'ok?', to } as unknown as Step)
+    expect(validateMachine(machine([agent('a'), gate('agent')]), env).errors).toEqual([])
+    expect(validateMachine(machine([agent('a'), gate('orchestrator')]), env).errors.join()).toContain('"orchestrator" is now "agent"')
+    expect(validateMachine(machine([agent('a'), gate('orchestrator')], { engineVersion: 5 }), env).errors).toEqual([])
+    expect(validateMachine(machine([{ ...agent('a'), escalateTo: 'nobody' } as unknown as Step]), env).errors.join()).toContain('must be "agent" or "user"')
+  })
+
   it('rejects the old graph format with a pointer to the new one', () => {
     expect(errorsOf({ id: 'm', name: 'M', description: 'd', start: 'a', nodes: {}, edges: [] } as unknown as MachineDefinition)).toMatch(/old graph format/)
   })

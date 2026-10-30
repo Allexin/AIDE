@@ -21,6 +21,8 @@ export type PipelineEventType =
   | 'run_failed'
   | 'account_switched'
   | 'step_retrying'
+  /** A plan holds and needs the Strategist. Its `runId` is `plan:<planId>`. */
+  | 'plan_attention'
 
 export interface PipelineEvent {
   id: number
@@ -37,16 +39,19 @@ export interface PipelineEvent {
  * failed checks inside loops, commits) is in the report.
  */
 export const SIGNIFICANT_EVENTS: ReadonlySet<PipelineEventType> = new Set([
-  'escalation', 'run_paused', 'run_stopped', 'run_finished', 'run_failed'
+  'escalation', 'run_paused', 'run_stopped', 'run_finished', 'run_failed', 'plan_attention'
 ])
 
 /**
- * Whether the orchestrator gets the event. `quiet: true` in the data marks a
+ * Whether the Strategist gets the event. `quiet: true` in the data marks a
  * significant type that AIDE handles by itself (a usage limit the account pool
- * switches away from): it stays in the run's event log, but nobody is woken.
+ * switches away from, an escalation the plan's Orchestrator answers): it stays in
+ * the run's event log, but nobody is woken. `resolved: true` marks one that has
+ * been dealt with since (the escalation answered, the plan continued, the run
+ * resumed), so a wait from an older `since` does not hand it out again.
  */
 export function isSignificant(event: { type: string; data: Record<string, unknown> }): boolean {
-  return SIGNIFICANT_EVENTS.has(event.type as PipelineEventType) && event.data.quiet !== true
+  return SIGNIFICANT_EVENTS.has(event.type as PipelineEventType) && event.data.quiet !== true && event.data.resolved !== true
 }
 
 /** Shorten text for the orchestrator's context; the full text stays available through pipeline_output. */
@@ -75,6 +80,11 @@ class ProjectEvents {
 
   since(runId: string | null, since: number): PipelineEvent[] {
     return this.events.filter((event) => event.id > since && (runId === null || event.runId === runId))
+  }
+
+  /** Mark the events that match as dealt with. */
+  resolve(match: (event: PipelineEvent) => boolean): void {
+    for (const event of this.events) if (event.data.resolved !== true && match(event)) event.data = { ...event.data, resolved: true }
   }
 
   /** Continue numbering after ids already handed out (by an AIDE instance that has since restarted). */
@@ -121,6 +131,7 @@ export const pipelineEvents = {
   subscribe: (projectPath: string, listener: Listener): (() => void) =>
     forProject(projectPath).subscribe(listener),
   seed: (projectPath: string, nextId: number): void => forProject(projectPath).seed(nextId),
+  resolve: (projectPath: string, match: (event: PipelineEvent) => boolean): void => forProject(projectPath).resolve(match),
   noteObserver: (projectPath: string): void => forProject(projectPath).noteObserver(),
   observerActivity: (projectPath: string): number => forProject(projectPath).observerActivity(),
   hasObserver: (projectPath: string): boolean => forProject(projectPath).hasObserver(),

@@ -4,7 +4,7 @@
  */
 
 export type {
-  AgentStep, CheckStep, CommitStep, GateStep, GroupStep, IfStep, JsonSchema, LoopStep,
+  AgentStep, CheckStep, CommitStep, EscalationTo, GateStep, GroupStep, IfStep, JsonSchema, LoopStep,
   MachineDefinition, ParamDefinition, ParamType, RepeatStep, Step, StepType
 } from '../../../shared/pipelineMachine'
 
@@ -50,13 +50,31 @@ export interface Escalation {
    * `engine`: the engine could not run the step (agent crash, unusable output, …).
    */
   kind: 'step' | 'gate' | 'limit' | 'engine'
-  to: 'user' | 'orchestrator'
+  /** `agent`: the plan's Orchestrator when the plan lets it answer this kind, the Strategist otherwise. */
+  to: 'user' | 'agent'
   message: string
   /** The step visit whose output explains the escalation (for `pipeline_output`). */
   source?: { step: string; visit: number }
   raisedAt: string
   answer: EscalationAnswer | null
+  /** What the plan's Orchestrator did with it, when it was asked. */
+  orchestrator?: OrchestratorHandling
 }
+
+/** The plan's Orchestrator on an escalation: it is deciding, it answered, or it passed it on to the Strategist. */
+export interface OrchestratorHandling {
+  status: 'deciding' | 'answered' | 'escalated' | 'shadow' | 'failed'
+  /** The Orchestrator call (numbered with the plan's decisions); absent when AIDE passed it on without one. */
+  decision?: number
+  reason?: string
+  /** For escalated / shadow: what it proposes the Strategist answers. */
+  proposal?: string
+  /** For shadow: the answer it would have given. */
+  answer?: { action: EscalationAnswer['action']; text: string }
+}
+
+/** Who took a decision or added an instruction. */
+export type Actor = 'user' | 'strategist' | 'orchestrator'
 
 export interface EscalationAnswer {
   /**
@@ -64,7 +82,7 @@ export interface EscalationAnswer {
    * retry: run the step again (limit: one more iteration); reject: reject a gate; stop: end the run.   */
   action: 'continue' | 'retry' | 'reject' | 'stop'
   text: string
-  by: 'user' | 'orchestrator'
+  by: Actor
   at: string
   /** Params changed by this answer for the rest of the run (e.g. the stage id after a split). */
   params?: Record<string, unknown>
@@ -74,7 +92,7 @@ export interface Amendment {
   /** The step that was running (or next) when the instruction was given. */
   node: string | null
   text: string
-  by: 'user' | 'orchestrator'
+  by: Actor
   at: string
 }
 
@@ -87,10 +105,25 @@ export interface LoopFeedback {
   details: string
 }
 
+/** The plan task a run works on. */
+export interface PlanTaskLink {
+  plan: string
+  task: string
+}
+
 export interface RunState {
   runId: string
   machineId: string
   projectPath: string
+  /** The plan task this run does; absent for a run outside any plan. */
+  planTask?: PlanTaskLink | null
+  /** Started by the plan's autopilot: its end goes to the autopilot, not to the Strategist. */
+  planAuto?: boolean
+  /**
+   * 2: escalations go to "agent" and decisions are by "strategist" or "orchestrator" (the plan's).
+   * Older runs said "orchestrator" for the Strategist; the store translates them on load.
+   */
+  actors?: 2
   status: RunStatus
   /** Leaf step to execute next (or currently executing / interrupted). */
   current: string | null

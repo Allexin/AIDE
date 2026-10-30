@@ -42,7 +42,7 @@ describe('buildRemoteRunView', () => {
 
   it('offers the answers the pending escalation takes and keeps the last decision', () => {
     const escalation = (id: string, kind: Escalation['kind'], answer: Escalation['answer']): Escalation =>
-      ({ id, node: 'implement', kind, to: 'orchestrator', message: 'blocked: needs a decision', raisedAt: '2026-10-26T10:01:00Z', answer })
+      ({ id, node: 'implement', kind, to: 'agent', message: 'blocked: needs a decision', raisedAt: '2026-10-26T10:01:00Z', answer })
     const view = buildRemoteRunView(snapshot({
       status: 'waiting', current: 'implement',
       escalations: [

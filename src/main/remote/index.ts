@@ -21,7 +21,8 @@ import { addFsChangeObserver, addGitStatusObserver } from '../filetree/watcher'
 import { logEvent } from '../diagnostics'
 import { runGitStatus } from '../filetree/gitStatus'
 import type { HistoryEntry } from '../pty/cliTools/types'
-import { pipelineView } from '../pipeline'
+import { pipelineView, planService } from '../pipeline'
+import { buildRemotePlanView } from './planView'
 import type { RunSnapshot } from '../pipeline/manager'
 import type { AnswerAction, RunControl } from '../pipeline/viewService'
 import { buildRemoteRunView } from './pipelineRunView'
@@ -1574,8 +1575,26 @@ export class RemoteServer {
             const brief = msg.brief === true
             const push = (snapshot: RunSnapshot | null): void => send({ type: 'pipeline-run', run: snapshot ? buildRemoteRunView(snapshot, { brief }) : null })
             if (!projectPath) { push(null); break }
-            pipelineCleanup = pipelineView.subscribe(projectPath, { onState: push })
+            const offRun = pipelineView.subscribe(projectPath, { onState: push })
+            const pushPlan = (): void => send({ type: 'plan-view', plan: buildRemotePlanView(planService.snapshot(projectPath), { brief }) })
+            const onPlanChanged = (path: string): void => { if (path === projectPath) pushPlan() }
+            planService.on('changed', onPlanChanged)
+            pipelineCleanup = () => { offRun(); planService.off('changed', onPlanChanged) }
             push(pipelineView.snapshot(projectPath))
+            pushPlan()
+            break
+          }
+          // The history of a plan task: the step visits of one of its runs, loaded when the task is opened.
+          case 'plan-run-visits': {
+            const runId = String(msg.runId ?? '')
+            send({ type: 'plan-run-visits', runId, visits: projectPath && runId ? planService.runVisits(projectPath, runId) : [] })
+            break
+          }
+          case 'plan-control': {
+            const action = String(msg.action ?? '')
+            if (!projectPath) { send({ type: 'plan-control-result', action, error: 'No project.' }); break }
+            void planService.control(projectPath, action, { planId: typeof msg.planId === 'string' ? msg.planId : undefined, note: typeof msg.note === 'string' ? msg.note : undefined })
+              .then((error) => send({ type: 'plan-control-result', action, error }))
             break
           }
           // The current account and limits of every CLI the run's machine uses, as the pipeline tab shows them.
@@ -1611,6 +1630,22 @@ export class RemoteServer {
             const node = String(msg.node ?? '')
             const visit = Number(msg.visit)
             if (!projectPath || !runId || !node || !Number.isInteger(visit)) break
+            // An Orchestrator call of a plan is shown like a step visit: run "plan:<id>", node "orchestrator", visit = call number.
+            if (runId.startsWith('plan:')) {
+              const planId = runId.slice('plan:'.length)
+              const onEntry = (path: string, plan: string, decision: number, entry: unknown): void => {
+                if (path === projectPath && plan === planId && decision === visit) send({ type: 'pipeline-visit-entry', runId, node, visit, entry })
+              }
+              planService.on('decision-entry', onEntry)
+              visitCleanup = () => { planService.off('decision-entry', onEntry) }
+              const record = planService.decisionRecord(projectPath, planId, visit)
+              send({
+                type: 'pipeline-visit', runId, node, visit,
+                entries: record.entries.slice(-VISIT_ENTRIES_MAX), skippedEntries: Math.max(0, record.entries.length - VISIT_ENTRIES_MAX),
+                log: '', skippedLog: false, output: record.decision
+              })
+              break
+            }
             const same = (r: string, n: string, v: number): boolean => r === runId && n === node && v === visit
             visitCleanup = pipelineView.subscribe(projectPath, {
               onTranscript: (r, n, v, entry) => { if (same(r, n, v)) send({ type: 'pipeline-visit-entry', runId, node, visit, entry }) },
@@ -1634,7 +1669,9 @@ export class RemoteServer {
             const runId = String(msg.runId ?? '')
             const node = String(msg.node ?? '')
             const visit = Number(msg.visit)
-            const records = projectPath && runId && node && Number.isInteger(visit) ? pipelineView.agentInputs(projectPath, runId, node, visit) : []
+            const records = !projectPath || !runId || !node || !Number.isInteger(visit) ? []
+              : runId.startsWith('plan:') ? planService.decisionRecord(projectPath, runId.slice('plan:'.length), visit).inputs
+                : pipelineView.agentInputs(projectPath, runId, node, visit)
             send({ type: 'pipeline-agent-input', runId, node, visit, records })
             break
           }
@@ -2435,6 +2472,7 @@ ${HISTORY_STYLE}
     var historyNewCount = 0
     var historyRequest = 0
     var pipelineBrief = null
+    var planBrief = null
     // Status line once the tab is taken: its CLI and its title (the terminal title the CLI sets).
     var tabToolName = ''
     var tabTitle = ''
@@ -3321,9 +3359,18 @@ ${HISTORY_RENDER_SCRIPT}
     function updatePipelineButton() {
       var button = document.getElementById('pipeline-btn')
       if (!button) return
-      button.style.display = pipelineBrief ? '' : 'none'
-      if (!pipelineBrief) return
-      var waiting = !!pipelineBrief.pending
+      button.style.display = pipelineBrief || planBrief ? '' : 'none'
+      var planWaiting = !!(planBrief && planBrief.needsAttention)
+      if (!pipelineBrief) {
+        if (!planBrief) return
+        button.textContent = planWaiting ? 'Pipeline !' : 'Pipeline'
+        button.title = 'Plan: ' + planBrief.title
+        button.classList.toggle('pipeline-attention', planWaiting)
+        button.style.color = '#858585'
+        button.style.borderColor = '#555'
+        return
+      }
+      var waiting = !!pipelineBrief.pending || planWaiting
       button.textContent = waiting ? 'Pipeline !' : 'Pipeline'
       button.title = pipelineBrief.machineName + ' — ' + pipelineBrief.status
       button.classList.toggle('pipeline-attention', waiting)
@@ -3454,6 +3501,9 @@ ${HISTORY_RENDER_SCRIPT}
         setStatus('Auth failed — session expired, reload the page')
       } else if (msg.type === 'tabs') {
         setStatus('No tab selected — go back and choose a tab')
+      } else if (msg.type === 'plan-view') {
+        planBrief = msg.plan
+        updatePipelineButton()
       } else if (msg.type === 'pipeline-run') {
         pipelineBrief = msg.run
         updatePipelineButton()

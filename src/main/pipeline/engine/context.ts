@@ -28,8 +28,13 @@ export function stepSummary(step: LeafStep): string {
   }
 }
 
+/** Who decided, as agents read it. */
+export function actorName(by: string): string {
+  return by === 'user' ? 'the user' : by === 'orchestrator' ? 'the Orchestrator of the plan' : 'the Strategist (the agent that manages the work)'
+}
+
 function performer(step: LeafStep): string {
-  return step.type === 'agent' ? 'agent' : step.type === 'gate' ? `approval by the ${step.to ?? 'orchestrator'}` : 'AIDE'
+  return step.type === 'agent' ? 'agent' : step.type === 'gate' ? (step.to === 'user' ? 'approval by the user' : 'approval by the agent that manages the run') : 'AIDE'
 }
 
 export function describeCondition(condition: string): string {
@@ -188,9 +193,9 @@ export function buildPipelineContext(machine: MachineDefinition, current: string
   for (const e of state.escalations) {
     const changed = Object.entries(e.answer?.params ?? {}).map(([k, v]) => `${k} = ${JSON.stringify(v)}`)
     if (!e.answer || (!e.answer.text.trim() && !changed.length)) continue
-    lines.push(`- Decision by the ${e.answer.by} at "${e.node}" (${e.answer.action}): ${e.answer.text.trim()}${changed.length ? `${e.answer.text.trim() ? ' ' : ''}(params changed for the rest of the run: ${changed.join(', ')})` : ''}`)
+    lines.push(`- Decision by ${actorName(e.answer.by)} at "${e.node}" (${e.answer.action}): ${e.answer.text.trim()}${changed.length ? `${e.answer.text.trim() ? ' ' : ''}(params changed for the rest of the run: ${changed.join(', ')})` : ''}`)
   }
-  for (const a of state.amendments ?? []) lines.push(`- Instruction from the ${a.by}${a.node ? ` (given during "${a.node}")` : ''}: ${a.text.trim()}`)
+  for (const a of state.amendments ?? []) lines.push(`- Instruction from ${actorName(a.by)}${a.node ? ` (given during "${a.node}")` : ''}: ${a.text.trim()}`)
   return lines.join('\n')
 }
 

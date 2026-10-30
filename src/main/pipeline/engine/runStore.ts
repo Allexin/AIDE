@@ -33,6 +33,10 @@ export class RunStore {
     return join(this.runsRoot, runId)
   }
 
+  exists(runId: string): boolean {
+    return existsSync(this.dir(runId))
+  }
+
   create(state: RunState, stored: StoredMachine, params: Record<string, unknown>): void {
     const dir = this.dir(state.runId)
     mkdirSync(join(dir, 'nodes'), { recursive: true })
@@ -152,7 +156,7 @@ export class RunStore {
     const dir = this.dir(runId)
     try {
       return {
-        state: JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')) as RunState,
+        state: currentActors(JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')) as RunState),
         stored: JSON.parse(readFileSync(join(dir, 'machine.json'), 'utf8')) as StoredMachine,
         params: JSON.parse(readFileSync(join(dir, 'params.json'), 'utf8')) as Record<string, unknown>
       }
@@ -171,4 +175,21 @@ export class RunStore {
 export function newRunId(machineId: string, now: Date = new Date()): string {
   const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
   return `${stamp}-${machineId.replace(/[^A-Za-z0-9_-]/g, '_')}`
+}
+
+/**
+ * A run from before the plan's Orchestrator could answer escalations said
+ * "orchestrator" for the Strategist: its escalations go to "agent" and its
+ * decisions are the Strategist's.
+ */
+export function currentActors(state: RunState): RunState {
+  if (state.actors === 2) return state
+  const legacy = state as unknown as { escalations?: Array<{ to: string; answer: { by: string } | null }>; amendments?: Array<{ by: string }> }
+  for (const e of legacy.escalations ?? []) {
+    if (e.to === 'orchestrator') e.to = 'agent'
+    if (e.answer?.by === 'orchestrator') e.answer.by = 'strategist'
+  }
+  for (const a of legacy.amendments ?? []) if (a.by === 'orchestrator') a.by = 'strategist'
+  state.actors = 2
+  return state
 }

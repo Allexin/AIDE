@@ -5,8 +5,11 @@ import { RunStore, newRunId } from './engine/runStore'
 import { loadLibrary, readRole, roleExists, validateParams, type LibraryEntry } from './engine/library'
 import { validateMachine, type ValidationResult } from './engine/validate'
 import { outdatedMessage } from './engine/compat'
-import type { EscalationAnswer, MachineDefinition, RunState } from './engine/types'
-import type { AgentInputRecord } from '../../shared/pipelineMachine'
+import type { Actor, Escalation, EscalationAnswer, OrchestratorHandling, MachineDefinition, PlanTaskLink, RunState } from './engine/types'
+import { walkSteps, type AgentInputRecord } from '../../shared/pipelineMachine'
+import type { RunVisitInfo } from '../../shared/plan'
+import type { HeadlessRun } from './headless/types'
+import type { AgentRequest } from './engine/runner'
 import { pipelineEvents, type PipelineEventType } from './events'
 
 /**
@@ -46,11 +49,57 @@ export interface MachineInfo {
   validation: ValidationResult
 }
 
+export interface StartOptions {
+  acceptOutdated?: boolean
+  /** The plan task this run does. */
+  planTask?: PlanTaskLink
+  /** Started by the plan's autopilot. */
+  auto?: boolean
+  /** Shown to every step of the run, as instructions added at its start. */
+  instructions?: string[]
+  /** Called with the run id before the run takes its first step. */
+  onCreated?(runId: string): void
+}
+
+/** What plans add to runs; set by the plan service. */
+export interface PlanHooks {
+  /** Refuses a link to an unknown plan or task. */
+  checkLink(projectPath: string, link: PlanTaskLink): void
+  /** A run is about to start that the autopilot did not start. */
+  onOutsideStart(projectPath: string): void
+  /** Mark the task done and stage the plan file; returns how to take it back. */
+  planCommit(projectPath: string, link: PlanTaskLink, findings: string[]): Promise<() => void>
+  /**
+   * An escalation of a run is being announced. True when the plan's Orchestrator
+   * takes it (it then answers it or passes it on): the Strategist is not woken.
+   */
+  claimEscalation(projectPath: string, run: RunState, escalation: Escalation): boolean
+}
+
 export class PipelineManager extends EventEmitter {
   private readonly active = new Map<string, PipelineRun>()
+  private planHooks: PlanHooks | null = null
 
   constructor(private readonly env: ManagerEnvironment) {
     super()
+  }
+
+  setPlanHooks(hooks: PlanHooks): void {
+    this.planHooks = hooks
+  }
+
+  /** Start an agent CLI outside any run (the plan's Orchestrator). */
+  startAgent(projectPath: string, request: AgentRequest): HeadlessRun {
+    return this.env.deps(projectPath).startAgent(request)
+  }
+
+  /** Why a run of this machine could not start, or null. */
+  machineProblem(projectPath: string, machineId: string): string | null {
+    const entry = this.machineEntry(projectPath, machineId)
+    if (!entry) return `Unknown machine "${machineId}".`
+    const errors = this.validate(entry).errors
+    if (errors.length) return `Machine "${machineId}" is invalid:\n- ${errors.join('\n- ')}`
+    return outdatedMessage(entry.machine)
   }
 
   private store(projectPath: string): RunStore {
@@ -102,12 +151,21 @@ export class PipelineManager extends EventEmitter {
     return {
       ...this.env.deps(projectPath),
       readRole,
-      emit: (runId: string, type: PipelineEventType, data: Record<string, unknown>) => {
+      emit: (runId: string, type: PipelineEventType, rawData: Record<string, unknown>) => {
+        // The end of a run the autopilot started goes to the autopilot; it wakes the Strategist when needed.
+        const run = this.active.get(projectPath)
+        const auto = (type === 'run_finished' || type === 'run_failed') && run?.state.planAuto === true
+        // So may an escalation of such a run: the plan's Orchestrator answers it or passes it on.
+        const escalation = type === 'escalation' && run?.runId === runId ? run.state.escalations.find((e) => e.id === rawData.escalationId && !e.answer) : undefined
+        const claimed = !!escalation && rawData.forwarded !== true && !!this.planHooks?.claimEscalation(projectPath, run!.state, escalation)
+        const { forwarded: _forwarded, ...plain } = rawData
+        const data = auto || claimed ? { ...plain, quiet: true } : plain
         const observed = pipelineEvents.hasObserver(projectPath)
         const event = pipelineEvents.emit(projectPath, runId, type, data)
         try { store.appendEvent(runId, event as unknown as Record<string, unknown>) } catch { /* run dir removed */ }
         this.emit('event', projectPath, runId, type, data, event.id, observed)
       },
+      planCommit: (link, findings) => this.planHooks?.planCommit(projectPath, link, findings) ?? Promise.resolve(() => {}),
       onStateChange: (state: RunState) => {
         const run = this.active.get(projectPath)
         if (run && run.runId === state.runId) this.emit('state', projectPath, this.toSnapshot(projectPath, run))
@@ -122,9 +180,10 @@ export class PipelineManager extends EventEmitter {
   }
 
   /** Start a run. Returns the run id and non-fatal warnings, or throws with a readable message. */
-  async start(projectPath: string, machineId: string, params: Record<string, unknown>, options: { acceptOutdated?: boolean } = {}): Promise<{ runId: string; warnings: string[] }> {
+  async start(projectPath: string, machineId: string, params: Record<string, unknown>, options: StartOptions = {}): Promise<{ runId: string; warnings: string[] }> {
     const current = this.active.get(projectPath)
-    if (current && !current.isFinal()) throw new Error(`Run ${current.runId} is still ${current.state.status}. Finish, stop or abandon it first.`)
+    if (current && !current.isFinal()) throw new Error(`Run ${current.runId} is still ${current.state.status}. Wait for it to finish, or abandon it first.${current.state.planAuto ? ' It is a step of a plan: plan_pause holds the plan after this step.' : ''}`)
+    if (options.planTask) this.planHooks?.checkLink(projectPath, options.planTask)
     const entry = this.library(projectPath).find((e) => e.machine.id === machineId)
     if (!entry) throw new Error(`Unknown machine "${machineId}". Call pipeline_list for the available machines.`)
     const validation = this.validate(entry)
@@ -141,9 +200,17 @@ export class PipelineManager extends EventEmitter {
     const dirty = await deps.git.status(projectPath).catch(() => [])
     if (dirty.length) warnings.push(`The working tree has ${dirty.length} uncommitted change(s); they will mix into this run's diff and commits.`)
 
+    // Checked again: the git call above yields, and the autopilot may have started a step meanwhile.
+    const raced = this.active.get(projectPath)
+    if (raced && !raced.isFinal()) throw new Error(`Run ${raced.runId} is still ${raced.state.status}. Wait for it to finish, or abandon it first.`)
+    if (!options.auto) this.planHooks?.onOutsideStart(projectPath)
     const store = this.store(projectPath)
-    const run = PipelineRun.create({ machine: entry.machine, machineDir: entry.machineDir }, params, newRunId(machineId), projectPath, store, this.engineDeps(projectPath, store))
+    // Run ids have a resolution of a second; two runs of a machine in one second must not share a directory.
+    let runId = newRunId(machineId)
+    for (let n = 2; store.exists(runId); n++) runId = `${newRunId(machineId)}-${n}`
+    const run = PipelineRun.create({ machine: entry.machine, machineDir: entry.machineDir }, params, runId, projectPath, store, this.engineDeps(projectPath, store), { planTask: options.planTask, auto: options.auto, instructions: options.instructions })
     this.active.set(projectPath, run)
+    options.onCreated?.(run.runId)
     this.emit('state', projectPath, this.toSnapshot(projectPath, run))
     void run.run()
     return { runId: run.runId, warnings }
@@ -228,7 +295,27 @@ export class PipelineManager extends EventEmitter {
     const run = this.require(projectPath, runId)
     if (run.state.status === 'waiting') throw new Error('The run is waiting for an escalation answer; use pipeline_answer.')
     if (run.isFinal()) throw new Error('The run has already ended.')
+    pipelineEvents.resolve(projectPath, (e) => e.runId === run.runId && (e.type === 'run_paused' || e.type === 'run_stopped'))
     void run.resume()
+  }
+
+  /** Record what the plan's Orchestrator does with an open escalation of the active run; false when it is no longer open. */
+  setOrchestratorHandling(projectPath: string, runId: string, escalationId: string, handling: OrchestratorHandling): boolean {
+    const run = this.active.get(projectPath)
+    return !!run && run.runId === runId && run.setOrchestratorHandling(escalationId, handling)
+  }
+
+  /** The Orchestrator passed an escalation on, or could not decide: announce it to the Strategist. */
+  forwardEscalation(projectPath: string, runId: string, escalationId: string, summary: string): boolean {
+    const run = this.active.get(projectPath)
+    return !!run && run.runId === runId && run.forwardEscalation(escalationId, summary)
+  }
+
+  /** The open escalation of the active run with this id, or null. */
+  openEscalation(projectPath: string, runId: string, escalationId: string): Escalation | null {
+    const run = this.active.get(projectPath)
+    if (!run || run.runId !== runId) return null
+    return run.state.escalations.find((e) => e.id === escalationId && !e.answer) ?? null
   }
 
   /** Record an event that happened to the run from outside the engine (the account pool). */
@@ -264,14 +351,16 @@ export class PipelineManager extends EventEmitter {
   }
 
   /** Add an instruction to the active run (`pipeline_amend`). */
-  async amend(projectPath: string, text: string, by: 'user' | 'orchestrator', runId?: string): Promise<'restarted' | 'noted'> {
+  async amend(projectPath: string, text: string, by: Actor, runId?: string): Promise<'restarted' | 'noted'> {
     if (!text.trim()) throw new Error('The instruction is empty.')
     return this.require(projectPath, runId).amend(text.trim(), by)
   }
 
   async answer(projectPath: string, escalationId: string, answer: Omit<EscalationAnswer, 'at'>, runId?: string): Promise<void> {
-    const problem = await this.require(projectPath, runId).answer(escalationId, answer)
+    const run = this.require(projectPath, runId)
+    const problem = await run.answer(escalationId, answer)
     if (problem) throw new Error(problem)
+    pipelineEvents.resolve(projectPath, (e) => e.runId === run.runId && e.type === 'escalation' && e.data.escalationId === escalationId)
   }
 
   /** State of the active run, or of a finished run read from disk. */
@@ -303,6 +392,42 @@ export class PipelineManager extends EventEmitter {
       if (log) output = { log }
     }
     return output === undefined ? null : { runId: state.runId, step, visit: chosen, output }
+  }
+
+  /** A run as views show it, active or stored: a plan task's past runs open like the current one. */
+  runSnapshot(projectPath: string, runId: string): RunSnapshot | null {
+    const active = this.active.get(projectPath)
+    if (active?.runId === runId) return this.toSnapshot(projectPath, active)
+    const stored = this.store(projectPath).load(runId)
+    return stored ? { runId, projectPath, machine: stored.stored.machine, state: stored.state } : null
+  }
+
+  /** Every step visit of a run, active or stored: the history of a plan task. */
+  runVisits(projectPath: string, runId: string): RunVisitInfo[] {
+    const active = this.active.get(projectPath)
+    const live = active?.runId === runId ? { state: active.state, machine: active.definition } : null
+    const stored = live ? null : this.store(projectPath).load(runId)
+    const state = live?.state ?? stored?.state
+    const machine = live?.machine ?? stored?.stored.machine
+    if (!state || !machine) return []
+    const steps = new Map<string, { type: string; agent: boolean; cli: string | null }>()
+    walkSteps(machine.steps, (step) => {
+      if (step.type === 'agent') steps.set(step.id, { type: 'agent', agent: true, cli: step.cli ?? machine.defaults?.cli ?? null })
+      else if (step.type === 'commit') {
+        steps.set(step.id, { type: 'commit', agent: !!step.reviewer, cli: step.reviewer?.cli ?? machine.defaults?.cli ?? null })
+        steps.set(step.prep.id, { type: 'agent', agent: true, cli: step.prep.cli ?? machine.defaults?.cli ?? null })
+      } else steps.set(step.id, { type: step.type, agent: false, cli: null })
+    })
+    return state.history.map((h) => ({
+      node: h.node,
+      visit: h.visit,
+      ...(steps.get(h.node) ?? { type: 'step', agent: false, cli: null }),
+      outcome: h.outcome,
+      startedAt: h.startedAt,
+      finishedAt: h.finishedAt,
+      costUsd: h.costUsd,
+      error: h.error
+    }))
   }
 
   transcript(projectPath: string, runId: string, node: string, visit: number): HistoryEntry[] {

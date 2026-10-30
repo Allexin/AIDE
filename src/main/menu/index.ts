@@ -16,6 +16,7 @@ import { listAccounts, updateAccount as updateStoredAccount, getActiveAccount, s
 import { offerRestartAfterAccountChange } from '../pty/registry'
 import { getCommandLineArgumentsHelp } from '../startupArgs'
 import { accountLoadedByUser } from '../accounts/accountSwitch'
+import { accountText } from '../accounts/accountDisplay'
 
 // Injected by setupMenu — avoids circular dep with windows/editor.ts
 type OpenProjectFn = (path: string) => { success: boolean; error?: string }
@@ -221,7 +222,7 @@ async function autoSaveCurrentCredentials(toolId: string): Promise<boolean> {
     const { response } = await dialog.showMessageBox({
       type: 'question',
       title: 'Account mismatch',
-      message: `Account "${saved.name}" was saved as ${saved.identifier}, but currently logged in as ${currentIdentifier}.\n\nOverwrite "${saved.name}" credentials with the current login?`,
+      message: accountText(`Account "${saved.name}" was saved as ${saved.identifier}, but currently logged in as ${currentIdentifier}.\n\nOverwrite "${saved.name}" credentials with the current login?`),
       buttons: ['Overwrite', 'Skip', 'Cancel'],
       defaultId: 0,
       cancelId: 2
@@ -311,7 +312,7 @@ export function rebuildMenu(): void {
     } else {
       for (const acc of accs) {
         toolSubmenu.push({
-          label: acc.name,
+          label: accountText(acc.name),
           click: async (): Promise<void> => {
             const t = getToolById(tool.id)
             if (!t?.importCredentials) return
@@ -322,7 +323,7 @@ export function rebuildMenu(): void {
             try {
               await t.importCredentials(stored.credentials)
             } catch (err) {
-              dialog.showErrorBox(`${tool.name}: loading "${acc.name}" failed`, err instanceof Error ? err.message : String(err))
+              dialog.showErrorBox(accountText(`${tool.name}: loading "${acc.name}" failed`), accountText(err instanceof Error ? err.message : String(err)))
               return
             }
             setActiveAccount(tool.id, acc.id)

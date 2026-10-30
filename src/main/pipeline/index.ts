@@ -18,7 +18,9 @@ import { AccountPool, poolHandles } from './accountPool'
 import { EventRelay } from './eventRelay'
 import { failedRun } from './headless/common'
 import { killAllProcessTreesSync, runShellCommand } from './processRunner'
-import { commitIndex, headSha, stagedDiff, status, workingDiff } from './git'
+import { commitIndex, commitsSince, headSha, stagedDiff, stagePaths, status, workingDiff } from './git'
+import { PlanService } from './plan/planService'
+import { tabCacheTtl } from './promptCache'
 import { smokeTestMachine } from './smoke'
 
 /**
@@ -58,6 +60,18 @@ export const pipelineManager = new PipelineManager({
 /** Run views (the desktop pipeline tab, the remote pipeline page) read and control runs through this. */
 export const pipelineView = new PipelineViewService(pipelineManager)
 
+/** Plans of the open projects; the MCP tools, the plan tab and the remote page work through this. */
+export const planService = new PlanService(pipelineManager, {
+  userDir: (projectPath) => getProjectUserPath(projectPath, 'plans'),
+  stage: stagePaths,
+  headSha,
+  commitsSince
+})
+
+function planGuide(): string {
+  return readFileSync(join(__dirname, '../../resources/docs/plan-guide.md'), 'utf8')
+}
+
 function authoringGuide(): string {
   return readFileSync(join(__dirname, '../../resources/docs/pipeline-authoring.md'), 'utf8')
 }
@@ -87,7 +101,10 @@ export async function startPipelineServer(): Promise<void> {
         docPath: ORCHESTRATION_DOC,
         manager: pipelineManager,
         authoringGuide,
-        smoke: (projectPath, machineId, pingAgents) => smokeTestMachine(pipelineManager, projectPath, machineId, pingAgents)
+        smoke: (projectPath, machineId, pingAgents) => smokeTestMachine(pipelineManager, projectPath, machineId, pingAgents),
+        plans: planService,
+        planGuide,
+        cacheTtl: tabCacheTtl
       }))
     })
     logEvent('pipeline-server-started', { port: pipelineServer.getPort() })
@@ -106,6 +123,7 @@ export async function startPipelineServer(): Promise<void> {
  * are recovered as paused when the project opens next time.
  */
 export async function stopPipelineServer(): Promise<void> {
+  planService.prepareShutdown()
   pipelineManager.prepareShutdown()
   killAllProcessTreesSync()
   await pipelineServer.stop()
@@ -133,12 +151,22 @@ export function attachPipelineProject(projectPath: string, win: BrowserWindow): 
     onState: (snapshot) => send('pipeline:run-state', snapshot),
     onTranscript: (runId, node, visit, entry) => send('pipeline:transcript', { runId, node, visit, entry })
   })
-  try { pipelineManager.recover(projectPath) } catch (err) {
+  const onPlanChanged = (path: string): void => { if (path === projectPath) send('plan:snapshot', planService.snapshot(projectPath)) }
+  planService.on('changed', onPlanChanged)
+  const onDecisionEntry = (path: string, planId: string, decision: number): void => { if (path === projectPath) send('plan:decision-entry', { planId, decision }) }
+  planService.on('decision-entry', onDecisionEntry)
+  try {
+    pipelineManager.recover(projectPath)
+    planService.recover(projectPath)
+  } catch (err) {
     logEvent('pipeline-recover-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn')
   }
 
   return () => {
     unsubscribe()
+    planService.off('changed', onPlanChanged)
+    planService.off('decision-entry', onDecisionEntry)
+    planService.forget(projectPath)
     pipelineManager.forget(projectPath)
     orchestrators.forgetProject(projectPath)
     pipelineServer.unregisterProject(projectPath)

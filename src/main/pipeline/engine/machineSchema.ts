@@ -47,7 +47,7 @@ const AGENT = {
     repeatLoop: { type: 'string', description: 'Id of the enclosing loop that repeatIf repeats; default the innermost.' },
     escalateIf: { ...CONDITION, description: `When true, the run waits for a decision from escalateTo. ${CONDITION.description}` },
     escalateMessage: { type: 'string' },
-    escalateTo: { enum: ['user', 'orchestrator'], description: 'Default orchestrator.' }
+    escalateTo: { enum: ['agent', 'user'], description: 'Default agent: the Orchestrator of the plan when the plan lets it answer, the Strategist otherwise.' }
   }
 }
 
@@ -107,7 +107,7 @@ export const MACHINE_FILE_SCHEMA = {
           properties: {
             type: { const: 'gate' }, id: ID, summary: { type: 'string' },
             question: { type: 'string' },
-            to: { enum: ['user', 'orchestrator'], description: 'Default orchestrator.' },
+            to: { enum: ['agent', 'user'], description: 'Default agent: the Orchestrator of the plan when the plan lets it answer, the Strategist otherwise.' },
             repeatLoop: { type: 'string', description: 'Enclosing loop a rejection repeats; default the innermost. Outside any loop a rejection fails the run.' }
           }
         },

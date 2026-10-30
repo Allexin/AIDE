@@ -126,10 +126,12 @@ interface PipelineEscalation {
   id: string
   node: string
   kind: 'step' | 'gate' | 'limit' | 'engine'
-  to: 'user' | 'orchestrator'
+  to: 'user' | 'agent'
   message: string
   raisedAt: string
   answer: { action: string; text: string; by: string; at: string } | null
+  /** What the plan's Orchestrator did with it. */
+  orchestrator?: { status: string; decision?: number; reason?: string; proposal?: string; answer?: { action: string; text: string } }
 }
 
 type PipelineRunStatus = 'running' | 'pausing' | 'paused' | 'waiting' | 'stopped' | 'finished' | 'failed'
@@ -256,6 +258,13 @@ interface EditorAPI {
   pipelineGetCheckLog: (runId: string, node: string, visit: number) => Promise<string>
   pipelineGetReport: (runId: string) => Promise<Record<string, unknown> | null>
   onPipelineRunState: (cb: (snapshot: PipelineRunSnapshot) => void) => () => void
+  // Plans
+  planGet: () => Promise<import('../../shared/plan').PlanSnapshot | null>
+  planControl: (action: 'run' | 'pause' | 'approve' | 'activate', options?: { planId?: string; note?: string; redecide?: boolean }) => Promise<string | null>
+  planGetRunSnapshot: (runId: string) => Promise<PipelineRunSnapshot | null>
+  planGetDecision: (planId: string, decision: number) => Promise<{ entries: HistoryEntry[]; inputs: import('../../shared/pipelineMachine').AgentInputRecord[]; decision: unknown } | null>
+  onPlanSnapshot: (cb: (snapshot: import('../../shared/plan').PlanSnapshot) => void) => () => void
+  onPlanDecisionEntry: (cb: (event: { planId: string; decision: number }) => void) => () => void
   onPipelineTranscript: (cb: (event: { runId: string; node: string; visit: number; entry: HistoryEntry }) => void) => () => void
 
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
@@ -464,6 +473,8 @@ interface SessionsConfig {
 interface SettingsAPI {
   getReasoningConfig: () => Promise<{ showPanel: boolean }>
   saveReasoningConfig: (config: { showPanel: boolean }) => Promise<void>
+  getPrivacyConfig: () => Promise<{ maskEmails: boolean }>
+  savePrivacyConfig: (config: { maskEmails: boolean }) => Promise<void>
   getToolSettings: () => Promise<Array<{ toolId: string; name: string; fields: SettingsField[]; values: Record<string, unknown> }>>
   updateToolSettings: (toolId: string, values: Record<string, unknown>) => Promise<void>
   getAccountTools: () => Promise<Array<{ id: string; name: string; hasAccount: boolean }>>

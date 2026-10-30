@@ -5,6 +5,8 @@ import type { PipelineManager } from '../manager'
 import { MACHINE_FILE_SCHEMA } from '../engine/machineSchema'
 import { compactReport } from '../engine/reportView'
 import { ENGINE_CHANGES, ENGINE_VERSION, outdatedMachine } from '../engine/compat'
+import type { PlanService } from '../plan/planService'
+import { buildPlanTools } from './planTools'
 
 /**
  * Pipeline MCP tools — the orchestrator's interface to AIDE (plan §4.2).
@@ -27,12 +29,18 @@ export interface ToolEnvironment {
   authoringGuide?: () => string
   /** Smoke test of a machine (`pipeline_smoke`). */
   smoke?: (projectPath: string, machineId: string, pingAgents: boolean) => Promise<string>
+  /** Plans (`plan_*` tools). */
+  plans?: PlanService
+  /** Plan guide text (`plan_guide`). */
+  planGuide?: () => string
+  /** The prompt-cache lifetime of the agent in a tab, when AIDE can tell. */
+  cacheTtl?: (projectPath: string, tabId: string | null) => '5m' | '1h' | null
 }
 
 export const ORCHESTRATOR_RULES = [
-  'You are the orchestrator of AIDE pipelines for this project.',
-  'AIDE executes pipeline machines deterministically: it spawns step agents, runs checks, repeats loops, commits and reports. You decide what to run: pick the next task from the project plan, choose a machine and its parameters, start it, read the result, update the plan if the machine does not, and talk to the user.',
-  'While a run is executing, leave the working tree to it: do not edit files yourself.',
+  'You are the Strategist of this project: you decide what gets done, and AIDE and other agents do it.',
+  'AIDE executes pipeline machines deterministically: it spawns step agents, runs checks, repeats loops, commits and reports. Work that takes several tasks goes into an AIDE plan (plan_guide, plan_create): once approved and active, plan_run walks it task by task, and an Orchestrator, a short-lived agent with no context of its own, checks each step and starts the next one, or wakes you; when the plan lets it, it also answers the escalations inside a step, and passes on to you what it cannot decide. You write and change the plan, answer what the runs and the Orchestrator bring you, and talk to the user. For one concrete task, plan or no plan, pipeline_start runs a machine directly.',
+  'While a run is executing, leave the working tree to it: do not edit files yourself. Plan edits go through plan_edit and are safe at any time.',
   'Do not give step agents a way out in task texts or params ("if you cannot finish, escalate"): they take it early. A step that should stop has blocked / plan_wrong and escalations for real obstacles.',
   'Every call you make re-reads your whole context, so keep each cycle to the few calls it needs. Do not re-verify what the machine\'s checks and reviewers already verified: the report\'s `checks` lists every check command with its last result, and a check that passed there ran on the final code — do not run it again. Inspect results yourself only on a signal (a reviewer flagged something, a first capture of a new visual stage, a failed run).'
 ]
@@ -46,8 +54,9 @@ export function serverInstructions(docPath: string): string {
   return [
     "AIDE's MCP server: tools of the AIDE editor that has this project open.",
     'Pipeline orchestration (pipeline_* tools): AIDE runs pipeline machines — multi-step agent work with checks, review loops and commits — deterministically, and you orchestrate them.',
-    'Turn to it when the user asks for orchestration or a pipeline, or when a task is big enough for several agent steps with checks and review (a feature across many files, a series of plan items).',
-    `Start with pipeline_hello: it returns the orchestrator rules and how to receive pipeline events. Reference: ${docPath}`
+    'Plans (plan_* tools): when the user asks for a plan, or work needs several tasks tracked over sessions, make it an AIDE plan, whatever way of planning your client has; plan_guide says how. AIDE shows its progress and can walk it task by task.',
+    'Turn to orchestration when the user asks for it or for a pipeline, or when a task is big enough for several agent steps with checks and review (a feature across many files, a series of plan items).',
+    `Start with pipeline_hello: it returns the rules and how to receive pipeline events. Reference: ${docPath}`
   ].join(' ')
 }
 
@@ -57,8 +66,9 @@ function eventDeliveryText(launcherPath: string): string {
     '1. Stay in one turn and block: pass `wait` to pipeline_start / pipeline_answer / pipeline_resume (they act, then return the next event), or call pipeline_wait. The event comes back as the call result — no output files, no extra turns. When the user types in your terminal, the wait returns early with type "user_input", so their message reaches you right away; handle it, then wait again.',
     `2. If your client cannot block on a tool call for long: a background command or monitor — "${launcherPath}" events --run <runId> --since <lastEventId> (one JSON line per event that needs you) or "${launcherPath}" wait --run <runId> --since <lastEventId> (prints the next one and exits). Each wake-up costs extra calls.`,
     '3. Last resort: poll pipeline_status.',
-    'Events that need you: escalation (a decision; answer with pipeline_answer), run_paused / run_stopped (the run changed hands, possibly by the user or an AIDE restart; continue with pipeline_resume — reason "usage_limit" means a CLI hit its usage limit: the run resumes by itself at resumeAt when the message said when, keeping the step\'s session; when AIDE switches the CLI to another account of the user\'s pool and goes on, you are not told), run_finished / run_failed (the event carries the compact report; read all of it — when you wait in code, return the report whole rather than a few fields). Step progress is not sent, nor are retries of a CLI that is temporarily unavailable (model at capacity, overloaded, network): AIDE retries the step every minute and sends an engine escalation only after 20 minutes.',
-    'Pass the last event id you have seen as `since`; ids continue across AIDE restarts, so nothing is lost.'
+    'While a plan\'s autopilot is on, wait without runId: runs change, and pipeline_wait then covers every run and the plan.',
+    'Events that need you: plan_attention (the plan holds and needs you: see its kind, reason and proposal; change the plan with plan_edit if needed, then plan_run with a note), escalation (a decision; answer with pipeline_answer — one the Orchestrator of a plan passed on carries its reason and proposal in "orchestrator"), run_paused / run_stopped (the run changed hands, possibly by the user or an AIDE restart; continue with pipeline_resume — reason "usage_limit" means a CLI hit its usage limit: the run resumes by itself at resumeAt when the message said when, keeping the step\'s session; when AIDE switches the CLI to another account of the user\'s pool and goes on, you are not told), run_finished / run_failed (the event carries the compact report; read all of it — when you wait in code, return the report whole rather than a few fields). Step progress is not sent, nor are retries of a CLI that is temporarily unavailable (model at capacity, overloaded, network): AIDE retries the step every minute and sends an engine escalation only after 20 minutes.',
+    'Pass the last event id you have seen as `since`, also when waiting without runId; ids continue across AIDE restarts, so nothing is lost. An event that has been dealt with since (the escalation answered, the plan continued, the run resumed) is not handed out again.'
   ].join('\n')
 }
 
@@ -90,8 +100,9 @@ const OBJECT = (properties: Record<string, unknown>, required: string[] = []): R
 
 const RUN_ID = { type: 'string', description: 'Run id; defaults to the active run.' }
 
-const DEFAULT_WAIT_SEC = 1500 // under the 1-hour prompt-cache lifetime of the waiting agent
-const MAX_WAIT_SEC = 1800
+/** Under the 1-hour prompt-cache lifetime of the waiting agent: a timeout is a cheap read that keeps its cache warm. */
+const DEFAULT_WAIT_SEC = 3000
+const MAX_WAIT_SEC = 3000
 
 type WaitResult = PipelineEvent | { type: 'user_input'; summary: string } | null
 
@@ -123,17 +134,21 @@ function waitSeconds(value: unknown, fallback: number): number {
   return Math.min(Math.max(Number(value ?? fallback) || fallback, 1), MAX_WAIT_SEC)
 }
 
-/** Text for a wait result. */
-function waitText(result: WaitResult): string {
-  if (!result) return 'No event before the timeout. Wait again with the same since.'
-  return JSON.stringify(result)
+export const SHORT_CACHE_TEXT = 'Your prompt cache lives only 5 minutes now, so waiting keeps nothing warm and every wake-up rewrites your context. Stop waiting and end your turn: AIDE types each event into your terminal as a message.'
+
+/** Text for a wait that ended. A timeout is one line of state, so the agent has no reason to go and look. */
+function waitText(result: WaitResult, env: ToolEnvironment, projectPath: string, tabId: string | null): string {
+  if (result) return JSON.stringify(result)
+  if (env.cacheTtl?.(projectPath, tabId) === '5m') return SHORT_CACHE_TEXT
+  const state = env.plans?.tickLine(projectPath) ?? null
+  return `${state ? `${state}. ` : ''}No event: all is in order and nothing needs checking. Wait again with the same since.`
 }
 
 export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[] {
   const tools: ToolDefinition[] = [
     {
       name: 'pipeline_hello',
-      description: 'Start here for pipeline orchestration: when the user asks for orchestration or a pipeline, or a task is big enough for several agent steps with checks and review. Confirms the connection to AIDE and returns the orchestrator rules and how to receive pipeline events.',
+      description: 'Start here for pipeline orchestration: when the user asks for orchestration or a pipeline, or a task is big enough for several agent steps with checks and review. Confirms the connection to AIDE and returns the rules for the Strategist and how to receive pipeline events.',
       inputSchema: OBJECT({}),
       handler: (_args, context) => {
         const { aideVersion, launcherPath, docPath } = env()
@@ -189,13 +204,15 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     },
     {
       name: 'pipeline_start',
-      description: 'Start a run of a machine with params. Only one run per project can be active. A machine written for an older pipeline engine is refused with the list of what changed since; review it with the user (or pass acceptOutdated: true to run it unchanged). With wait, blocks until the run\'s first event that needs you (usually its end) and returns it.',
-      inputSchema: OBJECT({ machine: { type: 'string', description: 'Machine id from pipeline_list.' }, params: { type: 'object', description: 'Values for the machine params.' }, acceptOutdated: { type: 'boolean', description: 'Run a machine written for an older engine without reviewing it.' }, wait: WAIT_ARG }, ['machine']),
+      description: 'Start a run of a machine with params: one concrete task, with or without a plan. Only one run per project can be active. Without planTask the run touches no plan. With planTask, the last commit marks that task done and adds the review findings to the plan\'s follow-ups. A machine written for an older pipeline engine is refused with the list of what changed since; review it with the user (or pass acceptOutdated: true to run it unchanged). With wait, blocks until the run\'s first event that needs you (usually its end) and returns it.',
+      inputSchema: OBJECT({ machine: { type: 'string', description: 'Machine id from pipeline_list.' }, params: { type: 'object', description: 'Values for the machine params.' }, planTask: OBJECT({ plan: { type: 'string' }, task: { type: 'string' } }, ['plan', 'task']), acceptOutdated: { type: 'boolean', description: 'Run a machine written for an older engine without reviewing it.' }, wait: WAIT_ARG }, ['machine']),
       handler: async (args, { projectPath, tabId }) => {
         try {
-          const { runId, warnings } = await manager().start(projectPath, String(args.machine), (args.params as Record<string, unknown>) ?? {}, { acceptOutdated: args.acceptOutdated === true })
+          const link = args.planTask as { plan?: unknown; task?: unknown } | undefined
+          const planTask = link && typeof link.plan === 'string' && typeof link.task === 'string' ? { plan: link.plan, task: link.task } : undefined
+          const { runId, warnings } = await manager().start(projectPath, String(args.machine), (args.params as Record<string, unknown>) ?? {}, { acceptOutdated: args.acceptOutdated === true, planTask })
           const lines = [`Run ${runId} started.`, ...warnings.map((w) => `Warning: ${w}`)]
-          if (args.wait !== undefined) return ok([...lines, waitText(await waitForEvent(projectPath, runId, 0, waitSeconds(args.wait, DEFAULT_WAIT_SEC), tabId))].join('\n'))
+          if (args.wait !== undefined) return ok([...lines, waitText(await waitForEvent(projectPath, runId, 0, waitSeconds(args.wait, DEFAULT_WAIT_SEC), tabId), env(), projectPath, tabId)].join('\n'))
           lines.push(`Wait for its events: pipeline_wait with runId "${runId}" (or "${env().launcherPath}" events --run ${runId} --since 0 in the background).`, 'Leave the working tree to the run while it executes.')
           return ok(lines.join('\n'))
         } catch (err) {
@@ -222,11 +239,11 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     },
     {
       name: 'pipeline_wait',
-      description: `Block until the next event of a run that needs you (escalation, pause, stop, end), the user typing in your terminal (type "user_input"), or a timeout. The cheapest way to wait: the event is the result of this call.`,
-      inputSchema: OBJECT({ runId: { type: 'string' }, since: { type: 'number', description: 'Last event id you have seen.' }, timeoutSec: { type: 'number', description: `Default ${DEFAULT_WAIT_SEC}, max ${MAX_WAIT_SEC}. Pass less if your client cuts tool calls earlier.` } }, ['runId']),
+      description: `Block until the next event that needs you (escalation, pause, stop, end of a run, a plan asking for you), the user typing in your terminal (type "user_input"), or a timeout, which returns one line of state. The cheapest way to wait: the event is the result of this call. Without runId it covers the whole project: use that while a plan's autopilot is on.`,
+      inputSchema: OBJECT({ runId: { type: 'string', description: 'Only this run; the whole project when absent.' }, since: { type: 'number', description: 'Last event id you have seen.' }, timeoutSec: { type: 'number', description: `Default ${DEFAULT_WAIT_SEC}, max ${MAX_WAIT_SEC}. Pass less if your client cuts tool calls earlier.` } }),
       handler: async (args, { projectPath, tabId }) => {
-        const result = await waitForEvent(projectPath, String(args.runId), Number(args.since ?? 0) || 0, waitSeconds(args.timeoutSec, DEFAULT_WAIT_SEC), tabId)
-        return ok(waitText(result))
+        const result = await waitForEvent(projectPath, typeof args.runId === 'string' ? args.runId : null, Number(args.since ?? 0) || 0, waitSeconds(args.timeoutSec, DEFAULT_WAIT_SEC), tabId)
+        return ok(waitText(result, env(), projectPath, tabId))
       }
     },
     {
@@ -238,8 +255,8 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
           const m = manager()
           const runId = typeof args.runId === 'string' ? args.runId : m.activeRun(projectPath)?.runId
           const since = runId ? lastEventId(projectPath, runId) : 0
-          await m.answer(projectPath, String(args.escalationId), { action: args.action as 'continue' | 'retry' | 'reject' | 'stop', text: String(args.text ?? ''), by: 'orchestrator', ...(args.params && typeof args.params === 'object' && !Array.isArray(args.params) ? { params: args.params as Record<string, unknown> } : {}) }, typeof args.runId === 'string' ? args.runId : undefined)
-          if (args.wait !== undefined && runId) return ok(`Answer recorded.\n${waitText(await waitForEvent(projectPath, runId, since, waitSeconds(args.wait, DEFAULT_WAIT_SEC), tabId))}`)
+          await m.answer(projectPath, String(args.escalationId), { action: args.action as 'continue' | 'retry' | 'reject' | 'stop', text: String(args.text ?? ''), by: 'strategist', ...(args.params && typeof args.params === 'object' && !Array.isArray(args.params) ? { params: args.params as Record<string, unknown> } : {}) }, typeof args.runId === 'string' ? args.runId : undefined)
+          if (args.wait !== undefined && runId) return ok(`Answer recorded.\n${waitText(await waitForEvent(projectPath, runId, since, waitSeconds(args.wait, DEFAULT_WAIT_SEC), tabId), env(), projectPath, tabId)}`)
           return ok('Answer recorded; the run continues.')
         } catch (err) {
           return fail(err instanceof Error ? err.message : String(err))
@@ -256,7 +273,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
           if (args.mode === 'pause') manager().pause(projectPath, runId)
           else if (args.mode === 'stop') await manager().stop(projectPath, runId)
           else {
-            const left = await manager().abandon(projectPath, String(args.reason ?? 'abandoned by the orchestrator'), runId)
+            const left = await manager().abandon(projectPath, String(args.reason ?? 'abandoned by the Strategist'), runId)
             return ok(left.length ? `Done: abandon. Uncommitted changes left in the working tree (${left.length}): ${clip(left.join(', '), 2000)}` : 'Done: abandon. The working tree is clean.')
           }
           return ok(`Done: ${String(args.mode)}.`)
@@ -271,7 +288,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
       inputSchema: OBJECT({ text: { type: 'string', description: 'The instruction, written for the step agents.' }, runId: RUN_ID }, ['text']),
       handler: async (args, { projectPath }) => {
         try {
-          const outcome = await manager().amend(projectPath, String(args.text ?? ''), 'orchestrator', typeof args.runId === 'string' ? args.runId : undefined)
+          const outcome = await manager().amend(projectPath, String(args.text ?? ''), 'strategist', typeof args.runId === 'string' ? args.runId : undefined)
           return ok(outcome === 'restarted' ? 'Instruction added; the running step continues with it in its session.' : 'Instruction recorded; the later steps of the run will see it.')
         } catch (err) {
           return fail(err instanceof Error ? err.message : String(err))
@@ -301,7 +318,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
           const runId = typeof args.runId === 'string' ? args.runId : m.activeRun(projectPath)?.runId
           const since = runId ? lastEventId(projectPath, runId) : 0
           m.resume(projectPath, typeof args.runId === 'string' ? args.runId : undefined)
-          if (args.wait !== undefined && runId) return ok(`Resumed.\n${waitText(await waitForEvent(projectPath, runId, since, waitSeconds(args.wait, DEFAULT_WAIT_SEC), tabId))}`)
+          if (args.wait !== undefined && runId) return ok(`Resumed.\n${waitText(await waitForEvent(projectPath, runId, since, waitSeconds(args.wait, DEFAULT_WAIT_SEC), tabId), env(), projectPath, tabId)}`)
           return ok('Resumed.')
         } catch (err) {
           return fail(err instanceof Error ? err.message : String(err))
@@ -368,7 +385,15 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
         if (!smoke) return fail('Smoke testing is not available.')
         return ok(await smoke(projectPath, String(args.machineId), args.pingAgents === true))
       }
-    }
+    },
+    ...buildPlanTools(() => ({
+      plans: env().plans,
+      guide: env().planGuide,
+      lastEvent: (projectPath) => pipelineEvents.since(projectPath, null, 0).at(-1)?.id ?? 0,
+      waitAfter: async (projectPath, tabId, since, seconds) => {
+        return waitText(await waitForEvent(projectPath, null, since, waitSeconds(seconds, DEFAULT_WAIT_SEC), tabId), env(), projectPath, tabId)
+      }
+    }))
   )
   return tools
 }

@@ -111,13 +111,19 @@ export function validateMachine(machine: MachineDefinition, env: ValidationEnvir
       if ('error' in parsed) err(`${where}: ${parsed.error}`)
       else validateRef(parsed.ref, machine, tree, node, where, err, warnings)
     }
+    const checkTarget = (to: string | undefined, where: string): void => {
+      if (to === undefined || to === 'agent' || to === 'user') return
+      // The name of "agent" before engine 6; such a machine is outdated and says so already.
+      if (to === 'orchestrator' && (machine.engineVersion ?? 0) < 6) return
+      err(to === 'orchestrator' ? `${where}: "orchestrator" is now "agent" (engine 6).` : `${where}: must be "agent" or "user".`)
+    }
 
     switch (step.type) {
       case 'agent':
         validateAgent(step, tree, node, machine, env, defaultCli, err, warnings)
         checkRepeat(step.repeatIf, step.repeatLoop)
         if (step.escalateIf !== undefined) checkCondition(step.escalateIf, `${label} "escalateIf"`)
-        if (step.escalateTo !== undefined && step.escalateTo !== 'user' && step.escalateTo !== 'orchestrator') err(`${label}: "escalateTo" must be "user" or "orchestrator".`)
+        checkTarget(step.escalateTo, `${label} "escalateTo"`)
         break
       case 'check':
         if (typeof step.command !== 'string' || !step.command.trim()) err(`${label}: "command" is required.`)
@@ -130,7 +136,7 @@ export function validateMachine(machine: MachineDefinition, env: ValidationEnvir
         break
       case 'gate':
         if (typeof step.question !== 'string' || !step.question.trim()) err(`${label}: "question" is required.`)
-        if (step.to !== undefined && step.to !== 'user' && step.to !== 'orchestrator') err(`${label}: "to" must be "user" or "orchestrator".`)
+        checkTarget(step.to, `${label} "to"`)
         checkRepeat(undefined, step.repeatLoop)
         break
       case 'repeat':

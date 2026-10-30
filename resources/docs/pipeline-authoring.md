@@ -44,7 +44,7 @@ names the step's output: `outputs.<id>`.
 |---|---|
 | `agent` | Runs a headless CLI with the role, the pipeline context, the inputs and an output schema; the JSON answer becomes `outputs.<id>` (agent failures stop the run for a decision) |
 | `check` | Runs `command` in the project root; exit code 0 passes. Output in `outputs.<id>.output`. The command may use `{{params.x}}` and `{{outputs.step.field}}` (§2, Check commands) |
-| `gate` | Asks the user or the orchestrator to approve |
+| `gate` | Asks the user or the managing agent to approve |
 | `repeat` | Starts an enclosing loop over (like `continue`); usually inside an `if` |
 | `commit` | Block: its `prep` agent stages the change and writes the message, AIDE reviews the prepared commit and commits it |
 | `loop` | Block: runs its steps again until a pass completes, at most `maxIterations` times |
@@ -68,7 +68,7 @@ and the details (the failed check's output, the reviewer's findings, the gate
 answer). You do not wire this through `inputs`.
 
 `maxIterations` is required. When the last allowed iteration still asks to
-repeat, `onLimit` decides: `escalate` (default — the orchestrator or the user
+repeat, `onLimit` decides: `escalate` (default — the managing agent or the user
 grants one more iteration, accepts the result as it is, or stops the run) or
 `fail` (the run fails).
 
@@ -105,16 +105,21 @@ and the tail of the output.
 - `escalateIf` on an agent stops the run for a decision when true (e.g. the
   implementer reports `plan_wrong`): `continue` goes on with the next step,
   `retry` runs the step again, `stop` ends the run. `escalateMessage` and
-  `escalateTo` (`orchestrator` by default, or `user`) shape the request.
+  `escalateTo` (`agent` by default, or `user`) shape the request. `agent` is
+  the agent that manages the run: in a step of a plan's autopilot, the plan's
+  Orchestrator when the plan lets it answer that kind of decision (it may pass
+  it on), otherwise the Strategist. The Orchestrator is a fresh session without
+  the Strategist's context, so write `escalateMessage` to say what is being
+  decided and what each answer means. A `gate` has `to` with the same values.
 - A `check` that fails **outside** any loop stops the run for a decision too.
 - A `gate` rejected **outside** any loop holds the run at the gate (nothing to
   repeat); resuming asks again.
 - Answers with text are shown to every later agent of the run, and so are
-  instructions the orchestrator adds while the run goes (`pipeline_amend`).
+  instructions the Strategist adds while the run goes (`pipeline_amend`).
 - An answer can change params for the rest of the run (`pipeline_answer` with
   `params`, validated against the machine's params). Example: a spec proposes a
   split, the gate approves part A and sets `{"stageId": "S5.7a"}`; later tasks,
-  inputs and conditions use the new value. To reach the orchestrator on a split
+  inputs and conditions use the new value. To reach the managing agent on a split
   as well as on a design question, let the spec schema report one field the
   gate condition tests (e.g. `"gate": "none" | "decision" | "split"` with
   `outputs.specify.gate != 'none'`): conditions compare one reference.
@@ -122,7 +127,7 @@ and the tail of the output.
   and resumes by itself when the limit resets (if the CLI says when).
 - Neither is a CLI that is temporarily unavailable (model at capacity,
   overloaded, network errors): the step is retried every minute in its session,
-  and only after 20 minutes without success does the orchestrator get an
+  and only after 20 minutes without success does the managing agent get an
   engine escalation.
 
 ## 3. What each agent receives
@@ -240,14 +245,17 @@ On success AIDE commits and the run continues. On failure the problems go back t
 the prep agent as feedback, up to `maxAttempts` (default 3) attempts; then
 `onLimit` applies as for loops.
 
-**Let the prep agent do the plan bookkeeping.** If the project keeps a plan with
+**Plan bookkeeping.** A run linked to a task of an AIDE plan (`planTask`) needs none:
+AIDE marks the task done and records the findings in the task's commit; do not have
+agents touch `aide/plans/`. For a plan kept in the project's own documents, let the
+prep agent do it. If the project keeps a plan with
 task statuses and a list of follow-ups, give the prep agent the reviewers'
 findings (`inputs: ["outputs.review.non_blocking"]`) and have its role mark the
 task done and record the findings, inside the same commit. Otherwise the
-orchestrator does these edits after every run, and each orchestrator call
+Strategist does these edits after every run, and each of its calls
 re-reads its whole (usually large) context: bookkeeping is the cheapest work in
-the pipeline and the most expensive work for the orchestrator. It also avoids
-edit conflicts between the implementer and the orchestrator on the same plan
+the pipeline and the most expensive work for the Strategist. It also avoids
+edit conflicts between the implementer and the Strategist on the same plan
 rows.
 
 ## 5. Example: code feature
@@ -257,7 +265,7 @@ rows.
   "id": "code-feature",
   "name": "Code feature",
   "description": "Implements one plan stage that is pure code. Needs the stage spec and acceptance criteria. Produces one reviewed commit.",
-  "engineVersion": 5,
+  "engineVersion": 6,
   "params": {
     "taskSpec": { "type": "string", "description": "What to implement, or a path to the spec section" },
     "acceptance": { "type": "string[]", "description": "Acceptance criteria" }
@@ -298,7 +306,7 @@ rows.
 
 A failed check or a rejected review starts `build` over; the implementer gets the
 check output or the review findings as feedback. After three iterations without
-a clean pass the orchestrator decides.
+a clean pass the managing agent decides.
 
 ## 6. Example: content, then integration
 
@@ -317,7 +325,7 @@ an outer loop and return to it with a `repeat` step:
   "id": "location-content",
   "name": "Location content",
   "description": "Generates the assets of a game location and integrates them. Needs the location brief. Produces one commit.",
-  "engineVersion": 5,
+  "engineVersion": 6,
   "params": { "brief": { "type": "string", "description": "The location brief or a path to it" } },
   "defaults": { "cli": "claude-code" },
   "schemas": {
@@ -380,13 +388,13 @@ an outer loop and return to it with a `repeat` step:
 
 ## 7. Patterns that keep runs cheap
 
-The orchestrator pays for every call with its whole context, and every agent
+The Strategist pays for every call with its whole context, and every agent
 step pays for its prompt. Design machines so that both do little:
 
 - **The machine does the bookkeeping.** Let the commit `prep` step mark the task
   done in the project plan and add the run's non-blocking findings to the plan's
   follow-up list, inside the same commit (say so in its role file and `task`).
-  The orchestrator then only reads the result and starts the next run, and it
+  The Strategist then only reads the result and starts the next run, and it
   never collides with plan rows the implementer edited.
 - **Judging models judge, cheaper models write.** Output-heavy authoring
   (specifications, content, code) suits Codex or a mid-size model; reserve the

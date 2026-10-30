@@ -57,11 +57,16 @@ export function eventMessage(events: RelayedEvent[]): string {
     if (event.type === 'run_finished' || event.type === 'run_failed') {
       return `Run ${event.runId}: ${event.type === 'run_finished' ? 'finished' : 'failed'} — ${summary}. Read the result with pipeline_report and tell the user.`
     }
+    if (event.type === 'plan_attention') {
+      const proposal = text(event.data.proposal)
+      return `Plan ${text(event.data.plan)} needs you (${text(event.data.kind)}): ${text(event.data.reason)}${proposal ? ` Proposal: ${proposal}` : ''} Read it with plan_status; change it with plan_edit if needed, then plan_run with a note.`
+    }
     return `Run ${event.runId}: ${event.type} — ${summary}.`
   })
   const runEnded = last.type === 'run_finished' || last.type === 'run_failed'
+  const planEvent = last.type === 'plan_attention'
   return `AIDE pipeline: you were not waiting for pipeline events, so they are sent as a message. ${lines.join(' ')}` +
-    (runEnded ? '' : ` Then keep waiting: call pipeline_wait for run ${last.runId} with since=${last.id}.`)
+    (runEnded || planEvent ? '' : ` Then keep waiting: call pipeline_wait for run ${last.runId} with since=${last.id}.`)
 }
 
 interface Pending {

@@ -188,7 +188,7 @@ describe('PipelineManager through the MCP tools', () => {
     await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] }, wait: 5 })
     const amended = await call(server, dir, 'pipeline_amend', { text: 'Keep the old save format.' })
     expect(amended.text).toBe('Instruction recorded; the later steps of the run will see it.')
-    expect(manager.activeRun(dir)?.state.amendments).toMatchObject([{ node: 'implement', text: 'Keep the old save format.', by: 'orchestrator' }])
+    expect(manager.activeRun(dir)?.state.amendments).toMatchObject([{ node: 'implement', text: 'Keep the old save format.', by: 'strategist' }])
     const abandoned = await call(server, dir, 'pipeline_stop', { mode: 'abandon', reason: 'test' })
     expect(abandoned.text).toMatch(/^Done: abandon\./)
     expect(manager.activeRun(dir)?.state.result).toBe('failure')

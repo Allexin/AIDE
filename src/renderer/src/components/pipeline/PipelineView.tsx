@@ -3,13 +3,18 @@ import { isRunActive, liveKey, usePipelineStore, type VisitRef } from '../../sto
 import { TranscriptView } from '../history/TranscriptView'
 import { blockTitle, machineClis, walkSteps, type AgentInputRecord, type Step } from '../../../../shared/pipelineMachine'
 import { AccountLabel, UsageLabel, useAccountUsage } from '../cli/AccountUsage'
+import { DecisionDetail, PlanPanel, planNeedsAttention, usePastRun } from './PlanView'
+import { hasPlans, usePlanStore } from '../../store/usePlanStore'
+import { escalationAudience, planProgress } from '../../../../shared/plan'
 
 /**
  * Pipeline run view (plan §4.1), shown as a tab of the terminal panel next to
  * the CLI session tabs: the machine's step tree with step states, the transcript
  * or log of any visit and what its agent was sent, run controls, escalation
- * answers and the final report.
- * The tab can be closed only after the run ended.
+ * answers and the final report. When the project has plans, the plan is the parent
+ * of the run: its tasks are on the left, and any past run of a task opens in the
+ * same view.
+ * The tab can be closed only after the run ended, and not while the project has plans.
  */
 
 const STATUS_LABEL: Record<PipelineRunStatus, string> = {
@@ -69,35 +74,63 @@ export function PipelineTabButton({ isActive, onSelect }: { isActive: boolean; o
   const run = usePipelineStore((s) => s.run)
   const seenRunId = usePipelineStore((s) => s.seenRunId)
   const dismiss = usePipelineStore((s) => s.dismiss)
+  const plans = usePlanStore(hasPlans)
+  const snapshot = usePlanStore((s) => s.snapshot)
+  const seenAttention = usePlanStore((s) => s.seenAttentionAt)
   const [dim, setDim] = useState(false)
   const status = run?.state.status
-  // Blink like a session tab that needs attention: a decision is pending, or a new run nobody looked at yet.
-  const attention = !isActive && run !== null && (status === 'waiting' || run.runId !== seenRunId)
+  const planAttention = snapshot?.autopilot?.attention
+  // Blink like a session tab that needs attention: a decision is pending, a plan asks for someone, or a new run nobody looked at yet.
+  const attention = !isActive && ((run !== null && (status === 'waiting' || run.runId !== seenRunId)) || (planNeedsAttention(planAttention) && planAttention?.at !== seenAttention))
   useEffect(() => {
     if (!attention) { setDim(false); return }
     const timer = setInterval(() => setDim((d) => !d), 500)
     return () => clearInterval(timer)
   }, [attention])
-  if (!run || !status) return null
-  const loop = currentLoopLabel(run.machine, run.state)
+  useEffect(() => { if (isActive) usePlanStore.getState().markSeen() }, [isActive, planAttention?.at])
+  const activePlan = snapshot?.plans.find((p) => p.id === snapshot.activeId)?.plan ?? null
   const color = attention ? (dim ? '#555' : '#f0a500') : isActive ? '#d4d4d4' : '#858585'
+  const tabStyle: React.CSSProperties = { background: isActive ? '#1e1e1e' : '#2d2d2d', color, fontSize: 12, padding: '4px 8px', borderRadius: '3px 3px 0 0', cursor: 'pointer', border: '1px solid #3d3d3d', borderBottom: isActive ? '1px solid #1e1e1e' : 'none', whiteSpace: 'nowrap', lineHeight: 1.5, flexShrink: 0, userSelect: 'none' }
+  const planLabel = activePlan ? `${planProgress(activePlan).done}/${planProgress(activePlan).total}` : null
+  if (!run || !status) {
+    if (!plans) return null
+    return <div onClick={onSelect} title={activePlan ? `Plan: ${activePlan.title}` : 'Plans of this project'} style={tabStyle}>Plan{planLabel ? ` ${planLabel}` : ''}</div>
+  }
+  const loop = currentLoopLabel(run.machine, run.state)
   return <div onClick={onSelect} title={`Pipeline run ${run.runId}\n${STATUS_LABEL[status]}${run.state.current ? ` — ${run.state.current}` : ''}`}
     style={{ background: isActive ? '#1e1e1e' : '#2d2d2d', color, fontSize: 12, padding: '4px 6px 4px 8px', borderRadius: '3px 3px 0 0', cursor: 'pointer', border: '1px solid #3d3d3d', borderBottom: isActive ? '1px solid #1e1e1e' : 'none', whiteSpace: 'nowrap', lineHeight: 1.5, flexShrink: 0, maxWidth: 260, overflow: 'hidden', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
     <span style={{ color: STATUS_COLOR[status], flexShrink: 0 }} className={status === 'running' ? 'pipeline-pulse' : undefined}>●</span>
     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{run.machine.name}</span>
     {loop && isRunActive(status) && <span style={{ color: '#888', flexShrink: 0 }}>↺ {loop}</span>}
-    {!isRunActive(status) && <span onClick={(e) => { e.stopPropagation(); dismiss() }} title="Close the pipeline tab" style={{ fontSize: 14, lineHeight: 1, color: '#858585', cursor: 'pointer', flexShrink: 0, padding: '0 2px' }}>×</span>}
+    {planLabel && <span style={{ color: '#888', flexShrink: 0 }}>{planLabel}</span>}
+    {!isRunActive(status) && !plans && <span onClick={(e) => { e.stopPropagation(); dismiss() }} title="Close the pipeline tab" style={{ fontSize: 14, lineHeight: 1, color: '#858585', cursor: 'pointer', flexShrink: 0, padding: '0 2px' }}>×</span>}
   </div>
 }
 
+/** The pipeline tab: the plan, when there is one, as the parent of the run shown next to it. */
 export default function PipelineView(): React.ReactElement | null {
-  const run = usePipelineStore((s) => s.run)
+  const current = usePipelineStore((s) => s.run)
+  const plans = usePlanStore(hasPlans)
+  const detail = usePlanStore((s) => s.detail)
+  const past = usePastRun(detail?.kind === 'run' ? detail.runId : null)
+  const shownRun = detail?.kind === 'run' ? past : current
+  const pane = detail?.kind === 'decision' ? <DecisionDetail key={detail.number} planId={detail.planId} number={detail.number} />
+    : shownRun ? <RunView key={shownRun.runId} run={shownRun} past={detail?.kind === 'run' && current?.runId !== shownRun.runId} withPlan={plans} />
+      : <div style={{ padding: 16, color: '#777', fontSize: 12, fontFamily: 'Segoe UI, sans-serif' }}>{detail?.kind === 'run' ? 'Loading…' : 'No run yet. Open a task to see what happened to it.'}</div>
+  return <div style={{ position: 'absolute', inset: 0, display: 'flex', background: '#1e1e1e' }}>
+    {plans && <PlanPanel />}
+    <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>{pane}</div>
+  </div>
+}
+
+function RunView({ run, past, withPlan }: { run: PipelineRunSnapshot; past: boolean; withPlan: boolean }): React.ReactElement {
   const selected = usePipelineStore((s) => s.selected)
   const { select, dismiss } = usePipelineStore.getState()
   const [controlError, setControlError] = useState<string | null>(null)
-  useTick(run !== null && isRunActive(run.state.status))
+  useTick(isRunActive(run.state.status))
+  // Each run opened from the plan starts by following its own steps.
+  useEffect(() => { select(null) }, [select, run.runId])
 
-  if (!run) return null
   const { state, machine } = run
   const active = isRunActive(state.status)
 
@@ -127,7 +160,8 @@ export default function PipelineView(): React.ReactElement | null {
         {(state.status === 'running' || state.status === 'pausing') && <Button onClick={() => void control('stop')} title="Interrupt the current step now (resumable)">Stop now</Button>}
         {(state.status === 'paused' || state.status === 'stopped') && <Button onClick={() => void control('resume')}>Resume</Button>}
         {(state.status === 'paused' || state.status === 'stopped') && <Button onClick={() => void control('abandon')} title="End this run for good">Abandon</Button>}
-        {!active && <Button onClick={dismiss} title="Close the pipeline tab">Close</Button>}
+        {past && <Button onClick={() => usePlanStore.getState().showDetail(null)} title="Back to the current run">Back</Button>}
+        {!active && !withPlan && <Button onClick={dismiss} title="Close the pipeline tab">Close</Button>}
       </span>
     </div>
     {controlError && <div style={{ padding: '4px 10px', fontSize: 12, color: '#f48771', background: '#3a1f1f' }}>{controlError}</div>}
@@ -394,7 +428,8 @@ function EscalationPanel({ escalation }: { escalation: PipelineEscalation }): Re
   }
   const title = escalation.kind === 'engine' ? 'The run cannot continue' : escalation.kind === 'gate' ? 'Approval needed' : escalation.kind === 'limit' ? 'Loop limit reached' : 'Decision needed'
   return <div className="pipeline-attention" style={{ flexShrink: 0, borderTop: '2px solid #a33', background: '#2b1d1d', padding: '8px 12px', fontSize: 12 }}>
-    <div style={{ fontWeight: 600, color: '#ffb3b3', marginBottom: 4 }}>{title} — {escalation.node} <span style={{ color: '#888', fontWeight: 400 }}>(for the {escalation.to}; whoever answers first)</span></div>
+    <div style={{ fontWeight: 600, color: '#ffb3b3', marginBottom: 4 }}>{title} — {escalation.node} <span style={{ color: '#888', fontWeight: 400 }}>(for {escalationAudience(escalation)}; whoever answers first)</span></div>
+    {escalation.orchestrator?.reason && <div style={{ whiteSpace: 'pre-wrap', color: '#bbb', marginBottom: 6 }}>Orchestrator: {escalation.orchestrator.reason}{escalation.orchestrator.proposal ? ` Proposal: ${escalation.orchestrator.proposal}` : ''}{escalation.orchestrator.answer ? ` Would answer ${escalation.orchestrator.answer.action}: ${escalation.orchestrator.answer.text}` : ''}</div>}
     <div style={{ whiteSpace: 'pre-wrap', color: '#ddd', marginBottom: 6 }}>{escalation.message}</div>
     <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Answer (available to the next steps)" style={{ width: '100%', boxSizing: 'border-box', height: 46, background: '#1e1e1e', color: '#ccc', border: '1px solid #444', borderRadius: 3, padding: 6, fontFamily: 'inherit', fontSize: 12, resize: 'vertical' }} />
     <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>

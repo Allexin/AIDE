@@ -46,6 +46,10 @@ export interface ReasoningConfig {
   showPanel: boolean
 }
 
+export interface PrivacyConfig {
+  maskEmails: boolean // hide account emails everywhere but the Account Manager
+}
+
 export interface UpdatesConfig {
   notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly'
 }
@@ -73,6 +77,7 @@ export interface AppConfig {
   git: GitConfig
   toolbar: ToolbarAppConfig
   reasoning: ReasoningConfig
+  privacy: PrivacyConfig
   updates: UpdatesConfig
   remote: RemoteConfig
   toolConfigs: Record<string, Record<string, unknown>>
@@ -101,6 +106,9 @@ const DEFAULTS: AppConfig = {
   },
   reasoning: {
     showPanel: false
+  },
+  privacy: {
+    maskEmails: false
   },
   updates: {
     notifyFrequency: 'daily'
@@ -162,6 +170,7 @@ export function initAppConfig(): void {
         sessions: { ...DEFAULTS.sessions, ...(parsed.sessions ?? {}) },
         git: { ...DEFAULTS.git, ...(parsed.git ?? {}) },
         reasoning: { ...DEFAULTS.reasoning, ...(parsed.reasoning ?? {}) },
+        privacy: { ...DEFAULTS.privacy, ...(parsed.privacy ?? {}) },
         updates: { ...DEFAULTS.updates, ...(parsed.updates ?? {}) },
         remote: { ...DEFAULTS.remote, ...(parsed.remote ?? {}) },
         toolConfigs: { ...DEFAULTS.toolConfigs, ...(parsed.toolConfigs ?? {}) },

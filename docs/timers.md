@@ -20,7 +20,8 @@ failure, never treated as success.
 | `PtyManager.closeTabAndWaitExit` (`EXIT_TIMEOUT_MS`) | 5 s | the PTY's `onExit` before a session is resumed again | `pty-restart-exit-timeout` diagnostics event, resume proceeds |
 | `toolbar/processManager.forceKill` (`KILL_TIMEOUT_MS`) | 5 s | `taskkill` and the process `exit` | the restart proceeds |
 | `pipeline/processRunner` | per call | the child process | process is killed, `process-timeout` event |
-| `pipeline/mcp/tools` wait, `pipelineServer` wait | per request | a significant pipeline event | returns a `timeout` result to the caller |
+| `pipeline/mcp/tools` wait, `pipelineServer` wait | per request | a significant pipeline event | returns a `timeout` result to the caller. The MCP wait's limit (50 min) is also the point: it is under the 1-hour prompt-cache lifetime, so the tick keeps the waiting agent's cache warm (`docs/plan-mode-spec.md`) |
+| `pipeline/plan/planService` Orchestrator call (`ORCHESTRATOR_TIMEOUT_MS`) | 15 min | the Orchestrator's answer | the plan holds and the Strategist is woken |
 
 ## Debounce
 
