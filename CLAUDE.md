@@ -78,6 +78,10 @@ Electron + React + TypeScript desktop code editor. Windows only.
 ### Status Bar
 - Sensors based
 
+### Updates
+- `updater/updater.ts` checks GitHub Releases; the update dialog opens from the reminder and the status bar version
+- "Update" downloads and unpacks into `<install>\.update\`; a detached helper swaps the portable folder after AIDE quits. Active pipeline runs block it. See `docs/self-update.md`
+
 ### Plans
 - `aide/plans/<id>.json`, written by AIDE through MCP (`plan_*`) and the pipeline tab; one plan is active per user
 - The Strategist (long-context CLI tab) writes plans; the Orchestrator (a fresh headless session per call) says next or wake after each task and, when the plan lists the kinds, answers escalations inside a step or passes them on; it never changes the plan or stops a run; AIDE walks the tasks

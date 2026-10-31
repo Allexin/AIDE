@@ -17,6 +17,10 @@ win:
   icon: app_icon.ico
   artifactName: AIDE-${version}-portable.7z
   signAndEditExecutable: false
+  # The self-updater unpacks the portable archive with this.
+  extraResources:
+    - from: node_modules/7zip-bin/win/x64/7za.exe
+      to: 7za.exe
   target:
     - target: 7z
       arch:

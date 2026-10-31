@@ -303,6 +303,11 @@ interface EditorAPI {
   updaterDismissNotification: () => Promise<void>
   updaterOpenReleases: () => void
   onUpdaterStatusChanged: (cb: (status: UpdateStatus) => void) => () => void
+  updaterInstallState: () => Promise<InstallState>
+  updaterInstallStart: () => Promise<InstallAnswer>
+  updaterInstallCancel: () => Promise<void>
+  updaterInstallApply: () => Promise<InstallAnswer>
+  onUpdaterInstallState: (cb: (state: InstallState) => void) => () => void
 
   // Remote access
   onRemoteTabLockChanged: (cb: (tabId: string, locked: boolean) => void) => () => void
@@ -321,7 +326,24 @@ interface UpdateStatus {
   hasUpdate: boolean
   shouldNotify: boolean
   lastCheckedAt: number | null
+  canInstall: boolean
 }
+
+interface InstallState {
+  phase: 'idle' | 'downloading' | 'verifying' | 'unpacking' | 'ready' | 'failed'
+  version: string | null
+  received: number
+  total: number | null
+  error: string | null
+}
+
+interface UpdateBlockers {
+  work: string[]
+  toolbarProcesses: number
+  otherInstances: Array<{ pid: number; title: string }>
+}
+
+type InstallAnswer = { ok: true } | { ok: false; blockers: UpdateBlockers }
 
 interface PreviewMessage {
   role: 'user' | 'assistant'

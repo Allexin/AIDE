@@ -22,6 +22,9 @@ failure, never treated as success.
 | `pipeline/processRunner` | per call | the child process | process is killed, `process-timeout` event |
 | `pipeline/mcp/tools` wait, `pipelineServer` wait | per request | a significant pipeline event | returns a `timeout` result to the caller. The MCP wait's limit (50 min) is also the point: it is under the 1-hour prompt-cache lifetime, so the tick keeps the waiting agent's cache warm (`docs/plan-mode-spec.md`) |
 | `pipeline/plan/planService` Orchestrator call (`ORCHESTRATOR_TIMEOUT_MS`) | 15 min | the Orchestrator's answer | the plan holds and the Strategist is woken |
+| `updater/selfUpdate` process list (`PROCESS_LIST_TIMEOUT_MS`) | 15 s | the PowerShell query for other AIDE instances | the gate sees none; the helper still waits for them |
+| `apply-update.ps1` app exit (`exitLimitSeconds`) | 120 s | every process from the install folder to exit | nothing is touched, AIDE starts again and reports |
+| `apply-update.ps1` new version (`startLimitSeconds`) | 60 s | the `started` marker, or the process exit (which rolls back) | the new version is kept |
 
 ## Debounce
 

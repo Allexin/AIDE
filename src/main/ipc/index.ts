@@ -7,7 +7,8 @@ import { spawn } from 'child_process'
 import { removeRecentProject, getAppState, loadOpenSessions, getActivatedTools, setActivatedTools } from '../config/appState'
 import { getAppConfig, getToolConfig, updateAppConfig, updateToolConfig } from '../config/appConfig'
 import type { PrivacyConfig, ReasoningConfig, SessionsConfig, UpdatesConfig } from '../config/appConfig'
-import { getUpdateStatus, skipVersion, dismissNotification, RELEASES_URL } from '../updater/updater'
+import { getUpdateStatus, skipVersion, dismissNotification, getInstallTarget, RELEASES_URL } from '../updater/updater'
+import { applyInstall, cancelInstall, getInstallState, initSelfUpdate, startInstall, type InstallAnswer } from '../updater/selfUpdate'
 import { readProjectSettings, writeProjectSettings } from '../config/projectConfig'
 import {
   readToolbarButtons,
@@ -1315,6 +1316,15 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   ipcMain.handle('updater:skip-version', (_, version: string) => { skipVersion(version) })
   ipcMain.handle('updater:dismiss-notification', () => { dismissNotification() })
   ipcMain.on('updater:open-releases', () => { void shell.openExternal(RELEASES_URL) })
+  initSelfUpdate(() => openProjects)
+  ipcMain.handle('updater:install-state', () => getInstallState())
+  ipcMain.handle('updater:install-start', (): InstallAnswer => {
+    const target = getInstallTarget()
+    if (!target) return { ok: false, blockers: { work: [], toolbarProcesses: 0, otherInstances: [] } }
+    return startInstall(target.version, target)
+  })
+  ipcMain.handle('updater:install-cancel', () => { cancelInstall() })
+  ipcMain.handle('updater:install-apply', () => applyInstall())
   ipcMain.handle('settings:get-updates', () => getAppConfig().updates)
   ipcMain.handle('settings:save-updates', (_, config: UpdatesConfig) => {
     updateAppConfig({ updates: config })

@@ -78,8 +78,15 @@ Each release should include a portable archive built by the release script:
 AIDE-<version>-portable.7z
 ```
 
-The update dialog's "Go to download" button opens the GitHub releases page directly:
-`https://github.com/Allexin/AIDE/releases`
+and a checksum file, in `sha256sum` format, with this exact name:
+
+```
+SHA256SUMS
+```
+
+The update dialog installs a release in place only when it has both
+([`self-update.md`](self-update.md)). Otherwise its "Download Update" button opens the
+GitHub releases page: `https://github.com/Allexin/AIDE/releases`
 
 ## Release checklist
 
@@ -89,5 +96,5 @@ The update dialog's "Go to download" button opens the GitHub releases page direc
 4. On GitHub: create a new release with tag `v<version>`
 5. Set the release title to `v<version>`
 6. Paste the description following the format above
-7. Upload the archive as a release asset
+7. Upload the archive and `SHA256SUMS` as release assets
 8. Publish the release

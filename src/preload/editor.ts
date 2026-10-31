@@ -218,6 +218,11 @@ export interface EditorAPI {
   updaterDismissNotification: () => Promise<void>
   updaterOpenReleases: () => void
   onUpdaterStatusChanged: (cb: (status: UpdateStatus) => void) => () => void
+  updaterInstallState: () => Promise<InstallState>
+  updaterInstallStart: () => Promise<InstallAnswer>
+  updaterInstallCancel: () => Promise<void>
+  updaterInstallApply: () => Promise<InstallAnswer>
+  onUpdaterInstallState: (cb: (state: InstallState) => void) => () => void
 
   // Remote access
   onRemoteTabLockChanged: (cb: (tabId: string, locked: boolean) => void) => () => void
@@ -236,7 +241,24 @@ interface UpdateStatus {
   hasUpdate: boolean
   shouldNotify: boolean
   lastCheckedAt: number | null
+  canInstall: boolean
 }
+
+interface InstallState {
+  phase: 'idle' | 'downloading' | 'verifying' | 'unpacking' | 'ready' | 'failed'
+  version: string | null
+  received: number
+  total: number | null
+  error: string | null
+}
+
+interface UpdateBlockers {
+  work: string[]
+  toolbarProcesses: number
+  otherInstances: Array<{ pid: number; title: string }>
+}
+
+type InstallAnswer = { ok: true } | { ok: false; blockers: UpdateBlockers }
 
 const editorApi: EditorAPI = {
   notifyEditorFileChanged: (hasFile) => ipcRenderer.send('menu:editor-file-changed', hasFile),
@@ -504,6 +526,15 @@ const editorApi: EditorAPI = {
   updaterSkipVersion: (version) => ipcRenderer.invoke('updater:skip-version', version),
   updaterDismissNotification: () => ipcRenderer.invoke('updater:dismiss-notification'),
   updaterOpenReleases: () => ipcRenderer.send('updater:open-releases'),
+  updaterInstallState: () => ipcRenderer.invoke('updater:install-state'),
+  updaterInstallStart: () => ipcRenderer.invoke('updater:install-start'),
+  updaterInstallCancel: () => ipcRenderer.invoke('updater:install-cancel'),
+  updaterInstallApply: () => ipcRenderer.invoke('updater:install-apply'),
+  onUpdaterInstallState: (cb) => {
+    const handler = (_: Electron.IpcRendererEvent, state: InstallState): void => cb(state)
+    ipcRenderer.on('updater:install-state', handler)
+    return () => ipcRenderer.removeListener('updater:install-state', handler)
+  },
   onUpdaterStatusChanged: (cb) => {
     const handler = (_: unknown, status: UpdateStatus): void => cb(status)
     ipcRenderer.on('updater:status-changed', handler)

@@ -21,6 +21,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { execSync, spawnSync } from 'child_process'
 import { resolve, dirname } from 'path'
+import { createHash } from 'crypto'
 import { fileURLToPath } from 'url'
 import { checkAccess, findRelease, isComplete, publishRelease, resolveToken } from './github-release.mjs'
 
@@ -66,7 +67,7 @@ const headIsRelease = runCapture('git log -1 --format=%s') === `chore: release $
 let resume = false
 if (headIsRelease) {
   try {
-    resume = !isComplete(await findRelease(token, headTag), `AIDE-${headVersion}-portable.7z`)
+    resume = !isComplete(await findRelease(token, headTag), [`AIDE-${headVersion}-portable.7z`, 'SHA256SUMS'])
   } catch (err) {
     fail(`Cannot read GitHub releases: ${err.message}`)
   }
@@ -196,6 +197,11 @@ run('git push origin HEAD')
 run(`git push origin v${version}`)
 console.log('✓ Pushed')
 
+// The in-app updater only installs releases that have this file (docs/self-update.md).
+const assetHash = createHash('sha256').update(readFileSync(assetPath)).digest('hex')
+const checksumsPath = resolve(ROOT, 'release/SHA256SUMS')
+writeFileSync(checksumsPath, `${assetHash}  AIDE-${version}-portable.7z\n`, 'utf8')
+
 console.log('\n🚀 Publishing GitHub release...')
 let releaseUrl
 try {
@@ -203,7 +209,7 @@ try {
     tag: `v${version}`,
     name: `AIDE Stable ${version}`,
     body: notes,
-    assetPath
+    assetPaths: [assetPath, checksumsPath]
   })
 } catch (err) {
   fail(`GitHub publish failed: ${err.message}\n   Press Release again to resume — it will not rebuild.`)

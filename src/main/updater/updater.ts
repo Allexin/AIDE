@@ -3,6 +3,8 @@ import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 import https from 'https'
 import { getAppConfig } from '../config/appConfig'
+import { selectInstallAssets, type InstallAssets, type ReleaseAsset } from './installer'
+import { canSelfUpdate, settleLastUpdate } from './selfUpdate'
 
 export const RELEASES_URL = 'https://github.com/Allexin/AIDE/releases'
 const RELEASES_API_URL = 'https://api.github.com/repos/Allexin/AIDE/releases?per_page=100'
@@ -10,6 +12,7 @@ const RELEASES_API_URL = 'https://api.github.com/repos/Allexin/AIDE/releases?per
 export interface ReleaseInfo {
   version: string // e.g. "0.1.144"
   notes: string   // changelog text (markdown)
+  assets?: ReleaseAsset[]
 }
 
 export interface UpdateStatus {
@@ -19,6 +22,8 @@ export interface UpdateStatus {
   hasUpdate: boolean
   shouldNotify: boolean
   lastCheckedAt: number | null
+  /** The latest release can be installed in place; otherwise only "go to download". */
+  canInstall: boolean
 }
 
 interface UpdatesState {
@@ -33,6 +38,7 @@ interface GitHubRelease {
   body: string | null
   draft: boolean
   prerelease: boolean
+  assets?: Array<{ name: string; browser_download_url: string }>
 }
 
 let stateFilePath = ''
@@ -53,6 +59,9 @@ export function initUpdater(): void {
       // use defaults
     }
   }
+
+  // A failed update reopens the dialog with its error instead of waiting for the next reminder.
+  if (settleLastUpdate()) state.lastNotifiedAt = 0
 
   void checkForUpdates()
   setInterval(() => { void checkForUpdates() }, 24 * 60 * 60 * 1000)
@@ -115,7 +124,8 @@ function parseReleases(json: string): ReleaseInfo[] {
 
     const body = typeof release.body === 'string' ? release.body.trim() : ''
     const notesMatch = /AIDE Stable Release\s+v?[\d.]+\s*([\s\S]*?)AIDE Release Date[^\n]*/.exec(body)
-    return [{ version: versionMatch[1], notes: notesMatch?.[1].trim() ?? body }]
+    const assets = (release.assets ?? []).map(asset => ({ name: asset.name, url: asset.browser_download_url }))
+    return [{ version: versionMatch[1], notes: notesMatch?.[1].trim() ?? body, assets }]
   })
 }
 
@@ -171,8 +181,18 @@ export function getUpdateStatus(): UpdateStatus {
     newReleases,
     hasUpdate,
     shouldNotify,
-    lastCheckedAt: state.lastCheckedAt || null
+    lastCheckedAt: state.lastCheckedAt || null,
+    canInstall: canSelfUpdate() && getInstallTarget() !== null
   }
+}
+
+/** The newest release newer than this version, when it has what a self-update needs. */
+export function getInstallTarget(): (InstallAssets & { version: string }) | null {
+  const latest = state.cachedReleases
+    .filter(r => compareVersions(r.version, app.getVersion()) > 0)
+    .sort((a, b) => compareVersions(b.version, a.version))[0]
+  const assets = latest ? selectInstallAssets(latest.assets, latest.version) : null
+  return assets ? { ...assets, version: latest.version } : null
 }
 
 export function skipVersion(version: string): void {

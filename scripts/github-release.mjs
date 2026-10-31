@@ -111,19 +111,18 @@ export async function findRelease(token, tag) {
   }
 }
 
-/** True when the release for `tag` is published and carries a fully uploaded `assetName`. */
-export function isComplete(release, assetName) {
-  return !!release && !release.draft &&
-    release.assets.some((a) => a.name === assetName && a.state === 'uploaded')
+/** True when the release for `tag` is published and carries all `assetNames` fully uploaded. */
+export function isComplete(release, assetNames) {
+  return !!release && !release.draft && assetNames.every((name) =>
+    release.assets.some((a) => a.name === name && a.state === 'uploaded'))
 }
 
 /**
- * Create (or resume) the release for `tag`: a draft is created first, the asset
- * is uploaded into it, and only then is it published, so a half-uploaded release
+ * Create (or resume) the release for `tag`: a draft is created first, the assets
+ * are uploaded into it, and only then is it published, so a half-uploaded release
  * is never visible as the latest stable one.
  */
-export async function publishRelease(token, { tag, name, body, assetPath }) {
-  const assetName = basename(assetPath)
+export async function publishRelease(token, { tag, name, body, assetPaths }) {
   let release = await findRelease(token, tag)
   if (!release) {
     console.log(`   creating draft release ${tag}`)
@@ -134,17 +133,20 @@ export async function publishRelease(token, { tag, name, body, assetPath }) {
     console.log(`   resuming existing release ${tag}`)
   }
 
-  const asset = release.assets.find((a) => a.name === assetName)
-  const size = statSync(assetPath).size
-  if (asset && (asset.state !== 'uploaded' || asset.size !== size)) {
-    console.log(`   removing incomplete asset ${assetName}`)
-    await request(token, 'DELETE', `${API}/releases/assets/${asset.id}`)
-  }
-  if (!asset || asset.state !== 'uploaded' || asset.size !== size) {
-    console.log(`   uploading ${assetName} (${(size / 1024 / 1024).toFixed(1)} MB)`)
-    await request(token, 'POST',
-      `${UPLOADS}/releases/${release.id}/assets?name=${encodeURIComponent(assetName)}`,
-      { file: assetPath, contentType: 'application/x-7z-compressed' })
+  for (const assetPath of assetPaths) {
+    const assetName = basename(assetPath)
+    const asset = release.assets.find((a) => a.name === assetName)
+    const size = statSync(assetPath).size
+    if (asset && (asset.state !== 'uploaded' || asset.size !== size)) {
+      console.log(`   removing incomplete asset ${assetName}`)
+      await request(token, 'DELETE', `${API}/releases/assets/${asset.id}`)
+    }
+    if (!asset || asset.state !== 'uploaded' || asset.size !== size) {
+      console.log(`   uploading ${assetName} (${(size / 1024 / 1024).toFixed(1)} MB)`)
+      await request(token, 'POST',
+        `${UPLOADS}/releases/${release.id}/assets?name=${encodeURIComponent(assetName)}`,
+        { file: assetPath, contentType: assetName.endsWith('.7z') ? 'application/x-7z-compressed' : 'text/plain' })
+    }
   }
 
   if (release.draft) {
