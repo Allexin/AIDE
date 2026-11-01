@@ -78,6 +78,6 @@ site/                  # get-aide.org landing page
 ## Further reading
 
 - Adding a CLI: [`new-cli-tool-spec.md`](new-cli-tool-spec.md)
-- Pipelines: [`pipeline-orchestration-plan.md`](pipeline-orchestration-plan.md), [`../resources/docs/orchestration-mcp.md`](../resources/docs/orchestration-mcp.md) (for orchestrator agents), [`../resources/docs/pipeline-authoring.md`](../resources/docs/pipeline-authoring.md) (for agents that write machines)
+- Pipelines: [`pipeline-orchestration-plan.md`](pipeline-orchestration-plan.md), [`aide-mcp-launch.md`](aide-mcp-launch.md) (AIDE's MCP server and the docs it serves to agents), [`../resources/docs/pipeline-authoring.md`](../resources/docs/pipeline-authoring.md) (for agents that write machines)
 - Remote access: [`remote-access.md`](remote-access.md)
 - Crash diagnostics: [`crash-diagnostics.md`](crash-diagnostics.md)

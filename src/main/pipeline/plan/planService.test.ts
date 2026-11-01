@@ -123,7 +123,7 @@ function fixture(): Fixture {
     headSha: async () => `head${fx.committed.length}`,
     commitsSince: async () => []
   })
-  fx.server = new McpServer({ name: 'aide', version: '1', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: '1', launcherPath: 'x', docPath: 'd', manager: fx.manager, plans: fx.plans, planGuide: () => 'guide' })))
+  fx.server = new McpServer({ name: 'aide', version: '1', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: '1', launcherPath: 'x', manager: fx.manager, plans: fx.plans, planGuide: () => 'guide' })))
   lastFixture = fx
   return fx
 }
@@ -473,7 +473,7 @@ describe('tools', () => {
 
   it('tells a waiter on a 5-minute cache to stop waiting', async () => {
     const fx = fixture()
-    fx.server = new McpServer({ name: 'aide', version: '1', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: '1', launcherPath: 'x', docPath: 'd', manager: fx.manager, plans: fx.plans, cacheTtl: () => '5m' })))
+    fx.server = new McpServer({ name: 'aide', version: '1', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: '1', launcherPath: 'x', manager: fx.manager, plans: fx.plans, cacheTtl: () => '5m' })))
     expect((await call(fx, 'pipeline_wait', { timeoutSec: 0.01 })).text).toContain('Stop waiting')
   })
 })

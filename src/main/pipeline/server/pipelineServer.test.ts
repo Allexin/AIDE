@@ -60,7 +60,7 @@ describe('pipeline server + stdio shim', () => {
       serverName: 'aide',
       serverVersion: '0.0.0-test',
       instructions: 'test instructions',
-      tools: () => buildPipelineTools(() => ({ aideVersion: '0.0.0-test', launcherPath: 'aide-pipeline', docPath: '.aide/docs/orchestration-mcp.md' }))
+      tools: () => buildPipelineTools(() => ({ aideVersion: '0.0.0-test', launcherPath: 'aide-pipeline' }))
     })
   })
 

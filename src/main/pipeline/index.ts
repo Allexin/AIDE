@@ -1,5 +1,5 @@
 import { app, BrowserWindow } from 'electron'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { readFileSync } from 'fs'
 import { join } from 'path'
 import { logEvent } from '../diagnostics'
 import { pipelineServer } from './server/pipelineServer'
@@ -25,11 +25,10 @@ import { smokeTestMachine } from './smoke'
 
 /**
  * Pipeline bootstrap for the main process: the local pipeline server, the
- * agent-facing shim/launcher, the orchestration doc, and per-project wiring.
+ * agent-facing shim/launcher, and per-project wiring.
  * See docs/pipeline-orchestration-plan.md §1A.
  */
 
-export const ORCHESTRATION_DOC = '.aide/docs/orchestration-mcp.md'
 
 let launcherPath = ''
 
@@ -76,6 +75,10 @@ function authoringGuide(): string {
   return readFileSync(join(__dirname, '../../resources/docs/pipeline-authoring.md'), 'utf8')
 }
 
+function toolbarGuide(): string {
+  return readFileSync(join(__dirname, '../../resources/docs/toolbar.md'), 'utf8')
+}
+
 function runtimeDir(): string {
   return join(app.getPath('userData'), 'runtime')
 }
@@ -94,16 +97,16 @@ export async function startPipelineServer(): Promise<void> {
       runtimeDir: runtimeDir(),
       serverName: 'aide',
       serverVersion: app.getVersion(),
-      instructions: serverInstructions(ORCHESTRATION_DOC),
+      instructions: serverInstructions(),
       tools: () => buildPipelineTools(() => ({
         aideVersion: app.getVersion(),
         launcherPath,
-        docPath: ORCHESTRATION_DOC,
         manager: pipelineManager,
         authoringGuide,
         smoke: (projectPath, machineId, pingAgents) => smokeTestMachine(pipelineManager, projectPath, machineId, pingAgents),
         plans: planService,
         planGuide,
+        toolbarGuide,
         cacheTtl: tabCacheTtl
       }))
     })
@@ -129,23 +132,9 @@ export async function stopPipelineServer(): Promise<void> {
   await pipelineServer.stop()
 }
 
-/** Copy the bundled orchestration doc into the project when missing or outdated. */
-function deployOrchestrationDoc(projectPath: string): void {
-  const bundled = join(__dirname, '../../resources/docs/orchestration-mcp.md')
-  if (!existsSync(bundled)) return
-  const destination = join(projectPath, ORCHESTRATION_DOC)
-  const content = readFileSync(bundled, 'utf8')
-  if (existsSync(destination) && readFileSync(destination, 'utf8') === content) return
-  mkdirSync(join(projectPath, '.aide', 'docs'), { recursive: true })
-  writeFileSync(destination, content, 'utf8')
-}
-
-/** Wire a newly opened project: discovery file, doc, run notifications to its window. */
+/** Wire a newly opened project: discovery file, run notifications to its window. */
 export function attachPipelineProject(projectPath: string, win: BrowserWindow): () => void {
   pipelineServer.registerProject(projectPath)
-  try { deployOrchestrationDoc(projectPath) } catch (err) {
-    logEvent('orchestration-doc-deploy-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn')
-  }
   const send = (channel: string, payload: unknown): void => { if (!win.isDestroyed()) win.webContents.send(channel, payload) }
   const unsubscribe = pipelineView.subscribe(projectPath, {
     onState: (snapshot) => send('pipeline:run-state', snapshot),

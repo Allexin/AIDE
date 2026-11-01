@@ -31,13 +31,48 @@ the server in its own config.
   declares `aideMcp` (`aideMcpField`). Unsupported CLIs show it disabled with
   the reason. Turning it off gives the CLI no server at its next launch.
 - **The server says when to use it**: its `instructions` (`serverInstructions`)
-  and the `pipeline_hello` description tell the agent to turn to orchestration
-  when the user asks for it or a task needs several agent steps with checks and
-  review. Not every client shows server instructions; every client shows tool
+  and the `pipeline_hello` description tell the agent to use plans and
+  pipelines on its own whenever a task is big enough that implementation
+  details would crowd out its strategic view: the details go to pipeline runs,
+  the agent stays the Strategist. Not every client shows server instructions; every client shows tool
   descriptions.
 
 A tab started before AIDE's server came up has no server; AIDE starts the
 server before it opens any project.
+
+## Docs for agents
+
+Agent-facing docs stay inside AIDE (`resources/docs/`) and reach agents only
+through the server, so they always match the running AIDE:
+
+| Tool | Doc |
+|---|---|
+| `pipeline_hello` | Strategist rules and event delivery (`ORCHESTRATOR_RULES`, `eventDeliveryText` in `src/main/pipeline/mcp/tools.ts`) |
+| `pipeline_guide` | `pipeline-authoring.md` plus the engine version history |
+| `plan_guide` | `plan-guide.md` |
+| `toolbar_guide` | `toolbar.md` |
+
+The server instructions name the three guides, so a client that defers tool
+schemas still knows they exist. Docs are not copied into projects any more: on
+project open AIDE deletes the old copies `.aide/docs/toolbar.md` and
+`.aide/docs/orchestration-mcp.md` when they were created before 2027
+(`src/main/config/legacyDocs.ts`). A prompt that depends on a guide (the
+toolbar AI helper) tells the agent to report a missing AIDE MCP to the user
+instead of guessing.
+
+## A session started outside AIDE
+
+The server is a stdio shim that finds the AIDE instance serving the project by
+itself. A CLI not launched by AIDE can use this entry; it holds paths of one
+AIDE installation and goes stale when AIDE moves.
+
+| Field | Value |
+|---|---|
+| transport | stdio |
+| command | the AIDE executable (absolute path) |
+| args | `["<path to aide-mcp.cjs>", "mcp"]` |
+| env | `ELECTRON_RUN_AS_NODE=1`, `AIDE_RUNTIME_DIR=<AIDE runtime directory>` |
+| server name | `aide` |
 
 ## Per CLI
 

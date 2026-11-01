@@ -54,7 +54,7 @@ describe.skipIf(!live)('orchestrator over MCP (live)', () => {
       serverName: 'aide',
       serverVersion: 'live',
       instructions: 'AIDE pipeline server (live test).',
-      tools: () => buildPipelineTools(() => ({ aideVersion: 'live', launcherPath: 'aide-pipeline', docPath: '.aide/docs/orchestration-mcp.md', manager }))
+      tools: () => buildPipelineTools(() => ({ aideVersion: 'live', launcherPath: 'aide-pipeline', manager }))
     })
   })
 

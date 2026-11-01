@@ -495,7 +495,13 @@ function PresetDialog({
   const handleAskTool = (): void => {
     const tool = cliTools[selectedToolIdx]
     if (!tool || !aiPrompt.trim()) return
-    const prompt = `Please read .aide/docs/toolbar.md to understand the toolbar configuration format, then help with:\n\n${aiPrompt.trim()}`
+    const prompt = [
+      "Call toolbar_guide, a tool of AIDE's MCP server (aide), to learn the toolbar configuration format, then help with:",
+      '',
+      aiPrompt.trim(),
+      '',
+      "If you have no toolbar_guide tool, AIDE's MCP server is not connected to this session. Do not guess the format: tell the user, and say that the CLI may have updated or may not support MCP, and that they can check \"Give AIDE's MCP server to this CLI\" in AIDE's settings for this CLI and then restart the tab."
+    ].join('\n')
     window.editorApi.terminalCreateWithPrompt(tool.id, prompt)
     onCancel()
   }

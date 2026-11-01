@@ -67,6 +67,10 @@ Key decisions already taken:
 
 ### 1A.1 Principle
 
+> **Superseded (2026-11-01):** `orchestration-mcp.md` was removed and docs are no
+> longer copied into projects. Its rules and event delivery are in the
+> `pipeline_hello` output; see `docs/aide-mcp-launch.md` "Docs for agents".
+
 AIDE does not hard-wire any CLI as orchestrator. It ships:
 
 - `resources/docs/orchestration-mcp.md` — the MCP contract: how to connect, the

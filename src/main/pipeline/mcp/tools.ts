@@ -21,8 +21,6 @@ export interface ToolEnvironment {
   aideVersion: string
   /** Shell launcher for the event feed (`<launcher> events --run <id>`). */
   launcherPath: string
-  /** Project-relative path of the orchestration doc. */
-  docPath: string
   /** Absent in contexts without an engine (tests of the handshake). */
   manager?: PipelineManager
   /** Authoring guide text (`pipeline_guide`). */
@@ -33,6 +31,8 @@ export interface ToolEnvironment {
   plans?: PlanService
   /** Plan guide text (`plan_guide`). */
   planGuide?: () => string
+  /** Toolbar guide text (`toolbar_guide`). */
+  toolbarGuide?: () => string
   /** The prompt-cache lifetime of the agent in a tab, when AIDE can tell. */
   cacheTtl?: (projectPath: string, tabId: string | null) => '5m' | '1h' | null
 }
@@ -41,7 +41,8 @@ export const ORCHESTRATOR_RULES = [
   'You are the Strategist of this project: you decide what gets done, and AIDE and other agents do it.',
   'AIDE executes pipeline machines deterministically: it spawns step agents, runs checks, repeats loops, commits and reports. Work that takes several tasks goes into an AIDE plan (plan_guide, plan_create): once approved and active, plan_run walks it task by task, and an Orchestrator, a short-lived agent with no context of its own, checks each step and starts the next one, or wakes you; when the plan lets it, it also answers the escalations inside a step, and passes on to you what it cannot decide. You write and change the plan, answer what the runs and the Orchestrator bring you, and talk to the user. For one concrete task, plan or no plan, pipeline_start runs a machine directly.',
   'While a run is executing, leave the working tree to it: do not edit files yourself. Plan edits go through plan_edit and are safe at any time.',
-  'Do not give step agents a way out in task texts or params ("if you cannot finish, escalate"): they take it early. A step that should stop has blocked / plan_wrong and escalations for real obstacles.',
+  'Do not give step agents a way out in task texts or params ("if you cannot finish, escalate"): they take it early. A step that should stop has blocked / plan_wrong and escalations for real obstacles. When an implementer reports blocked without naming a real obstacle, retry the step with a concrete instruction to start implementing.',
+  'Never start a run in the same batch of calls as the edits it depends on: if an edit fails, the run starts on stale documents.',
   'Every call you make re-reads your whole context, so keep each cycle to the few calls it needs. Do not re-verify what the machine\'s checks and reviewers already verified: the report\'s `checks` lists every check command with its last result, and a check that passed there ran on the final code — do not run it again. Inspect results yourself only on a signal (a reviewer flagged something, a first capture of a new visual stage, a failed run).'
 ]
 
@@ -50,13 +51,14 @@ export const ORCHESTRATOR_RULES = [
  * server is and when to turn to it. The server carries pipeline orchestration
  * today; other AIDE tools may join it.
  */
-export function serverInstructions(docPath: string): string {
+export function serverInstructions(): string {
   return [
     "AIDE's MCP server: tools of the AIDE editor that has this project open.",
     'Pipeline orchestration (pipeline_* tools): AIDE runs pipeline machines — multi-step agent work with checks, review loops and commits — deterministically, and you orchestrate them.',
     'Plans (plan_* tools): when the user asks for a plan, or work needs several tasks tracked over sessions, make it an AIDE plan, whatever way of planning your client has; plan_guide says how. AIDE shows its progress and can walk it task by task.',
-    'Turn to orchestration when the user asks for it or for a pipeline, or when a task is big enough for several agent steps with checks and review (a feature across many files, a series of plan items).',
-    `Start with pipeline_hello: it returns the rules and how to receive pipeline events. Reference: ${docPath}`
+    'Use plans and pipelines whenever you work, not only when the user asks for them: when a task is big enough that its implementation details would crowd out your strategic view (a feature across many files, a series of tasks), hand the details to pipeline runs and act as the Strategist yourself — keep the vision, decide what gets done, and review the results.',
+    'Start with pipeline_hello: it returns the rules and how to receive pipeline events.',
+    'Guides, read when the task calls for them: pipeline_guide (writing machines), plan_guide (writing plans), toolbar_guide (toolbar buttons in aide/toolbar.json).'
   ].join(' ')
 }
 
@@ -67,8 +69,11 @@ function eventDeliveryText(launcherPath: string): string {
     `2. If your client cannot block on a tool call for long: a background command or monitor — "${launcherPath}" events --run <runId> --since <lastEventId> (one JSON line per event that needs you) or "${launcherPath}" wait --run <runId> --since <lastEventId> (prints the next one and exits). Each wake-up costs extra calls.`,
     '3. Last resort: poll pipeline_status.',
     'While a plan\'s autopilot is on, wait without runId: runs change, and pipeline_wait then covers every run and the plan.',
-    'Events that need you: plan_attention (the plan holds and needs you: see its kind, reason and proposal; change the plan with plan_edit if needed, then plan_run with a note), escalation (a decision; answer with pipeline_answer — one the Orchestrator of a plan passed on carries its reason and proposal in "orchestrator"), run_paused / run_stopped (the run changed hands, possibly by the user or an AIDE restart; continue with pipeline_resume — reason "usage_limit" means a CLI hit its usage limit: the run resumes by itself at resumeAt when the message said when, keeping the step\'s session; when AIDE switches the CLI to another account of the user\'s pool and goes on, you are not told), run_finished / run_failed (the event carries the compact report; read all of it — when you wait in code, return the report whole rather than a few fields). Step progress is not sent, nor are retries of a CLI that is temporarily unavailable (model at capacity, overloaded, network): AIDE retries the step every minute and sends an engine escalation only after 20 minutes.',
-    'Pass the last event id you have seen as `since`, also when waiting without runId; ids continue across AIDE restarts, so nothing is lost. An event that has been dealt with since (the escalation answered, the plan continued, the run resumed) is not handed out again.'
+    'Events that need you: plan_attention (the plan holds and needs you: see its kind, reason and proposal; change the plan with plan_edit if needed, then plan_run with a note), escalation (a decision; answer with pipeline_answer — one the Orchestrator of a plan passed on carries its reason and proposal in "orchestrator"), run_paused / run_stopped (the run changed hands, possibly by the user or an AIDE restart; continue with pipeline_resume — reason "usage_limit" means a CLI hit its usage limit: the run resumes by itself at resumeAt when the message said when, keeping the step\'s session; when AIDE switches the CLI to another account of the user\'s pool and goes on, you are not told), run_finished / run_failed (the event carries the compact report; read all of it — when you wait in code, return the report whole rather than a few fields; recurring findings are your signal to plan a refactoring task). Step progress is not sent, nor are retries of a CLI that is temporarily unavailable (model at capacity, overloaded, network): AIDE retries the step every minute and sends an engine escalation only after 20 minutes.',
+    'Escalation kinds and their actions: step (a step asks for a decision, e.g. plan_wrong or a check failed outside any loop): continue / retry / stop; gate (approval): continue / reject / stop; limit (a loop used up its iterations): retry for one more / continue to accept as it is / stop; engine (a step could not run): retry continues the failed session / stop. stop ends the run for good; to hold a run without deciding, do not answer: it waits and survives AIDE restarts.',
+    'Pass the last event id you have seen as `since`, also when waiting without runId; ids continue across AIDE restarts, and after a restart AIDE re-announces a pending escalation or paused run, so nothing is lost. An event that has been dealt with since (the escalation answered, the plan continued, the run resumed) is not handed out again.',
+    'If an event that needs you arrives while you are not waiting and your session is idle, AIDE types it into your terminal as a message starting with "AIDE pipeline:"; act on it as on a waited event, then wait again with the since it gives.',
+    'Claude Code moves an MCP call that runs longer than 120 s to the background and delivers its result in the task notification: the event arrives there, with no output file to read. Clients that cut long calls: pass a wait shorter than their limit.'
   ].join('\n')
 }
 
@@ -148,19 +153,17 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
   const tools: ToolDefinition[] = [
     {
       name: 'pipeline_hello',
-      description: 'Start here for pipeline orchestration: when the user asks for orchestration or a pipeline, or a task is big enough for several agent steps with checks and review. Confirms the connection to AIDE and returns the rules for the Strategist and how to receive pipeline events.',
+      description: 'Start here for pipeline orchestration: when the user asks for it, or on your own whenever a task is big enough that its implementation details would crowd out your strategic view — hand them to pipelines and act as the Strategist. Confirms the connection to AIDE and returns the rules for the Strategist and how to receive pipeline events.',
       inputSchema: OBJECT({}),
       handler: (_args, context) => {
-        const { aideVersion, launcherPath, docPath } = env()
+        const { aideVersion, launcherPath } = env()
         orchestrators.hello({ projectPath: context.projectPath, connectionId: context.connectionId, tabId: context.tabId, client: context.clientInfo })
         const text = [
           `Connected to AIDE ${aideVersion} for project ${context.projectPath}.`,
           '',
           ...ORCHESTRATOR_RULES,
           '',
-          eventDeliveryText(launcherPath),
-          '',
-          `Full reference: ${docPath}`
+          eventDeliveryText(launcherPath)
         ].join('\n')
         return ok(text)
       }
@@ -374,6 +377,15 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
       handler: () => {
         const guide = env().authoringGuide?.()
         return guide ? ok(`${guide}\n\n${engineVersionsText()}`) : fail('The authoring guide is not available.')
+      }
+    },
+    {
+      name: 'toolbar_guide',
+      description: 'How AIDE toolbar buttons are configured: aide/toolbar.json (shared) and the personal toolbar.json, button fields, variables, log channels, sounds. Read it before editing either file.',
+      inputSchema: OBJECT({}),
+      handler: () => {
+        const guide = env().toolbarGuide?.()
+        return guide ? ok(guide) : fail('The toolbar guide is not available.')
       }
     },
     {

@@ -2,7 +2,7 @@
 
 Обзорный документ на русском языке. Описывает логику, без формата файлов и без кода.
 Источники деталей: `docs/plan-mode-spec.md`, `docs/pipeline-orchestration-plan.md`,
-`docs/account-pool.md`, `resources/docs/plan-guide.md`, `resources/docs/orchestration-mcp.md`,
+`docs/account-pool.md`, `resources/docs/plan-guide.md`, `docs/aide-mcp-launch.md`,
 `resources/docs/pipeline-authoring.md`.
 
 ---

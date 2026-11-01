@@ -100,7 +100,7 @@ describe('PipelineManager through the MCP tools', () => {
     const { engineVersion: _current, ...old } = guideExample()
     const dir = project('p0', { ...old, engineVersion: 2 })
     const manager = new PipelineManager(environment(happy))
-    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', docPath: 'd', manager })))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', manager })))
     const list = await call(server, dir, 'pipeline_list', {})
     expect(list.text).toContain(`"outdated":"written for engine 2, AIDE runs ${ENGINE_VERSION}"`)
     const refused = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] } })
@@ -118,7 +118,7 @@ describe('PipelineManager through the MCP tools', () => {
   it('lists, starts, waits for and reports a run', async () => {
     const dir = project('p1', guideExample())
     const manager = new PipelineManager(environment(happy))
-    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'aide-pipeline', docPath: 'doc', manager })))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'aide-pipeline', manager })))
 
     const list = await call(server, dir, 'pipeline_list')
     expect(list.data?.machines).toEqual([expect.objectContaining({ id: 'code-feature', valid: true })])
@@ -164,7 +164,7 @@ describe('PipelineManager through the MCP tools', () => {
     const machine = guideExample()
     const dir = project('p2', machine)
     const manager = new PipelineManager(environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [], pipelineIssues: [] } } : happy(label)))
-    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', docPath: 'd', manager })))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', manager })))
     const started = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] } })
     const runId = /Run (\S+) started/.exec(started.text)![1]
     const event = await call(server, dir, 'pipeline_wait', { runId, timeoutSec: 5 })
@@ -184,7 +184,7 @@ describe('PipelineManager through the MCP tools', () => {
   it('records an instruction with pipeline_amend; abandon lists what the run left uncommitted', async () => {
     const dir = project('p2b', guideExample())
     const manager = new PipelineManager(environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [], pipelineIssues: [] } } : happy(label)))
-    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', docPath: 'd', manager })))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', manager })))
     await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] }, wait: 5 })
     const amended = await call(server, dir, 'pipeline_amend', { text: 'Keep the old save format.' })
     expect(amended.text).toBe('Instruction recorded; the later steps of the run will see it.')
@@ -224,7 +224,7 @@ describe('PipelineManager through the MCP tools', () => {
   it('acts and waits in one call: start and answer return the next event', async () => {
     const dir = project('p4', guideExample())
     const manager = new PipelineManager(environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [], pipelineIssues: [] } } : happy(label)))
-    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', docPath: 'd', manager })))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', manager })))
     const started = await callWith(server, dir, 'tab-1', 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] }, wait: 5 })
     const escalation = JSON.parse(started.split('\n').pop()!) as { type: string; data: { escalationId: string; actions: string[] } }
     expect(escalation).toMatchObject({ type: 'escalation', data: { node: 'implement', actions: ['continue', 'retry', 'stop'] } })
@@ -235,7 +235,7 @@ describe('PipelineManager through the MCP tools', () => {
   it('a wait returns early when the user types in the waiting agent\'s tab', async () => {
     const dir = project('p5', guideExample())
     const manager = new PipelineManager(environment(happy))
-    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', docPath: 'd', manager })))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', manager })))
     const waiting = callWith(server, dir, 'tab-9', 'pipeline_wait', { runId: 'no-such-run', timeoutSec: 30 })
     await new Promise((r) => setTimeout(r, 50))
     orchestrators.userInput('tab-other', 'hello\r') // another tab: ignored

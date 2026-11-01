@@ -5,7 +5,8 @@ import { is } from '@electron-toolkit/utils'
 import { rendererDevUrl } from '../devEnv'
 import { checkAndAcquireLock, releaseLock } from '../lock'
 import { ensureAideDirectory } from '../config/projectConfig'
-import { ensureDefaultToolbar, deployToolbarDocs } from '../config/toolbarConfig'
+import { ensureDefaultToolbar } from '../config/toolbarConfig'
+import { removeLegacyProjectDocs } from '../config/legacyDocs'
 import { addRecentProject, saveOpenSessions } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { startProjectWatcher, stopProjectWatcher } from '../filetree/watcher'
@@ -96,7 +97,7 @@ export function openProjectAndTrack(
   }
 
   ensureDefaultToolbar(projectPath)
-  deployToolbarDocs(projectPath)
+  removeLegacyProjectDocs(projectPath)
 
   if (!options.noGlobalState) {
     addRecentProject(projectPath, getAppConfig().sessions.maxRecentProjects)

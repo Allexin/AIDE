@@ -41,7 +41,7 @@ describe.skipIf(!live)('pipeline MCP with real agent CLIs (live)', () => {
       serverName: 'aide',
       serverVersion: '9.9.9-live',
       instructions: 'AIDE pipeline server (live test).',
-      tools: () => buildPipelineTools(() => ({ aideVersion: '9.9.9-live', launcherPath: 'aide-pipeline', docPath: '.aide/docs/orchestration-mcp.md' }))
+      tools: () => buildPipelineTools(() => ({ aideVersion: '9.9.9-live', launcherPath: 'aide-pipeline' }))
     })
   })
 
