@@ -49,11 +49,18 @@ export interface RemoteConfig {
   buttonRows: RemoteButtonRow[]
 }
 
+export interface WorkInstruction {
+  aide: string
+  override: string | null
+}
+
 export interface SettingsAPI {
   getReasoningConfig: () => Promise<ReasoningConfig>
   saveReasoningConfig: (config: ReasoningConfig) => Promise<void>
   getPrivacyConfig: () => Promise<PrivacyConfig>
   savePrivacyConfig: (config: PrivacyConfig) => Promise<void>
+  getWorkInstruction: () => Promise<WorkInstruction>
+  saveWorkInstruction: (override: string | null) => Promise<void>
   getToolSettings: () => Promise<ToolSettingsEntry[]>
   updateToolSettings: (toolId: string, values: Record<string, unknown>) => Promise<void>
   getAccountTools: () => Promise<AccountToolEntry[]>
@@ -74,6 +81,8 @@ const settingsApi: SettingsAPI = {
   saveReasoningConfig: (config) => ipcRenderer.invoke('settings:save-reasoning', config),
   getPrivacyConfig: () => ipcRenderer.invoke('settings:get-privacy'),
   savePrivacyConfig: (config) => ipcRenderer.invoke('settings:save-privacy', config),
+  getWorkInstruction: () => ipcRenderer.invoke('settings:get-work-instruction'),
+  saveWorkInstruction: (override) => ipcRenderer.invoke('settings:save-work-instruction', override),
   getToolSettings: () => ipcRenderer.invoke('tool-settings:get-all'),
   updateToolSettings: (toolId, values) => ipcRenderer.invoke('tool-settings:update', toolId, values),
   getAccountTools: () => ipcRenderer.invoke('accounts:get-tools'),

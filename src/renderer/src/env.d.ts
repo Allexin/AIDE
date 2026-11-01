@@ -497,6 +497,8 @@ interface SettingsAPI {
   saveReasoningConfig: (config: { showPanel: boolean }) => Promise<void>
   getPrivacyConfig: () => Promise<{ maskEmails: boolean }>
   savePrivacyConfig: (config: { maskEmails: boolean }) => Promise<void>
+  getWorkInstruction: () => Promise<{ aide: string; override: string | null }>
+  saveWorkInstruction: (override: string | null) => Promise<void>
   getToolSettings: () => Promise<Array<{ toolId: string; name: string; fields: SettingsField[]; values: Record<string, unknown> }>>
   updateToolSettings: (toolId: string, values: Record<string, unknown>) => Promise<void>
   getAccountTools: () => Promise<Array<{ id: string; name: string; hasAccount: boolean }>>

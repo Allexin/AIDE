@@ -7,6 +7,7 @@ import { spawn } from 'child_process'
 import { removeRecentProject, getAppState, loadOpenSessions, getActivatedTools, setActivatedTools } from '../config/appState'
 import { getAppConfig, getToolConfig, updateAppConfig, updateToolConfig } from '../config/appConfig'
 import type { PrivacyConfig, ReasoningConfig, SessionsConfig, UpdatesConfig } from '../config/appConfig'
+import { AIDE_WORK_INSTRUCTION } from '../pipeline/mcp/tools'
 import { getUpdateStatus, skipVersion, dismissNotification, getInstallTarget, RELEASES_URL } from '../updater/updater'
 import { applyInstall, cancelInstall, getInstallState, initSelfUpdate, startInstall, type InstallAnswer } from '../updater/selfUpdate'
 import { readProjectSettings, writeProjectSettings } from '../config/projectConfig'
@@ -1279,6 +1280,16 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     // The status bar, the pipeline tab and the Load Account menu show account data.
     broadcastAccountsChanged()
     rebuildMenu()
+  })
+
+  // ── Settings: agents' work instruction (AIDE's text and the user's override) ─
+  ipcMain.handle('settings:get-work-instruction', () => ({
+    aide: AIDE_WORK_INSTRUCTION,
+    override: getAppConfig().agents.workInstructionOverride
+  }))
+
+  ipcMain.handle('settings:save-work-instruction', (_event, override: string | null) => {
+    updateAppConfig({ agents: { ...getAppConfig().agents, workInstructionOverride: typeof override === 'string' ? override : null } })
   })
 
   // ── Settings: get/save sessions config ───────────────────────────────────────

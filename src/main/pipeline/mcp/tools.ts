@@ -33,6 +33,8 @@ export interface ToolEnvironment {
   planGuide?: () => string
   /** Toolbar guide text (`toolbar_guide`). */
   toolbarGuide?: () => string
+  /** The work instruction in effect (AIDE's or the user's override); empty for none. */
+  workInstruction?: () => string
   /** The prompt-cache lifetime of the agent in a tab, when AIDE can tell. */
   cacheTtl?: (projectPath: string, tabId: string | null) => '5m' | '1h' | null
 }
@@ -47,19 +49,27 @@ export const ORCHESTRATOR_RULES = [
 ]
 
 /**
+ * AIDE's instruction on when an agent turns to plans and pipelines on its own.
+ * The user can override it in Settings; the override replaces it, AIDE's text
+ * stays here and keeps being updated, and dropping the override brings it back.
+ * Without any instruction the tools are still there and usable.
+ */
+export const AIDE_WORK_INSTRUCTION = 'Use plans and pipelines whenever you work, not only when the user asks for them: when a task is big enough that its implementation details would crowd out your strategic view (a feature across many files, a series of tasks), hand the details to pipeline runs and act as the Strategist yourself — keep the vision, decide what gets done, and review the results.'
+
+/**
  * The server's instructions, shown by clients that read them: what AIDE's MCP
  * server is and when to turn to it. The server carries pipeline orchestration
  * today; other AIDE tools may join it.
  */
-export function serverInstructions(): string {
+export function serverInstructions(workInstruction: string = AIDE_WORK_INSTRUCTION): string {
   return [
     "AIDE's MCP server: tools of the AIDE editor that has this project open.",
     'Pipeline orchestration (pipeline_* tools): AIDE runs pipeline machines — multi-step agent work with checks, review loops and commits — deterministically, and you orchestrate them.',
     'Plans (plan_* tools): when the user asks for a plan, or work needs several tasks tracked over sessions, make it an AIDE plan, whatever way of planning your client has; plan_guide says how. AIDE shows its progress and can walk it task by task.',
-    'Use plans and pipelines whenever you work, not only when the user asks for them: when a task is big enough that its implementation details would crowd out your strategic view (a feature across many files, a series of tasks), hand the details to pipeline runs and act as the Strategist yourself — keep the vision, decide what gets done, and review the results.',
+    workInstruction.trim(),
     'Start with pipeline_hello: it returns the rules and how to receive pipeline events.',
     'Guides, read when the task calls for them: pipeline_guide (writing machines), plan_guide (writing plans), toolbar_guide (toolbar buttons in aide/toolbar.json).'
-  ].join(' ')
+  ].filter(Boolean).join(' ')
 }
 
 function eventDeliveryText(launcherPath: string): string {
@@ -153,7 +163,7 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
   const tools: ToolDefinition[] = [
     {
       name: 'pipeline_hello',
-      description: 'Start here for pipeline orchestration: when the user asks for it, or on your own whenever a task is big enough that its implementation details would crowd out your strategic view — hand them to pipelines and act as the Strategist. Confirms the connection to AIDE and returns the rules for the Strategist and how to receive pipeline events.',
+      description: ['Start here for pipeline orchestration.', (env().workInstruction?.() ?? AIDE_WORK_INSTRUCTION).trim(), 'Confirms the connection to AIDE and returns the rules for the Strategist and how to receive pipeline events.'].filter(Boolean).join(' '),
       inputSchema: OBJECT({}),
       handler: (_args, context) => {
         const { aideVersion, launcherPath } = env()

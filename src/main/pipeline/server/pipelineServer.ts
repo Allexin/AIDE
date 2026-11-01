@@ -28,7 +28,7 @@ export interface PipelineServerOptions {
   runtimeDir: string
   serverName: string
   serverVersion: string
-  instructions: string
+  instructions: string | (() => string)
   tools: () => ToolDefinition[]
 }
 

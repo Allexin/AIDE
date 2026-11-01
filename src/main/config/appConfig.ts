@@ -50,6 +50,11 @@ export interface PrivacyConfig {
   maskEmails: boolean // hide account emails everywhere but the Account Manager
 }
 
+export interface AgentsConfig {
+  /** The user's override of AIDE's work instruction for agents; null uses AIDE's. */
+  workInstructionOverride: string | null
+}
+
 export interface UpdatesConfig {
   notifyFrequency: 'never' | 'daily' | 'weekly' | 'monthly'
 }
@@ -78,6 +83,7 @@ export interface AppConfig {
   toolbar: ToolbarAppConfig
   reasoning: ReasoningConfig
   privacy: PrivacyConfig
+  agents: AgentsConfig
   updates: UpdatesConfig
   remote: RemoteConfig
   toolConfigs: Record<string, Record<string, unknown>>
@@ -109,6 +115,9 @@ const DEFAULTS: AppConfig = {
   },
   privacy: {
     maskEmails: false
+  },
+  agents: {
+    workInstructionOverride: null
   },
   updates: {
     notifyFrequency: 'daily'
@@ -171,6 +180,7 @@ export function initAppConfig(): void {
         git: { ...DEFAULTS.git, ...(parsed.git ?? {}) },
         reasoning: { ...DEFAULTS.reasoning, ...(parsed.reasoning ?? {}) },
         privacy: { ...DEFAULTS.privacy, ...(parsed.privacy ?? {}) },
+        agents: { ...DEFAULTS.agents, ...(parsed.agents ?? {}) },
         updates: { ...DEFAULTS.updates, ...(parsed.updates ?? {}) },
         remote: { ...DEFAULTS.remote, ...(parsed.remote ?? {}) },
         toolConfigs: { ...DEFAULTS.toolConfigs, ...(parsed.toolConfigs ?? {}) },

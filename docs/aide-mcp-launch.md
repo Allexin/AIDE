@@ -34,7 +34,17 @@ the server in its own config.
   and the `pipeline_hello` description tell the agent to use plans and
   pipelines on its own whenever a task is big enough that implementation
   details would crowd out its strategic view: the details go to pipeline runs,
-  the agent stays the Strategist. Not every client shows server instructions; every client shows tool
+  the agent stays the Strategist.
+- **Work instruction setting.** That instruction (`AIDE_WORK_INSTRUCTION` in
+  `src/main/pipeline/mcp/tools.ts`) is shown read-only in Settings → CLI
+  Settings, next to an **Override** button. An override (`agents.
+  workInstructionOverride` in the app config, `null` for AIDE's) replaces it in
+  the server instructions and the `pipeline_hello` description; an empty one
+  gives agents no instruction, and the tools stay available. AIDE's text is
+  never copied into the config, so AIDE updates to it reach everyone who has
+  not overridden it, and **Use AIDE's instruction** drops an override at any
+  time. The server reads the setting at every `initialize`, so it applies to
+  sessions started after saving. Not every client shows server instructions; every client shows tool
   descriptions.
 
 A tab started before AIDE's server came up has no server; AIDE starts the

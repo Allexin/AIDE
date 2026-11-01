@@ -4,7 +4,8 @@ import { join } from 'path'
 import { logEvent } from '../diagnostics'
 import { pipelineServer } from './server/pipelineServer'
 import { shimLaunch, writeLauncher } from './server/runtimeFiles'
-import { buildPipelineTools, serverInstructions } from './mcp/tools'
+import { AIDE_WORK_INSTRUCTION, buildPipelineTools, serverInstructions } from './mcp/tools'
+import { getAppConfig } from '../config/appConfig'
 import { orchestrators } from './orchestrators'
 import { setLaunchMcpProvider } from '../pty/ptyManager'
 import { aideMcpServers } from '../aideMcp/launch'
@@ -79,6 +80,11 @@ function toolbarGuide(): string {
   return readFileSync(join(__dirname, '../../resources/docs/toolbar.md'), 'utf8')
 }
 
+/** The work instruction in effect: the user's override from Settings, or AIDE's. */
+function workInstruction(): string {
+  return getAppConfig().agents.workInstructionOverride ?? AIDE_WORK_INSTRUCTION
+}
+
 function runtimeDir(): string {
   return join(app.getPath('userData'), 'runtime')
 }
@@ -97,7 +103,7 @@ export async function startPipelineServer(): Promise<void> {
       runtimeDir: runtimeDir(),
       serverName: 'aide',
       serverVersion: app.getVersion(),
-      instructions: serverInstructions(),
+      instructions: () => serverInstructions(workInstruction()),
       tools: () => buildPipelineTools(() => ({
         aideVersion: app.getVersion(),
         launcherPath,
@@ -107,6 +113,7 @@ export async function startPipelineServer(): Promise<void> {
         plans: planService,
         planGuide,
         toolbarGuide,
+        workInstruction,
         cacheTtl: tabCacheTtl
       }))
     })

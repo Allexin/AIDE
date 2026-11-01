@@ -81,6 +81,55 @@ const inputStyle: React.CSSProperties = {
   outline: 'none'
 }
 
+/**
+ * AIDE's instruction to agents on when to use plans and pipelines on their own.
+ * AIDE's text is read-only and follows AIDE updates; the user's override
+ * replaces it until it is dropped, so an AIDE update is never hidden behind
+ * an edited copy.
+ */
+function WorkInstructionSection({ value, onChange }: {
+  value: { aide: string; override: string | null }
+  onChange: (override: string | null) => void
+}): React.ReactElement {
+  const overridden = value.override !== null
+  const textareaStyle: React.CSSProperties = { ...inputStyle, minHeight: 84, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.45 }
+  return (
+    <fieldset style={fieldsetStyle}>
+      <legend style={legendStyle}>Agent instruction: plans and pipelines</legend>
+      <p style={{ margin: '0 0 8px', fontSize: 11, color: '#777', lineHeight: 1.5 }}>
+        AIDE&apos;s MCP server gives this instruction to agents in CLI tabs. It says when an agent turns to
+        plans and pipelines on its own; the tools stay available either way. Applies to sessions started after saving.
+      </p>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+        <span style={{ color: '#999', fontSize: 12 }}>AIDE&apos;s instruction{overridden ? ' (not in use)' : ''}</span>
+        {!overridden && (
+          <button onClick={() => onChange(value.aide)} style={smallBtnStyle}>Override</button>
+        )}
+      </div>
+      <textarea readOnly value={value.aide} style={{ ...textareaStyle, color: overridden ? '#777' : '#ddd', background: '#252525' }} />
+      {overridden && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '10px 0 4px' }}>
+            <span style={{ color: '#999', fontSize: 12 }}>Your instruction (in use; empty gives agents none)</span>
+            <button onClick={() => onChange(null)} style={smallBtnStyle}>Use AIDE&apos;s instruction</button>
+          </div>
+          <textarea value={value.override ?? ''} onChange={(e) => onChange(e.target.value)} style={textareaStyle} />
+        </>
+      )}
+    </fieldset>
+  )
+}
+
+const smallBtnStyle: React.CSSProperties = {
+  padding: '3px 10px',
+  background: '#333',
+  border: '1px solid #555',
+  borderRadius: 3,
+  color: '#ccc',
+  fontSize: 12,
+  cursor: 'pointer'
+}
+
 function ToolSettingsSection({ entry, onChange }: {
   entry: ToolSettingsEntry
   onChange: (values: Record<string, unknown>) => void
@@ -152,11 +201,13 @@ export default function SettingsApp(): React.ReactElement {
   const [toolSettings, setToolSettings] = useState<ToolSettingsEntry[]>([])
   const [accountTools, setAccountTools] = useState<AccountToolEntry[]>([])
   const [accountIdentifiers, setAccountIdentifiers] = useState<Record<string, string | null>>({})
+  const [workInstruction, setWorkInstruction] = useState<{ aide: string; override: string | null }>({ aide: '', override: null })
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
     window.settingsApi.getReasoningConfig().then(setReasoning)
     window.settingsApi.getPrivacyConfig().then(setPrivacy)
+    window.settingsApi.getWorkInstruction().then(setWorkInstruction)
     window.settingsApi.getUpdatesConfig().then(setUpdates)
     window.settingsApi.getSessionsConfig().then(setSessions)
     window.settingsApi.getRemoteConfig().then((cfg) => {
@@ -184,6 +235,7 @@ export default function SettingsApp(): React.ReactElement {
     const saves: Promise<void>[] = [
       window.settingsApi.saveReasoningConfig(reasoning),
       window.settingsApi.savePrivacyConfig(privacy),
+      window.settingsApi.saveWorkInstruction(workInstruction.override),
       window.settingsApi.saveUpdatesConfig(updates),
       window.settingsApi.saveSessionsConfig(sessions),
       window.settingsApi.saveRemoteConfig(remote)
@@ -317,6 +369,10 @@ export default function SettingsApp(): React.ReactElement {
         {/* CLI Settings tab */}
         {activeTab === 'cli' && (
           <>
+            <WorkInstructionSection
+              value={workInstruction}
+              onChange={(override) => setWorkInstruction({ ...workInstruction, override })}
+            />
             {toolSettings.length === 0 && (
               <p style={{ color: '#777', fontSize: 12 }}>No CLI tool settings available.</p>
             )}
