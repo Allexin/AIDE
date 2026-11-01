@@ -3,6 +3,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { getToolById } from '../pty/cliTools/registry'
 import { runShellCommand } from './processRunner'
+import { commandRefs } from './engine/expressions'
 import { startHeadless } from './headless'
 import type { PipelineManager } from './manager'
 import { walkSteps, type Step } from '../../shared/pipelineMachine'
@@ -54,6 +55,8 @@ export async function smokeTestMachine(manager: PipelineManager, projectPath: st
   for (const step of steps) {
     if (step.type !== 'check') continue
     const id = step.id
+    // Params and outputs exist only in a run; running the template text would fail for the wrong reason.
+    if (commandRefs(step.command).length) { lines.push(`– check "${id}" (${step.command}) skipped: it takes run values (params/outputs), test it in a run`); continue }
     let output = ''
     const exit = await runShellCommand({ commandLine: step.command, cwd: projectPath, timeoutMs: CHECK_TIMEOUT_MS, label: `smoke:${id}`, onStdoutLine: (l) => { output += l + '\n' }, onStderr: (t) => { output += t } }).done
     const tail = output.trim().split('\n').slice(-5).join('\n')

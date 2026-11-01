@@ -43,7 +43,7 @@ names the step's output: `outputs.<id>`.
 | Step | What AIDE does |
 |---|---|
 | `agent` | Runs a headless CLI with the role, the pipeline context, the inputs and an output schema; the JSON answer becomes `outputs.<id>` (agent failures stop the run for a decision) |
-| `check` | Runs `command` in the project root; exit code 0 passes. Output in `outputs.<id>.output`. The command may use `{{params.x}}` and `{{outputs.step.field}}` (§2, Check commands) |
+| `check` | Runs `command` in the project root; exit code 0 passes. Output in `outputs.<id>.output`. The command may use `{{params.x}}` and `{{outputs.step.field}}` as quoted arguments, and `{{raw params.x}}` for a param that is itself a command (§2, Check commands) |
 | `gate` | Asks the user or the managing agent to approve |
 | `repeat` | Starts an enclosing loop over (like `continue`); usually inside an `if` |
 | `commit` | Block: its `prep` agent stages the change and writes the message, AIDE reviews the prepared commit and commits it |
@@ -89,12 +89,47 @@ around the condition — for an `if`, the loop that contains the `if`),
 
 ### Check commands
 
-A check command can take values of the run: `"cargo xtask captures --stage
-{{params.stageId}}"`. Only `params.*` and `outputs.*` refs are allowed. AIDE
-quotes each value for the shell (`cmd.exe` on Windows, `sh` elsewhere); a list
-param becomes several arguments. On Windows a value containing `"`, `%` or a
-line break is refused (cmd.exe cannot pass it safely) and the step stops for a
-decision.
+A check command can take values of the run. There are two forms:
+
+| Form | Inserted as | Allowed on | Use for |
+|---|---|---|---|
+| `{{ref}}` | one quoted argument (a list → several arguments) | `params.*`, `outputs.*` | a value passed **to** a command: a stage id, a path, a case name |
+| `{{raw ref}}` | shell text, unquoted (a list → joined with spaces) | `params.*` only | a param that **is** a command or a part of one |
+
+**Argument** — the command is fixed, the value is data:
+
+```json
+{ "type": "check", "id": "captures", "command": "cargo xtask captures --stage {{params.stageId}} --cases {{params.cases}}" }
+```
+
+With `cases` = `["ui/build menu", "rig"]` this runs
+`cargo xtask captures --stage S5.5 --cases "ui/build menu" rig`. AIDE quotes
+for the shell (`cmd.exe` on Windows, `sh` elsewhere). On Windows a quoted value
+containing `"`, `%` or a line break is refused (cmd.exe cannot pass it safely)
+and the step stops for a decision.
+
+**Command** — the machine is reused with different checks, so the command
+itself comes from a param:
+
+```json
+"params": { "check": { "type": "string", "description": "Check command, e.g. npm run test" } },
+"steps": [ { "type": "check", "id": "verify", "command": "{{raw params.check}}" } ]
+```
+
+Do **not** write `"command": "{{params.check}}"` for this: the whole value is
+quoted as one word, and the shell looks for a program literally named
+`npm run test`. Pass several commands in one param with `&&`
+(`npm run typecheck && npm test`); on Windows a raw value with a line break is
+refused (cmd.exe runs one line). Inside a raw value you write the shell's own
+quoting yourself.
+
+Raw insertion is refused for `outputs.*`: agent output is untrusted text, and
+inserted unquoted it would be executed by the shell. Pass outputs as `{{ref}}`
+arguments. `run.*` values cannot be used in commands at all.
+
+A check command that is long or differs per task kind is better kept in a
+script in the project (`scripts/check.py <kind>`), with the machine passing
+only the kind as an argument.
 
 A failed check feeds back the exit code, the path of its full log, the lines of
 the whole log that look like failures (failing tests, panics, compiler errors)

@@ -68,4 +68,13 @@ describe('command templates', () => {
     expect(() => shellQuote('50%', 'win32')).toThrow(/cmd.exe/)
     expect(() => shellQuote('say "hi"', 'win32')).toThrow(/cmd.exe/)
   })
+
+  it('inserts raw params unquoted', () => {
+    const raw = { params: { check: 'npm run test -- --grep "a b"', parts: ['tsc', '--noEmit'], multi: 'a\nb', none: null }, outputs: {}, run: {} }
+    expect(renderCommand('{{raw params.check}}', raw, 'win32')).toBe('npm run test -- --grep "a b"')
+    expect(renderCommand('{{ raw params.parts }} && x', raw, 'linux')).toBe('tsc --noEmit && x')
+    expect(renderCommand('x{{raw params.none}}', raw, 'win32')).toBe('x')
+    expect(renderCommand('{{raw params.multi}}', raw, 'linux')).toBe('a\nb')
+    expect(() => renderCommand('{{raw params.multi}}', raw, 'win32')).toThrow(/line break/)
+  })
 })

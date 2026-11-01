@@ -96,7 +96,7 @@ export const MACHINE_FILE_SCHEMA = {
           required: ['type', 'id', 'command'],
           properties: {
             type: { const: 'check' }, id: ID, summary: { type: 'string' },
-            command: { type: 'string', description: 'Shell command run in the project root; success = exit code 0. May use {{params.x}} and {{outputs.step.field}}; values are shell-quoted, a list becomes several arguments. Inside a loop a failure repeats the loop with the output as feedback; outside any loop it stops the run for a decision.' },
+            command: { type: 'string', description: 'Shell command run in the project root; success = exit code 0. May use {{params.x}} and {{outputs.step.field}}: each is one shell-quoted argument, a list becomes several arguments. A param that holds a whole command (e.g. "npm run test") goes in as {{raw params.x}}: inserted unquoted, allowed only for params.*. Inside a loop a failure repeats the loop with the output as feedback; outside any loop it stops the run for a decision.' },
             timeoutMin: { type: 'number' },
             repeatLoop: { type: 'string', description: 'Enclosing loop a failure repeats; default the innermost.' }
           }

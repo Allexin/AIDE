@@ -1,5 +1,5 @@
 import { STEP_TYPES, walkSteps, type AgentStep, type MachineDefinition, type Step } from '../../../shared/pipelineMachine'
-import { parseCondition, templateRefs } from './expressions'
+import { commandRefs, parseCondition, templateRefs } from './expressions'
 import { FILE_REFS } from './inputs'
 import { resolveSchema, strictSchemaProblems } from './schema'
 import { MachineTree, type TreeNode } from './tree'
@@ -127,9 +127,11 @@ export function validateMachine(machine: MachineDefinition, env: ValidationEnvir
         break
       case 'check':
         if (typeof step.command !== 'string' || !step.command.trim()) err(`${label}: "command" is required.`)
-        else for (const ref of templateRefs(step.command)) {
+        else for (const { ref, raw } of commandRefs(step.command)) {
           // run.* values (diffs, file lists) are not command arguments.
           if (!/^(params|outputs)\./.test(ref)) err(`${label} command: "{{${ref}}}" — commands can only use params.* and outputs.* values.`)
+          // Agent outputs are untrusted text: never insert them into the shell unquoted.
+          else if (raw && !ref.startsWith('params.')) err(`${label} command: "{{raw ${ref}}}" — raw (unquoted) insertion is allowed only for params.*; use {{${ref}}} to pass an output as a quoted argument.`)
           else validateRef(ref, machine, tree, node, `${label} command`, err, warnings)
         }
         checkRepeat(undefined, step.repeatLoop)

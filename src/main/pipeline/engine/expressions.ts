@@ -80,14 +80,34 @@ export function shellQuote(value: string, platform: NodeJS.Platform = process.pl
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-/** A check command with `{{ref}}` replaced by shell-quoted values; a list becomes several arguments. */
+const COMMAND_REF = /\{\{\s*(raw\s+)?([A-Za-z_][\w.]*)\s*\}\}/g
+
+/**
+ * A check command with its refs replaced. `{{ref}}` is one shell-quoted
+ * argument (a list becomes several arguments). `{{raw ref}}` is inserted as
+ * shell text without quoting, for a param that holds a command or a part of
+ * one (`{{raw params.check}}` with `npm run test`); the validator allows it
+ * only on `params.*`.
+ */
 export function renderCommand(command: string, scope: Scope, platform: NodeJS.Platform = process.platform): string {
-  return command.replace(/\{\{\s*([A-Za-z_][\w.]*)\s*\}\}/g, (_, ref: string) => {
+  return command.replace(COMMAND_REF, (_, raw: string | undefined, ref: string) => {
     const value = resolveRef(ref, scope)
+    if (raw) {
+      if (value === undefined || value === null) return ''
+      if (typeof value === 'object' && !Array.isArray(value)) throw new Error(`{{raw ${ref}}} must be a string, number, boolean or list of them, not an object`)
+      const text = (Array.isArray(value) ? value : [value]).map((item) => typeof item === 'string' ? item : JSON.stringify(item)).join(' ')
+      if (platform === 'win32' && /[\r\n]/.test(text)) throw new Error(`{{raw ${ref}}} contains a line break; cmd.exe runs one line, join commands with &&`)
+      return text
+    }
     if (value === undefined || value === null) return '""'
     const items = Array.isArray(value) ? value : [value]
     return items.map((item) => shellQuote(typeof item === 'string' ? item : JSON.stringify(item), platform)).join(' ')
   })
+}
+
+/** Refs used by a check command, with whether each is `{{raw …}}`, for validation. */
+export function commandRefs(command: string): Array<{ ref: string; raw: boolean }> {
+  return Array.from(command.matchAll(COMMAND_REF), (match) => ({ ref: match[2], raw: Boolean(match[1]) }))
 }
 
 /** References used by a template, for validation. */

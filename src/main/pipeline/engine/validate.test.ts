@@ -60,6 +60,16 @@ describe('validateMachine', () => {
     expect(text).not.toMatch(/stage|outputs\.a/)
   })
 
+  it('allows raw command refs on params only', () => {
+    const text = errorsOf(machine([
+      agent('a'),
+      { type: 'check', id: 'c', command: '{{raw params.check}} && {{raw outputs.a.status}} {{raw params.nope}}' }
+    ], { params: { check: { type: 'string' } } }))
+    expect(text).toMatch(/"\{\{raw outputs\.a\.status\}\}" — raw \(unquoted\) insertion is allowed only for params/)
+    expect(text).toMatch(/unknown param "nope"/)
+    expect(text).not.toMatch(/params\.check/)
+  })
+
   it('accepts run.iterations.<loop> and rejects other ids', () => {
     const steps: Step[] = [{ type: 'loop', id: 'l', maxIterations: 2, steps: [agent('a', { repeatIf: 'run.iterations.l == 1' }), agent('b', { escalateIf: 'run.iterations.a == 1' })] }]
     expect(errorsOf(machine(steps))).toMatch(/run\.iterations\.a.*use run\.iterations\.<loop id>/)
