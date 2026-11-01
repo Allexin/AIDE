@@ -24,7 +24,8 @@ instructions are recorded as by `strategist`, `orchestrator` or `user`.
 
 ## The plan file
 
-`aide/plans/<id>.json`, committed. AIDE writes it, through MCP tools and the plan tab; nobody
+`aide/plans/<id>.json`. Whether it is committed is the project's choice: AIDE never stages it,
+since many repositories forbid files of tools. AIDE writes it, through MCP tools and the plan tab; nobody
 maintains its formatting by hand. A hand edit is picked up at the next read; an invalid file is
 shown as an error and AIDE refuses to write to it until it is fixed.
 
@@ -113,8 +114,9 @@ changed tasks, not the whole plan.
 `pipeline_start` takes an optional `planTask: {plan, task}`. For a run linked this way:
 
 - The last commit step of the machine marks the task `done` and adds the run's non-blocking
-  findings to `followups` inside the task's commit, with a `Plan-Task: <plan>/<task>` trailer. The
-  commit prep agent does no plan bookkeeping.
+  findings to `followups` in the working tree, and gives the task's commit a
+  `Plan-Task: <plan>/<task>` trailer. The plan file is not staged; the commit prep agent does no
+  plan bookkeeping.
 - If the run ends with success without such a commit, the task is marked `done` in the working
   tree.
 

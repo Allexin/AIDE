@@ -19,7 +19,7 @@ import { AccountPool, poolHandles } from './accountPool'
 import { EventRelay } from './eventRelay'
 import { failedRun } from './headless/common'
 import { killAllProcessTreesSync, runShellCommand } from './processRunner'
-import { commitIndex, commitsSince, headSha, stagedDiff, stagePaths, status, workingDiff } from './git'
+import { commitIndex, commitsSince, headSha, stagedDiff, status, workingDiff } from './git'
 import { PlanService } from './plan/planService'
 import { tabCacheTtl } from './promptCache'
 import { smokeTestMachine } from './smoke'
@@ -63,7 +63,6 @@ export const pipelineView = new PipelineViewService(pipelineManager)
 /** Plans of the open projects; the MCP tools, the plan tab and the remote page work through this. */
 export const planService = new PlanService(pipelineManager, {
   userDir: (projectPath) => getProjectUserPath(projectPath, 'plans'),
-  stage: stagePaths,
   headSha,
   commitsSince
 })

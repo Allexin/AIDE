@@ -139,6 +139,7 @@ task done, with a `Plan-Task` trailer. Work done without a run: `plan_edit` with
 ## What not to do
 
 - Do not edit `aide/plans/*.json` directly, and do not have step agents touch it:
-  AIDE marks tasks done and records findings inside the task's commit.
+  AIDE marks tasks done and records findings itself. AIDE never stages the plan
+  file; whether it is committed is the project's choice.
 - Do not check on a run because time passed. AIDE tells you when something needs
   you.

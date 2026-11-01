@@ -50,7 +50,6 @@ interface Fixture {
   plans: PlanService
   server: McpServer
   committed: string[]
-  staged: string[]
   orchestratorPrompts: AgentRequest[]
   stepInstructions: () => string[]
   decide: (request: AgentRequest) => Partial<HeadlessResult>
@@ -72,7 +71,6 @@ function fixture(): Fixture {
   const fx: Fixture = {
     dir,
     committed: [],
-    staged: [],
     orchestratorPrompts: [],
     stepInstructions: () => [],
     decide: () => next(),
@@ -119,7 +117,6 @@ function fixture(): Fixture {
   fx.manager = new PipelineManager(env)
   fx.plans = new PlanService(fx.manager, {
     userDir: (p) => join(p, '.aide', 'plans'),
-    stage: async (_p, paths) => { fx.staged.push(...paths) },
     headSha: async () => `head${fx.committed.length}`,
     commitsSince: async () => []
   })
@@ -203,10 +200,9 @@ describe('autopilot', () => {
     expect(fx.orchestratorPrompts[0].prompt).toContain('No step has run yet')
     expect(fx.orchestratorPrompts[1].prompt).toContain('did it')
 
-    // Statuses go in with the work, marked by AIDE.
+    // Statuses are marked by AIDE in the working tree; AIDE never stages the plan file.
     expect(fx.file().tasks.map((t) => t.status)).toEqual(['done', 'done'])
     expect(fx.file().state).toBe('done')
-    expect(fx.staged).toContain('aide/plans/p.json')
     expect(fx.committed[0]).toContain('Plan-Task: p/one')
     // In the message's trailer block, not a paragraph of its own.
     expect(fx.committed[0]).toContain('Co-Authored-By: X <x@y>\nPlan-Task: p/one')
@@ -392,7 +388,6 @@ describe('runs outside the plan', () => {
     expect(fx.committed[0]).not.toContain('Plan-Task')
     // Its end does reach the Strategist, as it always did.
     expect(pipelineEvents.since(fx.dir, runId, 0).find((e) => e.type === 'run_finished')?.data.quiet).toBeUndefined()
-    expect(fx.staged).toEqual([])
   })
 
   it('a run with planTask marks the task done without the autopilot, and the Strategist gets its end', async () => {

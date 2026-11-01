@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { commitIndex, commitsSince, git, headSha, stagedDiff, stagePaths, status, workingDiff } from '../git'
+import { commitIndex, commitsSince, git, headSha, stagedDiff, status, workingDiff } from '../git'
 import { withPlanTrailer } from '../engine/runner'
 
 /** Plan files on a real repository: not part of a run's work, and they go in with the task's commit. */
@@ -43,9 +43,8 @@ describe('plan files in git', () => {
     write('src.txt', 'two\n')
   })
 
-  it('a staged plan file goes into the commit but not into what a commit reviewer reads', async () => {
-    await git(repo, ['add', 'src.txt'])
-    await stagePaths(repo, ['aide/plans/p.json'])
+  it('a plan file the project stages goes into the commit but not into what a commit reviewer reads', async () => {
+    await git(repo, ['add', 'src.txt', 'aide/plans/p.json'])
     expect(await stagedDiff(repo)).not.toContain('aide/plans')
     const before = (await headSha(repo))!
     const commit = await commitIndex(repo, withPlanTrailer('Do it\n\nBody.', { plan: 'p', task: 'one' }))

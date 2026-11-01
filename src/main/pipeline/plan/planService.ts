@@ -10,7 +10,7 @@ import { validateAgainstSchema } from '../engine/schema'
 import { clip, pipelineEvents } from '../events'
 import type { PipelineManager } from '../manager'
 import { applyOps, markDone, newPlan, nextTask, planDetail, type PlanOp } from './planFile'
-import { PlanStore, planRelativePath } from './planStore'
+import { PlanStore } from './planStore'
 
 /**
  * Plans of the open projects: editing, the active plan, and the autopilot that
@@ -28,7 +28,6 @@ import { PlanStore, planRelativePath } from './planStore'
 export interface PlanEnvironment {
   /** Per-user directory for the plans of this project. */
   userDir(projectPath: string): string
-  stage(projectPath: string, paths: string[]): Promise<void>
   headSha(projectPath: string): Promise<string | null>
   commitsSince(projectPath: string, since: string): Promise<string[]>
 }
@@ -306,11 +305,15 @@ export class PlanService extends EventEmitter {
     if (!plan.tasks.some((t) => t.id === link.task)) throw new Error(`Plan "${link.plan}" has no task "${link.task}".`)
   }
 
+  /**
+   * Marks the task done in the working tree before the task's commit. AIDE never
+   * stages the plan file: which files a commit holds is the project's choice, and
+   * many repositories forbid files of tools.
+   */
   private async planCommit(projectPath: string, link: PlanTaskLink, findings: string[]): Promise<() => void> {
     const store = this.store(projectPath)
     const before = store.read(link.plan)
     store.write(markDone(before, link.task, findings))
-    await this.env.stage(projectPath, [planRelativePath(link.plan)])
     this.emit('changed', projectPath)
     return () => { store.write(before); this.emit('changed', projectPath) }
   }

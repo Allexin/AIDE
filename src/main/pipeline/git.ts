@@ -6,7 +6,7 @@ import { PLANS_DIR, isPlanPath } from './plan/planStore'
 
 /**
  * Git operations the pipeline engine needs (plan §5.7, §3.3). Read-only except
- * `commitIndex` and `stagePaths`. Every call has a timeout so a hung git never
+ * `commitIndex`. Every call has a timeout so a hung git never
  * stalls a run.
  */
 
@@ -171,11 +171,6 @@ async function untrackedDiff(cwd: string, path: string): Promise<string> {
 
 export async function stagedDiff(cwd: string): Promise<string> {
   return gitOk(cwd, ['diff', '--cached', '--no-color', ...NOT_PLANS])
-}
-
-/** Add these project-relative paths to the index. */
-export async function stagePaths(cwd: string, paths: string[]): Promise<void> {
-  await gitOk(cwd, ['add', '--', ...paths])
 }
 
 /** Commits after `since` (exclusive) as "<short sha> <subject>", newest first; empty when `since` is unknown. */

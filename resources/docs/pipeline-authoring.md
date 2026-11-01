@@ -281,7 +281,7 @@ the prep agent as feedback, up to `maxAttempts` (default 3) attempts; then
 `onLimit` applies as for loops.
 
 **Plan bookkeeping.** A run linked to a task of an AIDE plan (`planTask`) needs none:
-AIDE marks the task done and records the findings in the task's commit; do not have
+AIDE marks the task done and records the findings in the plan file (it never stages it); do not have
 agents touch `aide/plans/`. For a plan kept in the project's own documents, let the
 prep agent do it. If the project keeps a plan with
 task statuses and a list of follow-ups, give the prep agent the reviewers'

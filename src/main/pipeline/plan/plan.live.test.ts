@@ -4,7 +4,7 @@ import { join } from 'path'
 import { PipelineManager } from '../manager'
 import { claudeHeadless } from '../headless/claudeHeadless'
 import { runShellCommand } from '../processRunner'
-import { commitIndex, commitsSince, git, headSha, stagedDiff, stagePaths, status, workingDiff } from '../git'
+import { commitIndex, commitsSince, git, headSha, stagedDiff, status, workingDiff } from '../git'
 import { getSessionsDir } from '../../pty/cliTools/claudeCodeScanner'
 import { createTinyWorkspace, TINY_FEATURE, type TinyWorkspace } from '../testing/tinyFeature'
 import { pipelineEvents } from '../events'
@@ -35,7 +35,7 @@ describe.skipIf(!live)('plan autopilot end to end (live)', () => {
         git: { workingDiff, stagedDiff, status, headSha, commitIndex }
       })
     })
-    const plans = new PlanService(manager, { userDir: () => join(ws.root, 'plans-user'), stage: stagePaths, headSha, commitsSince })
+    const plans = new PlanService(manager, { userDir: () => join(ws.root, 'plans-user'), headSha, commitsSince })
     plans.create(ws.repo, {
       id: 'greet',
       title: 'Greeting',
@@ -67,11 +67,11 @@ describe.skipIf(!live)('plan autopilot end to end (live)', () => {
     expect(readFileSync(join(ws.repo, 'greeting.txt'), 'utf8').trim()).toBe('hello pipeline')
     expect(readFileSync(join(ws.repo, 'note.txt'), 'utf8')).toContain('greeting added')
 
-    // Each task is one commit, carrying its trailer and its own status change.
+    // Each task is one commit with its trailer; AIDE never commits the plan file itself.
     const log = await git(ws.repo, ['log', '--format=%(trailers:key=Plan-Task,valueonly)', '-n', '2'])
     expect(log.stdout.split('\n').map((l) => l.trim()).filter(Boolean)).toEqual(['greet/note', 'greet/greeting'])
-    const inFirst = await git(ws.repo, ['show', 'HEAD~1:aide/plans/greet.json'])
-    expect((JSON.parse(inFirst.stdout) as PlanFile).tasks.map((t) => t.status)).toEqual(['done', 'pending'])
+    const files = await git(ws.repo, ['log', '--name-only', '--format=', '-n', '2'])
+    expect(files.stdout).not.toContain('aide/plans/')
 
     // The Strategist heard only the end, and every Orchestrator call kept its transcript and answer.
     expect(pipelineEvents.since(ws.repo, null, 0).filter((e) => e.type === 'plan_attention').map((e) => e.data.kind)).toEqual(['finished'])

@@ -859,7 +859,7 @@ export class PipelineRun {
       if (verdict.verdict !== 'accept') return { kind: 'done', outcome: 'fail', output: { issues: verdict.issues }, costUsd: result.costUsd }
     }
 
-    // The last commit of a run on a plan task carries the task's status with the work.
+    // The last commit of a run on a plan task marks the task done (in the working tree) and carries the Plan-Task trailer.
     const link = this.state.planTask
     const undo = link && this.isLastCommit(id) ? await this.deps.planCommit?.(link, this.nonBlockingFindings()) : undefined
     let commit: CommitResult

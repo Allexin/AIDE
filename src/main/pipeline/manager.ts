@@ -67,7 +67,7 @@ export interface PlanHooks {
   checkLink(projectPath: string, link: PlanTaskLink): void
   /** A run is about to start that the autopilot did not start. */
   onOutsideStart(projectPath: string): void
-  /** Mark the task done and stage the plan file; returns how to take it back. */
+  /** Mark the task done in the working tree (never staged); returns how to take it back. */
   planCommit(projectPath: string, link: PlanTaskLink, findings: string[]): Promise<() => void>
   /**
    * An escalation of a run is being announced. True when the plan's Orchestrator
