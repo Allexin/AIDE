@@ -1,22 +1,26 @@
 import { getToolConfig } from '../config/appConfig'
+import { logEvent } from '../diagnostics'
 import { cliLog } from '../pty/cliTools/cliLogger'
 import { ptyRegistry } from '../pty/registry'
 import { tabActivity } from '../pty/tabActivity'
 import type { SettingsField } from '../pty/cliTools/types'
 import type { PtyManager } from '../pty/ptyManager'
-import { clip, isSignificant, pipelineEvents } from './events'
+import { clip, isSignificant, pipelineEvents, type EventDelivery } from './events'
 import { orchestrators } from './orchestrators'
 import type { PipelineManager } from './manager'
 
 /**
  * Pipeline events as messages for an orchestrator that is not waiting for them.
  * Some models forget `pipeline_wait` and then never learn that the run needs
- * them. When an event that needs the orchestrator is emitted and no orchestrator
- * is waiting (no wait call or event stream is open), AIDE types it into the tab
- * that last called the pipeline server — once that tab's CLI is idle. If an
- * orchestrator asks for events before then, it gets them itself and nothing is
- * typed. A per-CLI setting, on by default: an orchestrator that waits never
+ * them. When an event that needs the orchestrator is emitted and no live wait or
+ * event stream took it (none is open, or those open cover other runs), AIDE types
+ * it into the tab that last called the pipeline server — once that tab's CLI is
+ * idle. If an asker receives such an event from the backlog before then, it is
+ * not typed. A per-CLI setting, on by default: an orchestrator that waits never
  * reaches the idle-and-not-waiting state.
+ *
+ * Every significant event leaves a trail in the diagnostics (`pipeline-event-delivery`,
+ * see docs/crash-diagnostics.md): how it was delivered, or why it was not.
  */
 
 export const EVENT_MESSAGES_KEY = 'pipelineEventMessages'
@@ -69,11 +73,25 @@ export function eventMessage(events: RelayedEvent[]): string {
     (runEnded || planEvent ? '' : ` Then keep waiting: call pipeline_wait for run ${last.runId} with since=${last.id}.`)
 }
 
+/** How a significant event ended up, recorded in the `pipeline-event-delivery` trail. */
+export type DeliveryOutcome = 'handed-to-waiter' | 'queued' | 'typed' | 'no-tab' | 'setting-off' | 'submit-failed'
+
+/** An event waiting for its tab to become idle, with who was there when it was emitted. */
+type QueuedEvent = RelayedEvent & { delivery: EventDelivery }
+
 interface Pending {
   projectPath: string
-  events: RelayedEvent[]
-  /** Observer activity of the project when the first event was queued; a change means an orchestrator asked for events. */
-  observerMark: number
+  events: QueuedEvent[]
+}
+
+const NOBODY: EventDelivery = { covering: 0, other: 0, handedTo: 0 }
+
+function recordDelivery(projectPath: string, event: RelayedEvent, delivery: EventDelivery, outcome: DeliveryOutcome, extra: Record<string, unknown> = {}): void {
+  const failed = outcome === 'no-tab' || outcome === 'submit-failed'
+  logEvent('pipeline-event-delivery', {
+    id: event.id, type: event.type, runId: event.runId, projectPath,
+    covering: delivery.covering, other: delivery.other, outcome, ...extra
+  }, failed ? 'warn' : 'info')
 }
 
 export class EventRelay {
@@ -85,15 +103,23 @@ export class EventRelay {
   ) {}
 
   attach(): () => void {
-    const onEvent = (projectPath: string, runId: string, type: string, data: Record<string, unknown>, id: number, observed: boolean): void => {
-      if (!isSignificant({ type, data }) || observed) return
-      this.queue(projectPath, { id, runId, type, data })
+    const onEvent = (projectPath: string, runId: string, type: string, data: Record<string, unknown>, id: number, delivery: EventDelivery): void => {
+      if (!isSignificant({ type, data })) return
+      const event: RelayedEvent = { id, runId, type, data }
+      if (delivery.handedTo > 0) recordDelivery(projectPath, event, delivery, 'handed-to-waiter')
+      else this.queue(projectPath, event, delivery)
+    }
+    const onUndelivered = (projectPath: string, event: RelayedEvent): void => {
+      // Still needs the Strategist: the waiter that took it is gone before reading it.
+      if (isSignificant(event)) this.queue(projectPath, event, NOBODY, { reason: 'response-not-written' })
     }
     const onIdle = (tabId: string): void => { void this.flush(tabId) }
     this.manager.on('event', onEvent)
+    const stopUndelivered = pipelineEvents.onUndelivered(onUndelivered)
     tabActivity.on('idle', onIdle)
     return () => {
       this.manager.off('event', onEvent)
+      stopUndelivered()
       tabActivity.off('idle', onIdle)
     }
   }
@@ -103,13 +129,17 @@ export class EventRelay {
     return null
   }
 
-  private queue(projectPath: string, event: RelayedEvent): void {
+  private queue(projectPath: string, event: RelayedEvent, delivery: EventDelivery, extra: Record<string, unknown> = {}): void {
     const tabId = orchestrators.lastTab(projectPath)
     const mgr = tabId ? this.managerOf(tabId) : null
     const tool = mgr?.getTabs().find((tab) => tab.tabId === tabId)?.toolId
-    if (!tabId || !tool || !this.enabled(tool)) return
-    const entry = this.pending.get(tabId) ?? { projectPath, events: [], observerMark: pipelineEvents.observerActivity(projectPath) }
-    entry.events.push(event)
+    if (!tabId || !tool) { recordDelivery(projectPath, event, delivery, 'no-tab', { tabId, ...extra }); return }
+    if (!this.enabled(tool)) { recordDelivery(projectPath, event, delivery, 'setting-off', { tabId, tool, ...extra }); return }
+    const entry = this.pending.get(tabId) ?? { projectPath, events: [] }
+    if (!entry.events.some((queued) => queued.id === event.id)) {
+      entry.events.push({ ...event, delivery })
+      recordDelivery(projectPath, event, delivery, 'queued', { tabId, ...extra })
+    }
     this.pending.set(tabId, entry)
     void this.flush(tabId)
   }
@@ -117,16 +147,29 @@ export class EventRelay {
   private async flush(tabId: string): Promise<void> {
     const entry = this.pending.get(tabId)
     if (!entry) return
-    if (pipelineEvents.observerActivity(entry.projectPath) !== entry.observerMark) {
-      this.pending.delete(tabId) // an orchestrator asked for events since: it gets these itself
+    entry.events = entry.events.filter((event) => {
+      if (!pipelineEvents.wasHandedOut(entry.projectPath, event.id)) return true
+      recordDelivery(entry.projectPath, event, event.delivery, 'handed-to-waiter', { via: 'backlog' })
+      return false
+    })
+    if (entry.events.length === 0) {
+      this.pending.delete(tabId)
       return
     }
     if (!tabActivity.isIdle(tabId)) return
     this.pending.delete(tabId)
-    const mgr = this.managerOf(tabId)
-    if (!mgr) return
-    if (await mgr.submitWhenReady(tabId, eventMessage(entry.events))) {
-      cliLog('Pipeline', `Sent ${entry.events.length} pipeline event(s) as a message to tab ${tabId}: the orchestrator was not waiting.`)
+    const record = (outcome: DeliveryOutcome): void => {
+      for (const event of entry.events) recordDelivery(entry.projectPath, event, event.delivery, outcome, { tabId })
     }
+    const mgr = this.managerOf(tabId)
+    if (!mgr) { record('no-tab'); return }
+    let sent = false
+    try {
+      sent = await mgr.submitWhenReady(tabId, eventMessage(entry.events))
+    } catch (err) {
+      logEvent('pipeline-event-submit-failed', { tabId, message: err instanceof Error ? err.message : String(err) }, 'warn')
+    }
+    record(sent ? 'typed' : 'submit-failed')
+    if (sent) cliLog('Pipeline', `Sent ${entry.events.length} pipeline event(s) as a message to tab ${tabId}: no wait received them.`)
   }
 }

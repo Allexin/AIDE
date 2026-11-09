@@ -21,8 +21,8 @@ import { GitConfigError, describeGitSetup, resolveCommitRepos, rootSetup, type G
  * Emits:
  *   'state'      (projectPath, snapshot)                 on every run state change
  *   'transcript' (projectPath, runId, node, visit, entry) streamed agent transcript entries
- *   'event'      (projectPath, runId, type, data, id, observed)  pipeline events (id: the event id in the feed;
- *                observed: an orchestrator was waiting for events when it was emitted)
+ *   'event'      (projectPath, runId, type, data, id, delivery)  pipeline events (id: the event id in the feed;
+ *                delivery: which live waits covered the event and how many took it)
  */
 
 export interface ManagerEnvironment {
@@ -185,10 +185,9 @@ export class PipelineManager extends EventEmitter {
         const claimed = !!escalation && rawData.forwarded !== true && !!this.planHooks?.claimEscalation(projectPath, run!.state, escalation)
         const { forwarded: _forwarded, ...plain } = rawData
         const data = auto || claimed ? { ...plain, quiet: true } : plain
-        const observed = pipelineEvents.hasObserver(projectPath)
-        const event = pipelineEvents.emit(projectPath, runId, type, data)
+        const { event, delivery } = pipelineEvents.publish(projectPath, runId, type, data)
         try { store.appendEvent(runId, event as unknown as Record<string, unknown>) } catch { /* run dir removed */ }
-        this.emit('event', projectPath, runId, type, data, event.id, observed)
+        this.emit('event', projectPath, runId, type, data, event.id, delivery)
       },
       planCommit: (link, findings) => this.planHooks?.planCommit(projectPath, link, findings) ?? Promise.resolve(() => {}),
       onStateChange: (state: RunState) => {

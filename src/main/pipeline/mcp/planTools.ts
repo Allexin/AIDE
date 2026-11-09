@@ -1,4 +1,4 @@
-import type { ToolDefinition, ToolResult } from './protocol'
+import type { ToolContext, ToolDefinition, ToolResult } from './protocol'
 import type { PlanService } from '../plan/planService'
 import type { PlanOp } from '../plan/planFile'
 
@@ -12,7 +12,7 @@ export interface PlanToolEnvironment {
   plans?: PlanService
   guide?: () => string
   /** Block until the project's next event after `since`; the text of the result. */
-  waitAfter(projectPath: string, tabId: string | null, since: number, seconds: unknown): Promise<string>
+  waitAfter(context: ToolContext, since: number, seconds: unknown): Promise<string>
   /** The id of the project's last event, to wait from. */
   lastEvent(projectPath: string): number
 }
@@ -168,11 +168,12 @@ export function buildPlanTools(env: () => PlanToolEnvironment): ToolDefinition[]
       name: 'plan_run',
       description: 'Start or continue the autopilot of the active plan: after each task a new Orchestrator session checks the result and starts the next task, or wakes you. Your note reaches the Orchestrator, so when it woke you and you changed nothing, say why it can go on. A decision made in shadow mode is carried out, unless the plan changed since or redecide is true. With wait, then blocks like pipeline_wait.',
       inputSchema: OBJECT({ planId: PLAN_ID, note: { type: 'string', description: 'For the Orchestrator: your answer to what it woke you for.' }, redecide: { type: 'boolean' }, wait: { type: 'number', description: 'Then block up to this many seconds for the next event that needs you.' } }),
-      handler: guarded(async (args, { projectPath, tabId }) => {
+      handler: guarded(async (args, context) => {
+        const { projectPath } = context
         // Taken before the plan moves, so an event that comes right away is not missed.
         const since = env().lastEvent(projectPath)
         await plans().run(projectPath, { planId: optional(args.planId), note: optional(args.note), redecide: args.redecide === true })
-        if (args.wait !== undefined) return ok(`Plan continues.\n${await env().waitAfter(projectPath, tabId, since, args.wait)}`)
+        if (args.wait !== undefined) return ok(`Plan continues.\n${await env().waitAfter(context, since, args.wait)}`)
         return ok(`Plan continues. Wait with pipeline_wait (no runId) since=${since}.`)
       })
     },

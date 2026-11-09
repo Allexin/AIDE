@@ -118,6 +118,8 @@ Recorded by `src/main/diagnostics/index.ts`:
 | `index-rebuild-start` / `done` / `failed` | File-index rebuilds; `discarded: true` means the result was thrown away |
 | `project-opening` | A project is being opened, from any entry point |
 | `power-suspend` / `resume` / `shutdown` | Sleep and shutdown, which mimic crashes |
+| `pipeline-event-delivery` | One record per step of an event that needs the Strategist: id, type, run, the waits that covered it (`covering`) and those that did not (`other`), and `outcome`: `handed-to-waiter`, `queued` then `typed` (with the tab), `no-tab`, `setting-off`, `submit-failed`. Progress events are not recorded |
+| `pipeline-wait-ended` | A wait or event stream ended because its call was cancelled or its connection closed (`reason`, and `via`: `mcp`, `wait`, `events`) |
 
 ### Memory sampling is adaptive
 

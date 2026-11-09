@@ -4,7 +4,7 @@ import { logEvent } from '../../diagnostics'
 import { McpServer, type ToolDefinition } from '../mcp/protocol'
 import { orchestrators } from '../orchestrators'
 import { tabActivity } from '../../pty/tabActivity'
-import { isSignificant, pipelineEvents, type PipelineEvent } from '../events'
+import { inWaitScope, isSignificant, pipelineEvents, type PipelineEvent } from '../events'
 import { validateAgainstSchema } from '../engine/schema'
 import type { JsonSchema } from '../engine/types'
 import type { ResultTool } from '../headless/types'
@@ -64,6 +64,11 @@ const HEARTBEAT_MS = 30_000
 
 function isAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' }
+}
+
+/** Whether a JSON-RPC payload holds a request (notifications have no id). */
+function hasRequest(payload: unknown): boolean {
+  return (Array.isArray(payload) ? payload : [payload]).some((m) => !!m && typeof m === 'object' && (m as { id?: unknown }).id !== undefined && (m as { id?: unknown }).id !== null)
 }
 
 export class PipelineServer {
@@ -168,11 +173,11 @@ export class PipelineServer {
       }
       const tabId = req.headers['x-aide-tab'] ? String(req.headers['x-aide-tab']) : null
       if (tabId) {
-        // An agent calling the pipeline is working, whatever its PTY shows.
         orchestrators.touch(projectPath, tabId)
-        tabActivity.markBusy(tabId)
+        // An agent calling the pipeline is working, whatever its PTY shows. Messages on /mcp are read first:
+        // a notification (notifications/cancelled) means the agent stopped, not that it works.
+        if (url.pathname !== '/mcp') tabActivity.markBusy(tabId)
       }
-      if (url.pathname === '/events' || url.pathname === '/wait') pipelineEvents.noteObserver(projectPath)
       if (req.method === 'POST' && url.pathname === '/mcp') await this.handleMcp(req, res, projectPath, this.mcp!)
       else if (req.method === 'POST' && url.pathname === '/step') {
         const channel = this.channels.get(String(req.headers['x-aide-step'] ?? ''))
@@ -190,6 +195,15 @@ export class PipelineServer {
   }
 
   private async handleMcp(req: http.IncomingMessage, res: http.ServerResponse, projectPath: string, mcp: McpServer): Promise<void> {
+    const connection = new AbortController()
+    const handed: PipelineEvent[] = []
+    const notDelivered = (): void => { for (const event of handed.splice(0)) pipelineEvents.undelivered(projectPath, event) }
+    res.on('error', (err: NodeJS.ErrnoException) => logEvent('pipeline-server-response-error', { path: '/mcp', code: err?.code ?? null, message: err?.message ?? String(err) }, 'warn'))
+    res.once('close', () => {
+      if (res.writableFinished) return
+      connection.abort('connection-closed')
+      notDelivered()
+    })
     const chunks: Buffer[] = []
     let size = 0
     for await (const chunk of req) {
@@ -207,13 +221,19 @@ export class PipelineServer {
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }))
       return
     }
+    const tabId = req.headers['x-aide-tab'] ? String(req.headers['x-aide-tab']) : null
+    if (tabId && hasRequest(payload)) tabActivity.markBusy(tabId)
     const response = await mcp.handle(payload, {
       projectPath,
       connectionId: String(req.headers['x-aide-conn'] ?? ''),
-      tabId: req.headers['x-aide-tab'] ? String(req.headers['x-aide-tab']) : null
+      tabId,
+      signal: connection.signal,
+      onEventHandedOut: (event) => { handed.push(event) }
     })
-    if (response === null) res.writeHead(202).end()
-    else res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(response))
+    if (response === null) {
+      notDelivered() // a cancelled call has no response to carry its event
+      res.writeHead(202).end()
+    } else res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(response))
   }
 
   private handleEvents(url: URL, res: http.ServerResponse, projectPath: string): void {
@@ -223,10 +243,22 @@ export class PipelineServer {
     const all = url.searchParams.get('all') === '1'
     res.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-cache' })
     this.openStreams.add(res)
-    const write = (event: PipelineEvent): void => { if (all || isSignificant(event)) res.write(JSON.stringify(event) + '\n') }
-    for (const event of pipelineEvents.since(projectPath, runId, since)) write(event)
-    const unsubscribe = pipelineEvents.subscribe(projectPath, (event) => {
-      if (runId === null || event.runId === runId) write(event)
+    const covers = (event: PipelineEvent): boolean => inWaitScope(runId, event) && (all || isSignificant(event))
+    const write = (event: PipelineEvent): void => {
+      res.write(JSON.stringify(event) + '\n', (err) => { if (err) pipelineEvents.undelivered(projectPath, event) })
+    }
+    for (const event of pipelineEvents.since(projectPath, null, since)) {
+      if (!covers(event)) continue
+      pipelineEvents.handOut(projectPath, event.id)
+      write(event)
+    }
+    const unsubscribe = pipelineEvents.subscribe(projectPath, {
+      covers,
+      deliver: (event) => {
+        if (res.destroyed || res.writableEnded) return false
+        write(event)
+        return true
+      }
     })
     // Keeps idle connections from being dropped by intermediaries and reveals dead peers.
     const heartbeat = setInterval(() => res.write('\n'), HEARTBEAT_MS)
@@ -235,7 +267,10 @@ export class PipelineServer {
       unsubscribe()
       this.openStreams.delete(res)
     }
-    res.on('close', cleanup)
+    res.on('close', () => {
+      if (!res.writableEnded) logEvent('pipeline-wait-ended', { projectPath, runId, via: 'events', reason: 'connection-closed' })
+      cleanup()
+    })
     res.on('error', cleanup)
   }
 
@@ -246,14 +281,37 @@ export class PipelineServer {
     const respond = (body: unknown): void => {
       if (!res.writableEnded) res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body) + '\n')
     }
-    const pending = pipelineEvents.since(projectPath, runId, since).find(isSignificant)
-    if (pending) { respond(pending); return }
-    const unsubscribe = pipelineEvents.subscribe(projectPath, (event) => {
-      if ((runId === null || event.runId === runId) && isSignificant(event)) { done(); respond(event) }
+    let handed: PipelineEvent | null = null
+    let waiting = true
+    res.on('error', (err: NodeJS.ErrnoException) => logEvent('pipeline-server-response-error', { path: '/wait', code: err?.code ?? null, message: err?.message ?? String(err) }, 'warn'))
+    res.on('close', () => {
+      if (waiting) logEvent('pipeline-wait-ended', { projectPath, runId, via: 'wait', reason: 'connection-closed' })
+      done()
+      if (handed && !res.writableFinished) pipelineEvents.undelivered(projectPath, handed)
     })
-    const timer = setTimeout(() => { done(); respond({ type: 'timeout', since }) }, timeoutSec * 1000)
-    const done = (): void => { clearTimeout(timer); unsubscribe() }
-    res.on('close', done)
+    const covers = (event: PipelineEvent): boolean => inWaitScope(runId, event) && isSignificant(event)
+    const pending = pipelineEvents.since(projectPath, null, since).find(covers)
+    let unsubscribe = (): void => {}
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const done = (): void => { waiting = false; clearTimeout(timer); unsubscribe() }
+    if (pending) {
+      done()
+      handed = pending
+      pipelineEvents.handOut(projectPath, pending.id)
+      respond(pending)
+      return
+    }
+    unsubscribe = pipelineEvents.subscribe(projectPath, {
+      covers,
+      deliver: (event) => {
+        if (res.destroyed || res.writableEnded) return false
+        done()
+        handed = event
+        respond(event)
+        return true
+      }
+    })
+    timer = setTimeout(() => { done(); respond({ type: 'timeout', since }) }, timeoutSec * 1000)
   }
 }
 

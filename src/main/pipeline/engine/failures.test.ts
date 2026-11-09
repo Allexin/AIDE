@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { checkFailureLines, limitResetTime } from './failures'
+import { classifyFailure } from '../headless/common'
 import { renderCommand, shellQuote } from './expressions'
 
 describe('checkFailureLines', () => {
@@ -43,6 +44,8 @@ describe('limitResetTime', () => {
     expect(limitResetTime('Usage limit reached. Try again at 3:45 PM.', now)).toEqual(new Date(2026, 9, 23, 15, 45))
     expect(limitResetTime('5-hour limit reached ∙ resets 9am', now)).toEqual(new Date(2026, 9, 24, 9, 0))
     expect(limitResetTime('limit reached, resets at 16:30', now)).toEqual(new Date(2026, 9, 23, 16, 30))
+    expect(limitResetTime("You've hit your 5-hour limit · resets 2:40pm (Europe/Samara)", now)).toEqual(new Date(2026, 9, 23, 14, 40))
+    expect(classifyFailure("You've hit your 5-hour limit · resets 2:40pm (Europe/Samara)")).toBe('limit')
   })
 
   it('reads an epoch after a bar', () => {

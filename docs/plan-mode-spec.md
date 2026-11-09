@@ -202,10 +202,21 @@ sees the commits made since the last step.
 ## Waiting
 
 `pipeline_wait` without `runId` waits for every event of the project that needs the Strategist,
-including `plan_attention`. The result of a step that went well is not such an event, nor is an
-escalation the Orchestrator answers. An event that was dealt with since it was emitted (the
-escalation answered, the plan continued with `plan_run`, the run resumed) is marked resolved and
-not handed out again, so a wait from an old `since` does not return it.
+including `plan_attention`. A wait scoped to a run, and `pipeline_start` / `pipeline_answer` /
+`pipeline_resume` with `wait` or `aide-pipeline wait/events --run`, returns that run's events and
+`plan_attention`, which is a project-level event whatever its `runId` says; events of other runs
+do not reach it. `pipeline_start` with `wait` starts from the last event before the start, so it
+does not return a `plan_attention` raised earlier. The result of a step that went well is not such
+an event, nor is an escalation the Orchestrator answers. An event that was dealt with since it was
+emitted (the escalation answered, the plan continued with `plan_run`, the run resumed) is marked
+resolved and not handed out again, so a wait from an old `since` does not return it.
+
+Every significant event either goes to a live wait or stream that covers it, or `EventRelay` types
+it into the Strategist's terminal once that tab is idle. Whether anybody received it is decided per
+event: a wait scoped to another run does not count, and neither does a wait whose call was cancelled
+(`notifications/cancelled`), whose connection closed, or whose response could not be written. The
+outcome of each event is recorded in the diagnostics trail (`pipeline-event-delivery`, see
+`docs/crash-diagnostics.md`).
 
 The wait is capped at 50 minutes, under the 1-hour prompt-cache lifetime: a timeout is a cheap read
 that keeps the cache warm, while a cold wake rewrites the context at twice the input price. A

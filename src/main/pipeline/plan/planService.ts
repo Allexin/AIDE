@@ -433,11 +433,10 @@ export class PlanService extends EventEmitter {
       ...(report ? { report: compactReport(report) } : {}),
       summary: `plan ${auto.planId}: ${attention.kind}: ${clip(attention.reason.split('\n')[0], 160)}`
     }
-    const observed = pipelineEvents.hasObserver(projectPath)
     const runId = `plan:${auto.planId}`
-    const event = pipelineEvents.emit(projectPath, runId, 'plan_attention', data)
+    const { event, delivery } = pipelineEvents.publish(projectPath, runId, 'plan_attention', data)
     this.saveAutopilot(this.store(projectPath), { ...auto, lastEventId: event.id })
-    this.manager.emit('event', projectPath, runId, 'plan_attention', data, event.id, observed)
+    this.manager.emit('event', projectPath, runId, 'plan_attention', data, event.id, delivery)
   }
 
   private async afterStep(projectPath: string, link: PlanTaskLink, runId: string, ok: boolean, reason: string | null): Promise<void> {

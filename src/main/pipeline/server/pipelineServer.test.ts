@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'fs'
 import { join, resolve } from 'path'
 import { tmpdir } from 'os'
 import { createInterface } from 'readline'
@@ -8,6 +8,7 @@ import { PipelineServer } from './pipelineServer'
 import { buildPipelineTools } from '../mcp/tools'
 import { orchestrators } from '../orchestrators'
 import { pipelineEvents } from '../events'
+import { tabActivity } from '../../pty/tabActivity'
 
 const SHIM = resolve(__dirname, '../../../../resources/mcp/aide-mcp.cjs')
 
@@ -136,8 +137,8 @@ describe('pipeline server + stdio shim', () => {
     expect(JSON.parse(stdout)).toMatchObject({ runId: 'run-2', type: 'escalation' })
   })
 
-  async function streamLines(args: string[], emitLive: () => void, count: number): Promise<Array<Record<string, unknown>>> {
-    const child = spawn(process.execPath, [SHIM, 'events', ...args], { cwd: project, env: { ...process.env, AIDE_RUNTIME_DIR: runtimeDir } })
+  async function streamLines(args: string[], emitLive: () => void, count: number, cwd: string = project): Promise<Array<Record<string, unknown>>> {
+    const child = spawn(process.execPath, [SHIM, 'events', ...args], { cwd, env: { ...process.env, AIDE_RUNTIME_DIR: runtimeDir } })
     const lines: Array<Record<string, unknown>> = []
     await new Promise<void>((resolveLines) => {
       createInterface({ input: child.stdout }).on('line', (line) => {
@@ -195,5 +196,122 @@ describe('pipeline server + stdio shim', () => {
 
     channel.close()
     expect((await rpc({ method: 'tools/list' })).status).toBe(404)
+  })
+
+  describe('waits', () => {
+    const waits = join(root, 'waits')
+    let base = ''
+    let headers: Record<string, string> = {}
+
+    beforeAll(() => {
+      mkdirSync(waits, { recursive: true })
+      server.registerProject(waits)
+      const dir = join(runtimeDir, 'projects')
+      const files = readdirSync(dir).map((name) => JSON.parse(readFileSync(join(dir, name), 'utf8')) as { projectPath: string; port: number; token: string })
+      const info = files.find((file) => file.projectPath === waits)!
+      base = `http://127.0.0.1:${info.port}`
+      headers = { 'x-aide-token': info.token, 'x-aide-project': waits, 'x-aide-conn': 'conn-test', 'content-type': 'application/json' }
+    })
+
+    const lastId = (): number => pipelineEvents.since(waits, null, 0).at(-1)?.id ?? 0
+
+    /** A progress event no wait covers, so every live waiter counts as "other". */
+    const liveWaiters = (): number => {
+      const { delivery } = pipelineEvents.publish(waits, 'probe', 'node_started', {})
+      return delivery.covering + delivery.other
+    }
+
+    async function until(condition: () => boolean): Promise<void> {
+      const deadline = Date.now() + 5000
+      while (!condition()) {
+        if (Date.now() > deadline) throw new Error('condition not met in time')
+        await new Promise((resolveTick) => setTimeout(resolveTick, 20))
+      }
+    }
+
+    const postWait = (id: number, signal?: AbortSignal): Promise<Response> => fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      signal,
+      body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'pipeline_wait', arguments: { timeoutSec: 30 } } })
+    })
+
+    it('aide-pipeline wait --run returns a plan_attention emitted while it waits', async () => {
+      const since = lastId()
+      const pending = runFeed(waits, runtimeDir, ['wait', '--run', 'run-a', '--since', String(since)])
+      await until(() => liveWaiters() === 1)
+      const { event } = pipelineEvents.publish(waits, 'plan:p1', 'plan_attention', { plan: 'p1', kind: 'wake' })
+      const { stdout } = await pending
+      expect(JSON.parse(stdout)).toMatchObject({ id: event.id, type: 'plan_attention' })
+    })
+
+    it('aide-pipeline wait --run does not return an event of another run', async () => {
+      const since = lastId()
+      const pending = runFeed(waits, runtimeDir, ['wait', '--run', 'run-b', '--since', String(since), '--timeout', '1'])
+      await until(() => liveWaiters() === 1)
+      expect(pipelineEvents.publish(waits, 'run-other', 'escalation', {}).delivery).toEqual({ covering: 0, other: 1, handedTo: 0 })
+      const { stdout } = await pending
+      expect(JSON.parse(stdout)).toMatchObject({ type: 'timeout' })
+      pipelineEvents.resolve(waits, () => true)
+    })
+
+    it('aide-pipeline events --run streams plan_attention, not events of other runs', async () => {
+      const since = lastId()
+      pipelineEvents.emit(waits, 'run-c', 'escalation', { node: 'a' })
+      const lines = await streamLines(['--run', 'run-c', '--since', String(since)], () => {
+        pipelineEvents.emit(waits, 'run-other', 'escalation', {})
+        pipelineEvents.emit(waits, 'plan:p2', 'plan_attention', { plan: 'p2' })
+      }, 2, waits)
+      expect(lines.map((line) => line.type)).toEqual(['escalation', 'plan_attention'])
+      pipelineEvents.resolve(waits, () => true)
+    })
+
+    it('a closed connection removes the wait at once', async () => {
+      const controller = new AbortController()
+      const pending = postWait(11, controller.signal).catch(() => null)
+      await until(() => liveWaiters() === 1)
+
+      controller.abort()
+
+      await pending
+      await until(() => liveWaiters() === 0)
+      expect(pipelineEvents.publish(waits, 'run-d', 'escalation', {}).delivery).toEqual({ covering: 0, other: 0, handedTo: 0 })
+      pipelineEvents.resolve(waits, () => true)
+    })
+
+    it('notifications/cancelled removes the wait at once and the call gets no response', async () => {
+      const pending = postWait(21)
+      await until(() => liveWaiters() === 1)
+
+      const cancel = await fetch(`${base}/mcp`, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 21, reason: 'interrupted' } }) })
+      expect(cancel.status).toBe(202)
+
+      expect(liveWaiters()).toBe(0)
+      const response = await pending
+      expect(response.status).toBe(202)
+      expect(await response.text()).toBe('')
+    })
+
+    it('closing stdin of the shim ends its calls in progress', async () => {
+      const shim = startShim(waits, runtimeDir)
+      shims.push(shim)
+      shim.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 31, method: 'tools/call', params: { name: 'pipeline_wait', arguments: { timeoutSec: 30 } } }) + '\n')
+      await until(() => liveWaiters() === 1)
+
+      shim.child.stdin.end()
+
+      await until(() => liveWaiters() === 0)
+      await until(() => shim.child.exitCode !== null)
+    })
+
+    it('a cancelling notification does not mark the tab busy, a request does', async () => {
+      const tabHeaders = { ...headers, 'x-aide-tab': 'tab-cancel' }
+      tabActivity.markIdle('tab-cancel')
+      await fetch(`${base}/mcp`, { method: 'POST', headers: tabHeaders, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 99 } }) })
+      expect(tabActivity.isIdle('tab-cancel')).toBe(true)
+      await fetch(`${base}/mcp`, { method: 'POST', headers: tabHeaders, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) })
+      expect(tabActivity.isIdle('tab-cancel')).toBe(false)
+      tabActivity.forget('tab-cancel')
+    })
   })
 })

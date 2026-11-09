@@ -26,7 +26,7 @@ export function resolveExecutable(name: string, env: NodeJS.ProcessEnv = process
   return null
 }
 
-const LIMIT_MARKERS = /usage limit|rate limit|rate_limit|limit reached|quota|too many requests|\b429\b|insufficient credit|credit balance/i
+const LIMIT_MARKERS = /usage limit|rate limit|rate_limit|limit reached|hit your\b[^.!?\n]*\blimit\b|quota|too many requests|\b429\b|insufficient credit|credit balance/i
 
 /** Failures of the service rather than of the request: they pass by themselves, so the engine retries them. */
 const UNAVAILABLE_MARKERS = /at capacity|overloaded|529|503|service unavailable|temporarily unavailable|stream disconnected|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i

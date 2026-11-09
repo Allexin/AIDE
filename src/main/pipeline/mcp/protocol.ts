@@ -5,6 +5,8 @@
  * transport, session or streaming machinery is required.
  */
 
+import type { PipelineEvent } from '../events'
+
 export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 
 export interface ToolContext {
@@ -14,7 +16,14 @@ export interface ToolContext {
   /** AIDE tab id of the terminal the agent runs in, when known. */
   tabId: string | null
   clientInfo: { name: string; version: string } | null
+  /** Aborted when nobody waits for this call any more; `reason` is 'cancelled' (notifications/cancelled) or 'connection-closed'. */
+  signal?: AbortSignal
+  /** Called for each pipeline event this call hands to its caller, so a response that cannot be written counts as not delivered. */
+  onEventHandedOut?: (event: PipelineEvent) => void
 }
+
+/** What the transport knows of a message; McpServer adds the per-request signal and the client info. */
+export type RequestContext = Omit<ToolContext, 'clientInfo'>
 
 /** Text only: a tool result lands in the agent's context, so it is never duplicated as structured content. */
 export interface ToolResult {
@@ -51,9 +60,16 @@ function errorResponse(id: JsonRpcMessage['id'], code: number, message: string):
   return { jsonrpc: '2.0', id: id ?? null, error: { code, message } }
 }
 
+/** JSON-RPC ids are per connection, and 1 and "1" are different ids. */
+function requestKey(connectionId: string, requestId: unknown): string {
+  return `${connectionId}\n${JSON.stringify(requestId)}`
+}
+
 export class McpServer {
   /** clientInfo announced in `initialize`, per shim connection. */
   private readonly clients = new Map<string, { name: string; version: string }>()
+  /** Tool calls in progress, by shim connection and request id, so notifications/cancelled can reach them. */
+  private readonly inFlight = new Map<string, AbortController>()
 
   constructor(private readonly info: ServerInfo, private readonly tools: () => ToolDefinition[]) {}
 
@@ -62,7 +78,7 @@ export class McpServer {
   }
 
   /** Handle one JSON-RPC message (or batch). Returns null when there is nothing to send back. */
-  async handle(payload: unknown, context: Omit<ToolContext, 'clientInfo'>): Promise<unknown> {
+  async handle(payload: unknown, context: RequestContext): Promise<unknown> {
     if (Array.isArray(payload)) {
       const responses = (await Promise.all(payload.map((message) => this.handleOne(message, context)))).filter((r) => r !== null)
       return responses.length > 0 ? responses : null
@@ -70,12 +86,19 @@ export class McpServer {
     return this.handleOne(payload, context)
   }
 
-  private async handleOne(raw: unknown, context: Omit<ToolContext, 'clientInfo'>): Promise<Record<string, unknown> | null> {
+  private cancel(connectionId: string, requestId: unknown): void {
+    this.inFlight.get(requestKey(connectionId, requestId))?.abort('cancelled')
+  }
+
+  private async handleOne(raw: unknown, context: RequestContext): Promise<Record<string, unknown> | null> {
     if (!raw || typeof raw !== 'object') return errorResponse(null, ERR_INVALID_REQUEST, 'Invalid request')
     const message = raw as JsonRpcMessage
     const isNotification = message.id === undefined || message.id === null
     if (typeof message.method !== 'string') return isNotification ? null : errorResponse(message.id, ERR_INVALID_REQUEST, 'Missing method')
-    if (isNotification) return null // notifications/initialized, notifications/cancelled, …
+    if (isNotification) { // notifications/initialized, notifications/cancelled, …
+      if (message.method === 'notifications/cancelled') this.cancel(context.connectionId, message.params?.requestId)
+      return null
+    }
 
     const params = message.params ?? {}
     switch (message.method) {
@@ -110,12 +133,24 @@ export class McpServer {
         const tool = this.tools().find((t) => t.name === name)
         if (!tool) return errorResponse(message.id, ERR_INVALID_PARAMS, `Unknown tool: ${String(name)}`)
         const args = params.arguments && typeof params.arguments === 'object' ? params.arguments as Record<string, unknown> : {}
+        const controller = new AbortController()
+        const key = requestKey(context.connectionId, message.id)
+        this.inFlight.set(key, controller)
+        const transport = context.signal
+        const onTransportAbort = (): void => controller.abort(transport?.reason)
+        if (transport?.aborted) onTransportAbort()
+        else transport?.addEventListener('abort', onTransportAbort, { once: true })
         let result: ToolResult
         try {
-          result = await tool.handler(args, { ...context, clientInfo: this.clientInfo(context.connectionId) })
+          result = await tool.handler(args, { ...context, signal: controller.signal, clientInfo: this.clientInfo(context.connectionId) })
         } catch (err) {
           result = { text: err instanceof Error ? err.message : String(err), isError: true }
+        } finally {
+          this.inFlight.delete(key)
+          transport?.removeEventListener('abort', onTransportAbort)
         }
+        // MCP: a cancelled request gets no response.
+        if (controller.signal.aborted) return null
         return {
           jsonrpc: '2.0',
           id: message.id,

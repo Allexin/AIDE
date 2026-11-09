@@ -135,13 +135,13 @@ async function handleLine(line) {
 
 function runMcp() {
   const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
-  const pending = new Set()
   rl.on('line', (line) => {
-    if (!line.trim()) return
-    const task = handleLine(line).finally(() => pending.delete(task))
-    pending.add(task)
+    if (line.trim()) void handleLine(line)
   })
-  rl.on('close', () => { Promise.allSettled([...pending]).then(() => process.exit(0)) })
+  // stdin closing is how an MCP client ends a stdio server: nobody reads our answers
+  // any more. Leaving at once closes the HTTP connections of calls still in progress,
+  // so AIDE stops counting a blocked wait of this client as someone waiting.
+  rl.on('close', () => process.exit(0))
 }
 
 function argValue(args, flag) {

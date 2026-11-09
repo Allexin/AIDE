@@ -1,6 +1,7 @@
-import type { ToolDefinition, ToolResult } from './protocol'
+import type { ToolContext, ToolDefinition, ToolResult } from './protocol'
+import { logEvent } from '../../diagnostics'
 import { orchestrators } from '../orchestrators'
-import { clip, isSignificant, pipelineEvents, type PipelineEvent } from '../events'
+import { clip, inWaitScope, isSignificant, pipelineEvents, type PipelineEvent } from '../events'
 import type { PipelineManager } from '../manager'
 import { MACHINE_FILE_SCHEMA } from '../engine/machineSchema'
 import { compactReport } from '../engine/reportView'
@@ -78,11 +79,11 @@ function eventDeliveryText(launcherPath: string): string {
     '1. Stay in one turn and block: pass `wait` to pipeline_start / pipeline_answer / pipeline_resume (they act, then return the next event), or call pipeline_wait. The event comes back as the call result — no output files, no extra turns. When the user types in your terminal, the wait returns early with type "user_input", so their message reaches you right away; handle it, then wait again.',
     `2. If your client cannot block on a tool call for long: a background command or monitor — "${launcherPath}" events --run <runId> --since <lastEventId> (one JSON line per event that needs you) or "${launcherPath}" wait --run <runId> --since <lastEventId> (prints the next one and exits). Each wake-up costs extra calls.`,
     '3. Last resort: poll pipeline_status.',
-    'While a plan\'s autopilot is on, wait without runId: runs change, and pipeline_wait then covers every run and the plan.',
+    'While a plan\'s autopilot is on, wait without runId: runs change, and pipeline_wait then covers every run and the plan. A wait for one run also returns plan_attention: a plan that needs you reaches every wait; events of other runs do not.',
     'Events that need you: plan_attention (the plan holds and needs you: see its kind, reason and proposal; change the plan with plan_edit if needed, then plan_run with a note), escalation (a decision; answer with pipeline_answer — one the Orchestrator of a plan passed on carries its reason and proposal in "orchestrator"), run_paused / run_stopped (the run changed hands, possibly by the user or an AIDE restart; continue with pipeline_resume — reason "usage_limit" means a CLI hit its usage limit: the run resumes by itself at resumeAt when the message said when, keeping the step\'s session; when AIDE switches the CLI to another account of the user\'s pool and goes on, you are not told), run_finished / run_failed (the event carries the compact report; read all of it — when you wait in code, return the report whole rather than a few fields; recurring findings are your signal to plan a refactoring task). Step progress is not sent, nor are retries of a CLI that is temporarily unavailable (model at capacity, overloaded, network): AIDE retries the step every minute and sends an engine escalation only after 20 minutes.',
     'Escalation kinds and their actions: step (a step asks for a decision, e.g. plan_wrong or a check failed outside any loop): continue / retry / stop; gate (approval): continue / reject / stop; limit (a loop used up its iterations): retry for one more / continue to accept as it is / stop; engine (a step could not run): retry continues the failed session / stop. stop ends the run for good; to hold a run without deciding, do not answer: it waits and survives AIDE restarts.',
     'Pass the last event id you have seen as `since`, also when waiting without runId; ids continue across AIDE restarts, and after a restart AIDE re-announces a pending escalation or paused run, so nothing is lost. An event that has been dealt with since (the escalation answered, the plan continued, the run resumed) is not handed out again.',
-    'If an event that needs you arrives while you are not waiting and your session is idle, AIDE types it into your terminal as a message starting with "AIDE pipeline:"; act on it as on a waited event, then wait again with the since it gives.',
+    'If an event that needs you arrives while no wait covers it (you are not waiting, or you wait for another run) and your session is idle, AIDE types it into your terminal as a message starting with "AIDE pipeline:"; act on it as on a waited event, then wait again with the since it gives.',
     'Claude Code moves an MCP call that runs longer than 120 s to the background and delivers its result in the task notification: the event arrives there, with no output file to read. Clients that cut long calls: pass a wait shorter than their limit.'
   ].join('\n')
 }
@@ -122,26 +123,45 @@ const MAX_WAIT_SEC = 3000
 type WaitResult = PipelineEvent | { type: 'user_input'; summary: string } | null
 
 /**
- * Next significant event of a run after `since`. Returns early when the user
- * submits input in the calling agent's terminal tab, so a blocked orchestrator
- * does not hold the user's message until the next event.
+ * Next significant event after `since` that a wait scoped to `runId` covers.
+ * Returns early when the user submits input in the calling agent's terminal
+ * tab, so a blocked orchestrator does not hold the user's message until the
+ * next event. Ends at once when the call is cancelled or its connection closes:
+ * an abandoned wait must not keep counting as an observer.
  */
-function waitForEvent(projectPath: string, runId: string | null, since: number, timeoutSec: number, tabId: string | null): Promise<WaitResult> {
-  pipelineEvents.noteObserver(projectPath)
-  const pending = pipelineEvents.since(projectPath, runId, since).find(isSignificant)
-  if (pending) return Promise.resolve(pending)
+function waitForEvent(context: ToolContext, runId: string | null, since: number, timeoutSec: number): Promise<WaitResult> {
+  const { projectPath, tabId, signal, onEventHandedOut } = context
+  const ended = (reason: unknown): void => { logEvent('pipeline-wait-ended', { projectPath, runId, tabId, via: 'mcp', reason: String(reason) }) }
+  if (signal?.aborted) { ended(signal.reason); return Promise.resolve(null) }
+  const covers = (event: PipelineEvent): boolean => inWaitScope(runId, event) && isSignificant(event)
+  const pending = pipelineEvents.since(projectPath, null, since).find(covers)
+  if (pending) {
+    pipelineEvents.handOut(projectPath, pending.id)
+    onEventHandedOut?.(pending)
+    return Promise.resolve(pending)
+  }
   return new Promise((resolve) => {
-    const finish = (result: WaitResult): void => { clearTimeout(timer); unsubscribe(); orchestrators.off('input', onInput); resolve(result) }
-    const unsubscribe = pipelineEvents.subscribe(projectPath, (event) => {
-      if ((runId === null || event.runId === runId) && isSignificant(event)) finish(event)
+    const finish = (result: WaitResult): void => { clearTimeout(timer); unsubscribe(); orchestrators.off('input', onInput); signal?.removeEventListener('abort', onAbort); resolve(result) }
+    const unsubscribe = pipelineEvents.subscribe(projectPath, {
+      covers,
+      deliver: (event) => {
+        if (signal?.aborted) return false
+        onEventHandedOut?.(event)
+        finish(event)
+        return true
+      }
     })
     const onInput = (inputTab: string): void => { if (tabId && inputTab === tabId) finish({ type: 'user_input', summary: 'The user sent you a message; it follows this result. Wait again afterwards with the same since.' }) }
     orchestrators.on('input', onInput)
+    const onAbort = (): void => { ended(signal?.reason); finish(null) }
+    signal?.addEventListener('abort', onAbort, { once: true })
     const timer = setTimeout(() => finish(null), timeoutSec * 1000)
   })
 }
 
 const lastEventId = (projectPath: string, runId: string): number => pipelineEvents.since(projectPath, runId, 0).at(-1)?.id ?? 0
+
+const lastProjectEventId = (projectPath: string): number => pipelineEvents.since(projectPath, null, 0).at(-1)?.id ?? 0
 
 const WAIT_ARG = { type: 'number', description: `Then block up to this many seconds (max ${MAX_WAIT_SEC}) and return the run's next event, as pipeline_wait does.` }
 
@@ -220,13 +240,16 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
       name: 'pipeline_start',
       description: 'Start a run of a machine with params: one concrete task, with or without a plan. Only one run per project can be active. Without planTask the run touches no plan. With planTask, the last commit marks that task done and adds the review findings to the plan\'s follow-ups. A machine written for an older pipeline engine is refused with the list of what changed since; review it with the user (or pass acceptOutdated: true to run it unchanged). With wait, blocks until the run\'s first event that needs you (usually its end) and returns it.',
       inputSchema: OBJECT({ machine: { type: 'string', description: 'Machine id from pipeline_list.' }, params: { type: 'object', description: 'Values for the machine params.' }, planTask: OBJECT({ plan: { type: 'string' }, task: { type: 'string' } }, ['plan', 'task']), acceptOutdated: { type: 'boolean', description: 'Run a machine written for an older engine without reviewing it.' }, wait: WAIT_ARG }, ['machine']),
-      handler: async (args, { projectPath, tabId }) => {
+      handler: async (args, context) => {
+        const { projectPath, tabId } = context
         try {
           const link = args.planTask as { plan?: unknown; task?: unknown } | undefined
           const planTask = link && typeof link.plan === 'string' && typeof link.task === 'string' ? { plan: link.plan, task: link.task } : undefined
+          // Taken before the start, so a plan_attention raised earlier is not this run's next event, and the run's first event is not missed.
+          const since = lastProjectEventId(projectPath)
           const { runId, warnings } = await manager().start(projectPath, String(args.machine), (args.params as Record<string, unknown>) ?? {}, { acceptOutdated: args.acceptOutdated === true, planTask })
           const lines = [`Run ${runId} started.`, ...warnings.map((w) => `Warning: ${w}`)]
-          if (args.wait !== undefined) return ok([...lines, waitText(await waitForEvent(projectPath, runId, 0, waitSeconds(args.wait, DEFAULT_WAIT_SEC), tabId), env(), projectPath, tabId)].join('\n'))
+          if (args.wait !== undefined) return ok([...lines, waitText(await waitForEvent(context, runId, since, waitSeconds(args.wait, DEFAULT_WAIT_SEC)), env(), projectPath, tabId)].join('\n'))
           lines.push(`Wait for its events: pipeline_wait with runId "${runId}" (or "${env().launcherPath}" events --run ${runId} --since 0 in the background).`, 'Leave the working tree to the run while it executes.')
           return ok(lines.join('\n'))
         } catch (err) {
@@ -254,23 +277,24 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     {
       name: 'pipeline_wait',
       description: `Block until the next event that needs you (escalation, pause, stop, end of a run, a plan asking for you), the user typing in your terminal (type "user_input"), or a timeout, which returns one line of state. The cheapest way to wait: the event is the result of this call. Without runId it covers the whole project: use that while a plan's autopilot is on.`,
-      inputSchema: OBJECT({ runId: { type: 'string', description: 'Only this run; the whole project when absent.' }, since: { type: 'number', description: 'Last event id you have seen.' }, timeoutSec: { type: 'number', description: `Default ${DEFAULT_WAIT_SEC}, max ${MAX_WAIT_SEC}. Pass less if your client cuts tool calls earlier.` } }),
-      handler: async (args, { projectPath, tabId }) => {
-        const result = await waitForEvent(projectPath, typeof args.runId === 'string' ? args.runId : null, Number(args.since ?? 0) || 0, waitSeconds(args.timeoutSec, DEFAULT_WAIT_SEC), tabId)
-        return ok(waitText(result, env(), projectPath, tabId))
+      inputSchema: OBJECT({ runId: { type: 'string', description: 'Only this run, and a plan asking for you (plan_attention reaches every wait); the whole project when absent.' }, since: { type: 'number', description: 'Last event id you have seen.' }, timeoutSec: { type: 'number', description: `Default ${DEFAULT_WAIT_SEC}, max ${MAX_WAIT_SEC}. Pass less if your client cuts tool calls earlier.` } }),
+      handler: async (args, context) => {
+        const result = await waitForEvent(context, typeof args.runId === 'string' ? args.runId : null, Number(args.since ?? 0) || 0, waitSeconds(args.timeoutSec, DEFAULT_WAIT_SEC))
+        return ok(waitText(result, env(), context.projectPath, context.tabId))
       }
     },
     {
       name: 'pipeline_answer',
       description: 'Answer a pending escalation. action: continue (go on after the step; approve a gate; leave an exhausted loop as if it passed), reject (reject a gate: repeats its loop; outside loops the run holds at the gate — pipeline_resume asks again), retry (run the step again — after an engine failure it continues the failed session; for an exhausted loop: one more iteration), stop (end the run for good; it cannot be resumed). To hold the run without deciding, do not answer: a run waiting on an escalation does nothing and survives AIDE restarts. Your text is shown to every later agent of the run.',
       inputSchema: OBJECT({ escalationId: { type: 'string' }, action: { type: 'string', enum: ['continue', 'retry', 'reject', 'stop'] }, text: { type: 'string', description: 'Your answer; shown to the later agents of the run.' }, params: { type: 'object', description: 'Change machine params for the rest of the run, e.g. {"stageId": "S5.7a"} after approving a split. Validated against the machine params; later templates, inputs and conditions use the new values.' }, runId: RUN_ID, wait: WAIT_ARG }, ['escalationId', 'action']),
-      handler: async (args, { projectPath, tabId }) => {
+      handler: async (args, context) => {
+        const { projectPath, tabId } = context
         try {
           const m = manager()
           const runId = typeof args.runId === 'string' ? args.runId : m.activeRun(projectPath)?.runId
           const since = runId ? lastEventId(projectPath, runId) : 0
           await m.answer(projectPath, String(args.escalationId), { action: args.action as 'continue' | 'retry' | 'reject' | 'stop', text: String(args.text ?? ''), by: 'strategist', ...(args.params && typeof args.params === 'object' && !Array.isArray(args.params) ? { params: args.params as Record<string, unknown> } : {}) }, typeof args.runId === 'string' ? args.runId : undefined)
-          if (args.wait !== undefined && runId) return ok(`Answer recorded.\n${waitText(await waitForEvent(projectPath, runId, since, waitSeconds(args.wait, DEFAULT_WAIT_SEC), tabId), env(), projectPath, tabId)}`)
+          if (args.wait !== undefined && runId) return ok(`Answer recorded.\n${waitText(await waitForEvent(context, runId, since, waitSeconds(args.wait, DEFAULT_WAIT_SEC)), env(), projectPath, tabId)}`)
           return ok('Answer recorded; the run continues.')
         } catch (err) {
           return fail(err instanceof Error ? err.message : String(err))
@@ -326,13 +350,14 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
       name: 'pipeline_resume',
       description: 'Continue a paused or stopped run from where it stopped. With wait, then blocks until its next event that needs you.',
       inputSchema: OBJECT({ runId: RUN_ID, wait: WAIT_ARG }),
-      handler: async (args, { projectPath, tabId }) => {
+      handler: async (args, context) => {
+        const { projectPath, tabId } = context
         try {
           const m = manager()
           const runId = typeof args.runId === 'string' ? args.runId : m.activeRun(projectPath)?.runId
           const since = runId ? lastEventId(projectPath, runId) : 0
           m.resume(projectPath, typeof args.runId === 'string' ? args.runId : undefined)
-          if (args.wait !== undefined && runId) return ok(`Resumed.\n${waitText(await waitForEvent(projectPath, runId, since, waitSeconds(args.wait, DEFAULT_WAIT_SEC), tabId), env(), projectPath, tabId)}`)
+          if (args.wait !== undefined && runId) return ok(`Resumed.\n${waitText(await waitForEvent(context, runId, since, waitSeconds(args.wait, DEFAULT_WAIT_SEC)), env(), projectPath, tabId)}`)
           return ok('Resumed.')
         } catch (err) {
           return fail(err instanceof Error ? err.message : String(err))
@@ -412,9 +437,9 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     ...buildPlanTools(() => ({
       plans: env().plans,
       guide: env().planGuide,
-      lastEvent: (projectPath) => pipelineEvents.since(projectPath, null, 0).at(-1)?.id ?? 0,
-      waitAfter: async (projectPath, tabId, since, seconds) => {
-        return waitText(await waitForEvent(projectPath, null, since, waitSeconds(seconds, DEFAULT_WAIT_SEC), tabId), env(), projectPath, tabId)
+      lastEvent: lastProjectEventId,
+      waitAfter: async (context, since, seconds) => {
+        return waitText(await waitForEvent(context, null, since, waitSeconds(seconds, DEFAULT_WAIT_SEC)), env(), context.projectPath, context.tabId)
       }
     }))
   )
