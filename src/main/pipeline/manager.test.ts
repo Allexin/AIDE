@@ -9,7 +9,8 @@ import { validateMachine } from './engine/validate'
 import { RunStore } from './engine/runStore'
 import type { MachineDefinition } from './engine/types'
 import type { HeadlessResult } from './headless/types'
-import { parsePorcelain } from './git'
+import { NO_GIT_DIFF, commitIndex, git, headSha, parsePorcelain, stagedDiff, status, workingDiff } from './git'
+import { resolveGitSetup } from './gitConfig'
 import { orchestrators } from './orchestrators'
 import { pipelineEvents } from './events'
 import { ENGINE_VERSION } from './engine/compat'
@@ -283,5 +284,91 @@ describe('PipelineManager through the MCP tools', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('the git setup of a run', () => {
+  /** The test environment with real git reads and the real config resolution; records the agents' prompts. */
+  function gitEnvironment(agent: (label: string) => Partial<HeadlessResult>, prompts: Map<string, string>): ManagerEnvironment {
+    const env = environment(agent)
+    const deps = env.deps
+    return {
+      ...env,
+      deps: (p) => {
+        const base = deps(p)
+        return {
+          ...base,
+          startAgent: (request) => { prompts.set(request.label, request.prompt); return base.startAgent(request) },
+          git: { workingDiff, stagedDiff, status, headSha, commitIndex }
+        }
+      },
+      gitSetup: (p) => resolveGitSetup(p)
+    }
+  }
+
+  async function initRepo(dir: string, file: string): Promise<void> {
+    mkdirSync(dir, { recursive: true })
+    await git(dir, ['init', '-q'])
+    await git(dir, ['config', 'user.email', 'test@example.com'])
+    await git(dir, ['config', 'user.name', 'Test'])
+    await git(dir, ['config', 'commit.gpgsign', 'false'])
+    writeFileSync(join(dir, file), 'one\n')
+    await git(dir, ['add', '-A'])
+    await git(dir, ['commit', '-q', '-m', 'init'])
+  }
+
+  it('an invalid git config refuses pipeline_start with the list of problems; pipeline_validate reports them', async () => {
+    const dir = project('g1', guideExample())
+    await initRepo(join(dir, 'frontend'), 'a.ts')
+    writeFileSync(join(dir, 'aide', 'config.json'), JSON.stringify({ git: { repos: { 'bad id': 'frontend', api: 'backend', src: 'frontend/src' } } }))
+    mkdirSync(join(dir, 'frontend', 'src'))
+    const manager = new PipelineManager(gitEnvironment(happy, new Map()))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', manager })))
+    const refused = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] } })
+    expect(refused.isError).toBe(true)
+    expect(refused.text).toContain('The "git" setting in aide/config.json is invalid:')
+    expect(refused.text).toContain('- Repo id "bad id" may only contain letters, digits, "_" and "-".')
+    expect(refused.text).toContain('- git.repos.api: "backend" does not exist.')
+    expect(refused.text).toContain('- git.repos.src: "frontend/src" is inside the repository at "frontend", not its top level')
+    expect(manager.activeRun(dir)).toBeNull()
+    const validated = await call(server, dir, 'pipeline_validate')
+    expect(validated.data?.project).toMatchObject({ git: 'git: invalid config', errors: expect.arrayContaining(['aide/config.json: git.repos.api: "backend" does not exist.']) })
+  })
+
+  it('a project whose root is not a repo starts a run; run.diff is a note and the commit step asks', async () => {
+    const dir = project('g2', guideExample())
+    const prompts = new Map<string, string>()
+    const manager = new PipelineManager(gitEnvironment(happy, prompts))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', manager })))
+    const started = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] } })
+    expect(started.isError).toBeUndefined()
+    expect(started.text).toContain('no-git mode')
+    const runId = /Run (\S+) started/.exec(started.text)![1]
+    expect(manager.activeRun(dir)?.state.git).toEqual({ mode: 'none' })
+    const event = await call(server, dir, 'pipeline_wait', { runId, timeoutSec: 5 })
+    expect(event.data).toMatchObject({ type: 'escalation', data: { node: 'commit', kind: 'engine' } })
+    expect(String((event.data?.data as Record<string, unknown>).message)).toContain('no-git mode')
+    expect(manager.runState(dir)?.history.map((h) => h.node)).toEqual(['implement', 'checks', 'review', 'commitPrep', 'commit'])
+    expect(prompts.get('codex:review')).toContain(NO_GIT_DIFF.trim())
+    expect((await call(server, dir, 'pipeline_validate')).data?.project).toMatchObject({ git: expect.stringMatching(/^git: none/), errors: [] })
+  })
+
+  it('with git.repos, the dirty-tree warning and the abandon list span every repo', async () => {
+    const dir = project('g3', guideExample())
+    await initRepo(join(dir, 'frontend'), 'a.ts')
+    await initRepo(join(dir, 'backend'), 'main.go')
+    writeFileSync(join(dir, 'aide', 'config.json'), JSON.stringify({ git: { repos: { web: 'frontend', api: 'backend' } } }))
+    writeFileSync(join(dir, 'frontend', 'a.ts'), 'two\n')
+    writeFileSync(join(dir, 'backend', 'new.go'), 'package main\n')
+    const planWrong = (label: string): Partial<HeadlessResult> => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [], pipelineIssues: [] } } : happy(label)
+    const manager = new PipelineManager(gitEnvironment(planWrong, new Map()))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', manager })))
+    const started = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] }, wait: 5 })
+    expect(started.text).toContain('The working tree has 2 uncommitted change(s)')
+    expect(manager.activeRun(dir)?.state.git).toMatchObject({ mode: 'git', repos: [{ id: 'web', path: 'frontend' }, { id: 'api', path: 'backend' }], commits: true })
+    // A config edit does not change the running run.
+    writeFileSync(join(dir, 'aide', 'config.json'), JSON.stringify({ git: false }))
+    const abandoned = await call(server, dir, 'pipeline_stop', { mode: 'abandon', reason: 'test' })
+    expect(abandoned.text).toContain('Uncommitted changes left in the working tree (2): frontend/a.ts (modified), backend/new.go (untracked)')
   })
 })

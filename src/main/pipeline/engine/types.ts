@@ -7,6 +7,7 @@ export type {
   AgentStep, CheckStep, CommitStep, EscalationTo, GateStep, GroupStep, IfStep, JsonSchema, LoopStep,
   MachineDefinition, ParamDefinition, ParamType, RepeatStep, Step, StepType
 } from '../../../shared/pipelineMachine'
+import type { GitSetup } from '../gitConfig'
 
 // ── Run state ─────────────────────────────────────────────────────────────────
 
@@ -150,6 +151,12 @@ export interface RunState {
   history: NodeVisit[]
   escalations: Escalation[]
   sessions: Record<string, string>
+  /**
+   * The git setup resolved at run start (docs/pipeline-git-modes-spec.md §1): a config edit does not
+   * change a running run. Absent in runs stored before it existed: they work in the project root's repo.
+   */
+  git?: GitSetup
+  /** HEAD of the run's first repo when it started. */
   startCommit: string | null
   result: 'success' | 'failure' | null
   startedAt: string

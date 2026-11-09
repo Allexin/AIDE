@@ -20,7 +20,7 @@ function escapeRegExp(text: string): string {
 }
 
 /**
- * A glob over repo-relative paths: `*` and `?` stay within a path segment, `**`
+ * A glob over project-relative paths: `*` and `?` stay within a path segment, `**`
  * crosses segments, `{a,b}` is an alternation, a trailing `/` matches everything
  * under the directory. A pattern without `/` matches a file name at any depth.
  */

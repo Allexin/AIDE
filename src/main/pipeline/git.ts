@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, rmSync, statSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
 import { PLANS_DIR, isPlanPath } from './plan/planStore'
+import type { GitSetup } from './gitConfig'
 
 /**
  * Git operations the pipeline engine needs (plan §5.7, §3.3). Read-only except
@@ -77,19 +78,87 @@ export function parsePorcelain(output: string): FileChange[] {
 }
 
 /**
+ * Where one repo's reads run and how their paths become project-relative
+ * (docs/pipeline-git-modes-spec.md §2). The root repo has an empty prefix and no
+ * nested repos: its commands and output are exactly those of the single-cwd reads.
+ */
+interface RepoRead {
+  cwd: string
+  /** `frontend/` for a repo at `frontend`; empty for the root. */
+  prefix: string
+  /** Repo-relative paths of other repos of the run inside this one: their files are reported by those repos. */
+  nested: string[]
+}
+
+/** The note `run.diff` gets in no-git mode (until the shadow snapshot, spec §5). */
+export const NO_GIT_DIFF = '(diff unavailable: the project is not a git repository AIDE reads (no-git mode); read the files the implementer reports)\n'
+
+function repoReads(setup: GitSetup): RepoRead[] {
+  if (setup.mode !== 'git') return []
+  return setup.repos.map((repo) => {
+    const nested = setup.repos.filter((other) => other !== repo && isInside(other.path, repo.path)).map((other) => repo.path === '.' ? other.path : other.path.slice(repo.path.length + 1))
+    return { cwd: repo.abs, prefix: repo.path === '.' ? '' : `${repo.path}/`, nested }
+  })
+}
+
+function isInside(path: string, parent: string): boolean {
+  if (path === parent) return false
+  return parent === '.' ? path !== '.' : path.startsWith(`${parent}/`)
+}
+
+const rootRead = (cwd: string): RepoRead => ({ cwd, prefix: '', nested: [] })
+
+/**
+ * `rename from`/`copy to` header lines name repo-relative paths whatever the
+ * diff prefixes are: make them project-relative too. (A line of a hunk starts
+ * with a space, `+`, `-` or `\`, so only header lines match.)
+ */
+function prefixRenameLines(read: RepoRead, diff: string): string {
+  return read.prefix ? diff.replace(/^((?:rename|copy) (?:from|to) )/gm, `$1${read.prefix}`) : diff
+}
+
+/** `--src-prefix`/`--dst-prefix` of a prefixed repo; nothing for the root (git's defaults). */
+function prefixArgs(read: RepoRead): string[] {
+  return read.prefix ? [`--src-prefix=a/${read.prefix}`, `--dst-prefix=b/${read.prefix}`] : []
+}
+
+/** Pathspec of a diff: plan files left out at the root (they live in the project root's aide/plans), nested repos left out. */
+function diffPathspec(read: RepoRead): string[] {
+  return [...(read.prefix ? ['--', '.'] : NOT_PLANS), ...read.nested.map((path) => `:(exclude)${path}`)]
+}
+
+/** Pathspec of a status/ls-files call: nested repos left out (none at the root of root mode: no pathspec, as before). */
+function nestedPathspec(read: RepoRead): string[] {
+  return read.nested.length ? ['--', '.', ...read.nested.map((path) => `:(exclude)${path}`)] : []
+}
+
+/**
  * Changed files. A modified file whose only difference is line endings (CRLF in
  * the working tree, LF in the index) is left out: it is noise to reviewers and
  * to the commit coverage check. So are plan files: AIDE edits them while a run
  * works, and they are not part of its work.
+ *
+ * With a run's setup, every repo is read in config order and paths are
+ * project-relative (`frontend/src/a.ts`); no-git mode has no changes.
  */
-export async function status(cwd: string): Promise<FileChange[]> {
-  const changes = parsePorcelain(await gitOk(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])).filter((c) => !isPlanPath(c.path))
+export async function status(target: string | GitSetup): Promise<FileChange[]> {
+  if (typeof target === 'string') return statusIn(rootRead(target))
+  const changes: FileChange[] = []
+  for (const read of repoReads(target)) changes.push(...await statusIn(read))
+  return changes
+}
+
+async function statusIn(read: RepoRead): Promise<FileChange[]> {
+  const { cwd, prefix } = read
+  const changes = parsePorcelain(await gitOk(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all', ...nestedPathspec(read)]))
+    .map((c) => prefix ? { ...c, path: prefix + c.path } : c)
+    .filter((c) => !isPlanPath(c.path))
   if (!changes.some((c) => c.kind === 'modified')) return changes
   const real = new Set<string>()
   for (const args of [['diff', '--numstat', '-z', '--ignore-cr-at-eol'], ['diff', '--cached', '--numstat', '-z', '--ignore-cr-at-eol']]) {
     const result = await git(cwd, args)
     if (result.code !== 0) return changes
-    for (const path of parseNumstatPaths(result.stdout)) real.add(path)
+    for (const path of parseNumstatPaths(result.stdout)) real.add(prefix + path)
   }
   return changes.filter((c) => c.kind !== 'modified' || real.has(c.path))
 }
@@ -115,21 +184,33 @@ export async function headSha(cwd: string): Promise<string | null> {
 /**
  * Diff of the working tree against HEAD including untracked files — what a code
  * reviewer must see (plan §3.3). Does not touch the index.
+ *
+ * With a run's setup: the repos' diffs in config order, paths project-relative
+ * (`a/frontend/src/a.ts`); no-git mode gets a note instead.
  */
-export async function workingDiff(cwd: string): Promise<string> {
+export async function workingDiff(target: string | GitSetup): Promise<string> {
+  if (typeof target === 'string') return workingDiffIn(rootRead(target))
+  if (target.mode !== 'git') return NO_GIT_DIFF
+  const sections: string[] = []
+  for (const read of repoReads(target)) sections.push(prefixRenameLines(read, await workingDiffIn(read)).trimEnd())
+  return sections.filter(Boolean).join('\n') + '\n'
+}
+
+async function workingDiffIn(read: RepoRead): Promise<string> {
+  const { cwd, prefix } = read
   const hasHead = (await headSha(cwd)) !== null
-  const untracked = (await gitOk(cwd, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter((path) => path && !isPlanPath(path))
+  const untracked = (await gitOk(cwd, ['ls-files', '--others', '--exclude-standard', '-z', ...nestedPathspec(read)])).split('\0').filter((path) => path && !isPlanPath(prefix + path))
   if (hasHead && untracked.length) {
     // A file moved without `git mv` is a deleted tracked file plus an untracked one.
     const deleted = (await gitOk(cwd, ['ls-files', '--deleted', '-z'])).split('\0').filter(Boolean)
     if (deleted.length) {
-      const diff = await renameAwareDiff(cwd, untracked).catch(() => null)
+      const diff = await renameAwareDiff(read, untracked).catch(() => null)
       if (diff !== null) return diff
     }
   }
-  const tracked = hasHead ? await gitOk(cwd, ['diff', 'HEAD', '--no-color', ...NOT_PLANS]) : await gitOk(cwd, ['diff', '--cached', '--no-color', ...NOT_PLANS])
+  const tracked = hasHead ? await gitOk(cwd, ['diff', 'HEAD', '--no-color', ...prefixArgs(read), ...diffPathspec(read)]) : await gitOk(cwd, ['diff', '--cached', '--no-color', ...prefixArgs(read), ...diffPathspec(read)])
   const sections = [tracked.trimEnd()]
-  for (const path of untracked) sections.push(await untrackedDiff(cwd, path))
+  for (const path of untracked) sections.push(await untrackedDiff(read, path))
   return sections.filter(Boolean).join('\n') + '\n'
 }
 
@@ -138,39 +219,49 @@ export async function workingDiff(cwd: string): Promise<string> {
  * copy of the index and diffed against HEAD with `-M`. The real index is not
  * touched. Large untracked files are listed without content, as usual.
  */
-async function renameAwareDiff(cwd: string, untracked: string[]): Promise<string> {
+async function renameAwareDiff(read: RepoRead, untracked: string[]): Promise<string> {
+  const { cwd } = read
   const big = untracked.filter((path) => { try { return statSync(join(cwd, path)).size > MAX_UNTRACKED_DIFF_BYTES } catch { return false } })
   const index = resolve(cwd, (await gitOk(cwd, ['rev-parse', '--git-path', 'index'])).trim())
   const temp = join(tmpdir(), `aide-index-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`)
   try {
     if (existsSync(index)) copyFileSync(index, temp)
     const env = { ...process.env, GIT_INDEX_FILE: temp }
-    await gitOk(cwd, ['add', '-A', '--', '.', ...big.map((path) => `:(exclude)${path}`)], undefined, env)
-    const diff = await gitOk(cwd, ['diff', '--cached', '-M', '--no-color', 'HEAD', ...NOT_PLANS], undefined, env)
-    const sections = [diff.trimEnd(), ...big.map((path) => bigFileStub(cwd, path))]
+    await gitOk(cwd, ['add', '-A', '--', '.', ...big.map((path) => `:(exclude)${path}`), ...read.nested.map((path) => `:(exclude)${path}`)], undefined, env)
+    const diff = await gitOk(cwd, ['diff', '--cached', '-M', '--no-color', ...prefixArgs(read), 'HEAD', ...diffPathspec(read)], undefined, env)
+    const sections = [diff.trimEnd(), ...big.map((path) => bigFileStub(read, path))]
     return sections.filter(Boolean).join('\n') + '\n'
   } finally {
     rmSync(temp, { force: true })
   }
 }
 
-function bigFileStub(cwd: string, path: string): string {
+function bigFileStub(read: RepoRead, path: string): string {
   let bytes = 0
-  try { bytes = statSync(join(cwd, path)).size } catch { return '' }
-  return `diff --git a/${path} b/${path}\nnew file mode 100644\n(new file, ${bytes} bytes — content omitted)`
+  try { bytes = statSync(join(read.cwd, path)).size } catch { return '' }
+  const shown = read.prefix + path
+  return `diff --git a/${shown} b/${shown}\nnew file mode 100644\n(new file, ${bytes} bytes — content omitted)`
 }
 
-async function untrackedDiff(cwd: string, path: string): Promise<string> {
+async function untrackedDiff(read: RepoRead, path: string): Promise<string> {
   let bytes = 0
-  try { bytes = statSync(join(cwd, path)).size } catch { return '' } // raced with deletion
-  if (bytes > MAX_UNTRACKED_DIFF_BYTES) return bigFileStub(cwd, path)
+  try { bytes = statSync(join(read.cwd, path)).size } catch { return '' } // raced with deletion
+  if (bytes > MAX_UNTRACKED_DIFF_BYTES) return bigFileStub(read, path)
   // `--no-index` exits with 1 when the files differ, which is always the case here.
-  const result = await git(cwd, ['diff', '--no-color', '--no-index', '--', '/dev/null', path])
+  const result = await git(read.cwd, ['diff', '--no-color', '--no-index', ...prefixArgs(read), '--', '/dev/null', path])
   return result.stdout.trimEnd()
 }
 
-export async function stagedDiff(cwd: string): Promise<string> {
-  return gitOk(cwd, ['diff', '--cached', '--no-color', ...NOT_PLANS])
+/** The index against HEAD; with a run's setup, every repo's in config order (no-git mode: nothing is staged). */
+export async function stagedDiff(target: string | GitSetup): Promise<string> {
+  if (typeof target === 'string') return stagedDiffIn(rootRead(target))
+  const parts: string[] = []
+  for (const read of repoReads(target)) parts.push(prefixRenameLines(read, await stagedDiffIn(read)))
+  return parts.join('')
+}
+
+function stagedDiffIn(read: RepoRead): Promise<string> {
+  return gitOk(read.cwd, ['diff', '--cached', '--no-color', ...prefixArgs(read), ...diffPathspec(read)])
 }
 
 /** Commits after `since` (exclusive) as "<short sha> <subject>", newest first; empty when `since` is unknown. */

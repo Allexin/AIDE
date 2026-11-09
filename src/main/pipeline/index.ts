@@ -20,6 +20,7 @@ import { EventRelay } from './eventRelay'
 import { failedRun } from './headless/common'
 import { killAllProcessTreesSync, runShellCommand } from './processRunner'
 import { commitIndex, commitsSince, headSha, stagedDiff, status, workingDiff } from './git'
+import { checkRepos, resolveGitSetup } from './gitConfig'
 import { PlanService } from './plan/planService'
 import { tabCacheTtl } from './promptCache'
 import { smokeTestMachine } from './smoke'
@@ -52,9 +53,10 @@ export const pipelineManager = new PipelineManager({
     },
     runCheck: ({ commandLine, cwd, timeoutMs, label, onOutput }) =>
       runShellCommand({ commandLine, cwd, timeoutMs, label, onStdoutLine: (line) => onOutput(line + '\n'), onStderr: onOutput }),
-    git: { workingDiff, stagedDiff, status, headSha, commitIndex },
+    git: { workingDiff, stagedDiff, status, headSha, commitIndex, checkRepos },
     accountPool: poolHandles
-  })
+  }),
+  gitSetup: (projectPath) => resolveGitSetup(projectPath)
 })
 
 /** Run views (the desktop pipeline tab, the remote pipeline page) read and control runs through this. */

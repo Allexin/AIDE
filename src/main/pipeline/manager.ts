@@ -11,6 +11,7 @@ import type { RunVisitInfo } from '../../shared/plan'
 import type { HeadlessRun } from './headless/types'
 import type { AgentRequest } from './engine/runner'
 import { pipelineEvents, type PipelineEventType } from './events'
+import { GitConfigError, describeGitSetup, rootSetup, type GitSetup } from './gitConfig'
 
 /**
  * Owns pipeline runs per project: the machine library, the single active run,
@@ -30,6 +31,11 @@ export interface ManagerEnvironment {
   headlessClis(): string[]
   /** Engine dependencies except `emit`, `onStateChange`, `onTranscript`, `readRole`, which the manager supplies. */
   deps(projectPath: string): Pick<EngineDeps, 'startAgent' | 'runCheck' | 'git' | 'accountPool'>
+  /**
+   * The project's git setup (`resolveGitSetup`); throws `GitConfigError` on an invalid config.
+   * Absent (tests): the project root's repo, as before git modes existed.
+   */
+  gitSetup?(projectPath: string): Promise<GitSetup>
 }
 
 export interface RunSnapshot {
@@ -114,6 +120,25 @@ export class PipelineManager extends EventEmitter {
     return this.library(projectPath).find((e) => e.machine.id === machineId) ?? null
   }
 
+  /** The git setup a run started now would get; throws with the list of problems of an invalid config. */
+  async gitSetup(projectPath: string): Promise<GitSetup> {
+    try {
+      return this.env.gitSetup ? await this.env.gitSetup(projectPath) : rootSetup(projectPath)
+    } catch (err) {
+      if (err instanceof GitConfigError) throw err
+      throw new Error(`Could not resolve the project's git setup: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  /** Project-level checks for pipeline_validate: the resolved git mode in one line, and the problems of an invalid git config. */
+  async projectCheck(projectPath: string): Promise<{ git: string; errors: string[] }> {
+    try {
+      return { git: describeGitSetup(await this.gitSetup(projectPath)), errors: [] }
+    } catch (err) {
+      return { git: 'git: invalid config', errors: err instanceof GitConfigError ? err.problems.map((p) => `aide/config.json: ${p}`) : [err instanceof Error ? err.message : String(err)] }
+    }
+  }
+
   validate(entry: LibraryEntry): ValidationResult {
     return validateMachine(entry.machine, { headlessClis: this.env.headlessClis(), roleExists: (role) => roleExists(entry.machineDir, role) })
   }
@@ -196,9 +221,12 @@ export class PipelineManager extends EventEmitter {
     // The outdated warning was the reason for acceptOutdated; repeating it adds nothing.
     const warnings = validation.warnings.filter((w) => !outdated || !w.startsWith('Written for engine'))
     if (outdated) warnings.push(`Started although "${machineId}" was written for an older pipeline engine (acceptOutdated).`)
+    // Resolved once: a config edit does not change a running run (an invalid config refuses the start with its problems).
+    const git = await this.gitSetup(projectPath)
     const deps = this.env.deps(projectPath)
-    const dirty = await deps.git.status(projectPath).catch(() => [])
+    const dirty = await deps.git.status(git).catch(() => [])
     if (dirty.length) warnings.push(`The working tree has ${dirty.length} uncommitted change(s); they will mix into this run's diff and commits.`)
+    if (git.mode === 'none') warnings.push('The project is not a git repository AIDE uses (no-git mode): run.diff is a note instead of a diff, and a commit step stops the run with an escalation.')
 
     // Checked again: the git call above yields, and the autopilot may have started a step meanwhile.
     const raced = this.active.get(projectPath)
@@ -208,7 +236,7 @@ export class PipelineManager extends EventEmitter {
     // Run ids have a resolution of a second; two runs of a machine in one second must not share a directory.
     let runId = newRunId(machineId)
     for (let n = 2; store.exists(runId); n++) runId = `${newRunId(machineId)}-${n}`
-    const run = PipelineRun.create({ machine: entry.machine, machineDir: entry.machineDir }, params, runId, projectPath, store, this.engineDeps(projectPath, store), { planTask: options.planTask, auto: options.auto, instructions: options.instructions })
+    const run = PipelineRun.create({ machine: entry.machine, machineDir: entry.machineDir }, params, runId, projectPath, store, this.engineDeps(projectPath, store), { planTask: options.planTask, auto: options.auto, instructions: options.instructions, git })
     this.active.set(projectPath, run)
     options.onCreated?.(run.runId)
     this.emit('state', projectPath, this.toSnapshot(projectPath, run))
@@ -333,7 +361,7 @@ export class PipelineManager extends EventEmitter {
     const run = this.require(projectPath, runId)
     if (run.state.status === 'running' || run.state.status === 'pausing') throw new Error('Stop the run before abandoning it.')
     run.abandon(reason)
-    const changes = await this.env.deps(projectPath).git.status(projectPath).catch(() => [])
+    const changes = await this.env.deps(projectPath).git.status(run.state.git ?? rootSetup(projectPath)).catch(() => [])
     return changes.map((c) => `${c.path} (${c.kind})`)
   }
 

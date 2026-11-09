@@ -4,6 +4,7 @@ import type { HeadlessRun, HeadlessRunOptions } from '../headless/types'
 import type { ProcessHandle } from '../processRunner'
 import type { CommitResult, FileChange } from '../git'
 import { checkCommitCoverage } from '../git'
+import { rootSetup, type GitSetup } from '../gitConfig'
 import { clip, type PipelineEventType } from '../events'
 import { inputRef, type AgentInputRecord } from '../../../shared/pipelineMachine'
 import { walkSteps } from '../../../shared/pipelineMachine'
@@ -35,12 +36,18 @@ export interface AgentRequest extends Omit<HeadlessRunOptions, 'env'> {
 export interface EngineDeps {
   startAgent(request: AgentRequest): HeadlessRun
   runCheck(options: { commandLine: string; cwd: string; timeoutMs: number; label: string; onOutput(text: string): void }): ProcessHandle
+  /**
+   * Reads take the run's git setup (`RunState.git`, or the part of it a step works on)
+   * and span its repos with project-relative paths; `headSha` and `commitIndex` run in one repo.
+   */
   git: {
-    workingDiff(cwd: string): Promise<string>
-    stagedDiff(cwd: string): Promise<string>
-    status(cwd: string): Promise<FileChange[]>
+    workingDiff(scope: GitSetup): Promise<string>
+    stagedDiff(scope: GitSetup): Promise<string>
+    status(scope: GitSetup): Promise<FileChange[]>
     headSha(cwd: string): Promise<string | null>
     commitIndex(cwd: string, message: string): Promise<CommitResult>
+    /** Problems with the run's repos (gone, no longer a work-tree top level); checked when a run resumes. */
+    checkRepos?(scope: GitSetup, projectPath: string): Promise<string[]>
   }
   readRole(machineDir: string, rolePath: string): string
   /** Pipeline event for the orchestrator feed and the UI. */
@@ -154,7 +161,7 @@ export class PipelineRun {
     state.amendments ??= []
   }
 
-  static create(stored: StoredMachine, params: Record<string, unknown>, runId: string, projectPath: string, store: RunStore, deps: EngineDeps, plan: { planTask?: PlanTaskLink; auto?: boolean; instructions?: string[] } = {}): PipelineRun {
+  static create(stored: StoredMachine, params: Record<string, unknown>, runId: string, projectPath: string, store: RunStore, deps: EngineDeps, plan: { planTask?: PlanTaskLink; auto?: boolean; instructions?: string[]; git?: GitSetup } = {}): PipelineRun {
     const now = new Date().toISOString()
     const state: RunState = {
       runId,
@@ -176,6 +183,7 @@ export class PipelineRun {
       history: [],
       escalations: [],
       sessions: {},
+      git: plan.git ?? rootSetup(projectPath),
       startCommit: null,
       result: null,
       startedAt: now,
@@ -214,8 +222,17 @@ export class PipelineRun {
     this.clearLimitTimer()
     this.state.limitResumeAt = null
     this.state.limitCli = null
+    if (this.state.history.length > 0 && this.state.current) {
+      // Resuming: the repos the run started with must still be there.
+      const problems = await this.deps.git.checkRepos?.(this.gitSetup(), this.state.projectPath).catch(() => []) ?? []
+      if (problems.length) {
+        this.raiseEngineEscalation(this.state.current, `The run's git repositories changed since it started:\n- ${problems.join('\n- ')}\n\nRestore them and retry, or stop the run.`)
+        return
+      }
+    }
     if (this.state.startCommit === null && this.state.history.length === 0) {
-      this.state.startCommit = await this.deps.git.headSha(this.state.projectPath).catch(() => null)
+      const setup = this.gitSetup()
+      this.state.startCommit = setup.mode === 'git' ? await this.deps.git.headSha(setup.repos[0].abs).catch(() => null) : null
     }
     this.setStatus('running')
     this.loop = this.execute().finally(() => { this.loop = null })
@@ -653,14 +670,19 @@ export class PipelineRun {
     return { params: this.params, outputs: this.state.outputs, run: { id: this.runId, iteration: loop ? this.state.iterations[loop.id] ?? 1 : 1, iterations: { ...this.state.iterations }, ...run } }
   }
 
+  /** The run's git setup; runs stored before it existed worked in the project root's repo. */
+  private gitSetup(): GitSetup {
+    return this.state.git ?? rootSetup(this.state.projectPath)
+  }
+
   /** Compute the `run.*` values an agent step actually references. */
   private async runValues(refs: string[]): Promise<Record<string, unknown>> {
     const wanted = new Set(refs.filter((r) => r.startsWith('run.')).map((r) => r.split('.')[1]))
     const values: Record<string, unknown> = {}
-    const cwd = this.state.projectPath
-    if (wanted.has('diff')) values.diff = await this.deps.git.workingDiff(cwd)
-    if (wanted.has('stagedDiff')) values.stagedDiff = await this.deps.git.stagedDiff(cwd)
-    if (wanted.has('changedFiles')) values.changedFiles = (await this.deps.git.status(cwd)).map((c) => `${c.path} (${c.kind}${c.staged ? ', staged' : ''})`)
+    const setup = this.gitSetup()
+    if (wanted.has('diff')) values.diff = await this.deps.git.workingDiff(setup)
+    if (wanted.has('stagedDiff')) values.stagedDiff = await this.deps.git.stagedDiff(setup)
+    if (wanted.has('changedFiles')) values.changedFiles = (await this.deps.git.status(setup)).map((c) => `${c.path} (${c.kind}${c.staged ? ', staged' : ''})`)
     return values
   }
 
@@ -815,15 +837,20 @@ export class PipelineRun {
     const prep = (this.state.outputs[node.prep.id] ?? {}) as { commitMessage?: string; excluded?: Array<{ path: string; reason: string }> }
     const message = prep.commitMessage ?? ''
     const excluded = prep.excluded ?? []
-    const cwd = this.state.projectPath
-    const coverage = checkCommitCoverage(await this.deps.git.status(cwd), message, excluded.map((e) => e.path))
+    const setup = this.gitSetup()
+    const unsupported = commitUnsupported(id, setup)
+    if (unsupported) return { kind: 'escalate', message: unsupported }
+    // One repo (checked above): coverage and the staged diff are that repo's, paths project-relative.
+    const repo = (setup as Extract<GitSetup, { mode: 'git' }>).repos[0]
+    const cwd = repo.abs
+    const coverage = checkCommitCoverage(await this.deps.git.status(setup), message, excluded.map((e) => e.path))
     if (!coverage.ok) return { kind: 'done', outcome: 'fail', output: { issues: coverage.issues } }
 
     if (node.review === 'agent' && node.reviewer) {
       const reviewer = node.reviewer
       const cli = reviewer.cli ?? this.machine.defaults?.cli
       if (!cli) return { kind: 'escalate', message: `Commit reviewer of "${id}" has no CLI.` }
-      const stagedDiff = await this.deps.git.stagedDiff(cwd)
+      const stagedDiff = await this.deps.git.stagedDiff(setup)
       const prompt = [
         'Review the prepared commit. Check that the index contains no junk (build output, temporary files, unrelated changes), that the excluded files are justified, and that the message describes the change.',
         `## Commit message\n\n${message}`,
@@ -832,7 +859,7 @@ export class PipelineRun {
       ].join('\n\n')
       const handle = this.startAgent(id, visit.visit, 'review', {
         cli,
-        cwd,
+        cwd: this.state.projectPath,
         runDir: this.store.nodeRunDir(this.runId, id, visit.visit),
         prompt,
         systemAppend: buildSystemAppend(this.deps.readRole(this.machineDir, reviewer.role), buildPipelineContext(this.machine, id, this.state, this.params), outputContract('commitReview', BUILTIN_SCHEMAS.commitReview)),
@@ -1114,6 +1141,20 @@ export class PipelineRun {
 /** Where a machine sends a decision; "orchestrator" is the pre-engine-6 name of "agent". */
 function target(to: EscalationTo | undefined): Escalation['to'] {
   return to === 'user' ? 'user' : 'agent'
+}
+
+/**
+ * Why a commit step cannot commit in this setup, or null. A commit step commits in
+ * the project's single repo; skipping commit blocks (no git, commits off) and
+ * naming the repo of a step (several repos) come with later steps of
+ * docs/pipeline-git-modes-spec.md (§3, §4). Until then the run asks instead of
+ * committing where it must not.
+ */
+export function commitUnsupported(id: string, setup: GitSetup): string | null {
+  if (setup.mode !== 'git') return `Commit step "${id}" cannot commit: the project has no git repository AIDE uses (no-git mode). Skipping commit steps in this mode is not supported yet; stop the run, or make the project a git repository and retry.`
+  if (!setup.commits) return `Commit step "${id}" cannot commit: the project does not let AIDE commit ("git.commits": false). Skipping commit steps in this mode is not supported yet; stop the run.`
+  if (setup.repos.length > 1) return `Commit step "${id}" cannot commit: the project has several repositories (${setup.repos.map((r) => r.id).join(', ')}), and choosing the repository of a commit step is not supported yet; stop the run.`
+  return null
 }
 
 /** The commit message with the plan task as a trailer, in the message's trailer block when it ends with one. */

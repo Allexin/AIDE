@@ -33,8 +33,8 @@ const AGENT = {
             required: ['ref'],
             properties: {
               ref: { type: 'string' },
-              include: { type: 'array', items: { type: 'string' }, description: 'Globs over repo-relative paths; only matching files are kept.' },
-              exclude: { type: 'array', items: { type: 'string' }, description: 'Globs over repo-relative paths; matching files are dropped.' }
+              include: { type: 'array', items: { type: 'string' }, description: 'Globs over project-relative paths; only matching files are kept.' },
+              exclude: { type: 'array', items: { type: 'string' }, description: 'Globs over project-relative paths; matching files are dropped.' }
             }
           }
         ]

@@ -196,7 +196,7 @@ AIDE composes the prompt; you only write the role file and the step fields.
   - The `run.*` file refs take path filters, so regenerated or generated files
     do not drown a reviewer: `{"ref": "run.diff", "exclude":
     ["Source/Scenarios/**/*.txt"]}` or `"include": ["src/**"]`. Globs match
-    repo-relative paths: `*` and `?` within a segment, `**` across segments,
+    project-relative paths: `*` and `?` within a segment, `**` across segments,
     `{a,b}` alternatives, a trailing `/` for a whole directory; a pattern
     without `/` matches a file name at any depth. The prompt says how many
     files the filter kept.
@@ -207,6 +207,17 @@ AIDE composes the prompt; you only write the role file and the step fields.
     run directory).
   - An agent with a shell still sees every file through `git status`; filter
     the inputs and say in the role which files are generated.
+  - Which repositories the `run.*` file refs read is the project's choice
+    (`"git"` in `aide/config.json`), not the machine's. By default it is the
+    repository the project root is in. A project whose repositories live in
+    subfolders lists them (`"git": {"repos": {"web": "frontend", "api":
+    "backend"}}`): the refs then cover every listed repository, in that order,
+    with project-relative paths (`frontend/src/a.ts`), and files outside them
+    are not in it. A project without git (no repository at the root and no
+    config, or `"git": false`) gets a note instead of `run.diff`, and empty
+    `run.stagedDiff` / `run.changedFiles`; its agents must report the files
+    they changed. Commit steps commit only in a project with a single
+    repository; elsewhere they stop the run with an escalation for now.
 - **Feedback** of the loops it is in, from the second iteration on (§2).
 - **Output contract**: the schema named by `output`. Built-ins:
   - `implementerReport`: `status` (`done` | `blocked` | `plan_wrong`), `summary`, `docsChanged`, `pipelineIssues[]`

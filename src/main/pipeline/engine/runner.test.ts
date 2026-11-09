@@ -2,7 +2,8 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { PipelineRun, UNAVAILABLE_RETRY_MS, type AgentRequest, type EngineDeps } from './runner'
+import { PipelineRun, UNAVAILABLE_RETRY_MS, commitUnsupported, type AgentRequest, type EngineDeps } from './runner'
+import { rootSetup, type GitSetup } from '../gitConfig'
 import { RunStore } from './runStore'
 import { isSignificant } from '../events'
 import { validateMachine } from './validate'
@@ -816,6 +817,68 @@ describe('PipelineRun with an unavailable CLI', () => {
     expect(visits).toHaveLength(1)
     expect(visits[0]).toMatchObject({ visit: 1, outcome: 'ok', error: null, retries: 2 })
     expect(visits[0].pendingRetry).toBeUndefined()
+  })
+})
+
+describe('the run git setup', () => {
+  const engineDeps = (run: PipelineRun): EngineDeps => (run as unknown as { deps: EngineDeps }).deps
+
+  it('reads take the setup stored at start; the commit runs in the root repo', async () => {
+    const h = harness({ agent: happy })
+    expect(h.state().git).toEqual(rootSetup(root))
+    const deps = engineDeps(h.run)
+    const scopes: GitSetup[] = []
+    const cwds: string[] = []
+    const { workingDiff, status, commitIndex } = deps.git
+    deps.git.workingDiff = async (scope) => { scopes.push(scope); return workingDiff(scope) }
+    deps.git.status = async (scope) => { scopes.push(scope); return status(scope) }
+    deps.git.commitIndex = async (cwd, message) => { cwds.push(cwd); return commitIndex(cwd, message) }
+    await h.run.run()
+    expect(h.state().result).toBe('success')
+    expect(scopes.length).toBeGreaterThan(0)
+    expect(scopes.every((s) => s === h.state().git)).toBe(true)
+    expect(cwds).toEqual([root])
+  })
+
+  it('in no-git mode the commit step escalates instead of committing', async () => {
+    const h = harness({ agent: happy })
+    h.state().git = { mode: 'none' }
+    await h.run.run()
+    expect(h.state().startCommit).toBeNull()
+    expect(h.run.pendingEscalation()).toMatchObject({ node: 'commit', kind: 'engine', message: expect.stringContaining('no-git mode') })
+    expect(h.commits).toEqual([])
+  })
+
+  it('a resumed run escalates when its repos are gone; retry checks again', async () => {
+    let first = true
+    const h = harness({ agent: (req) => { if (req.label.endsWith(':generate') && first) { first = false; return 'hang' } return happy(req) } })
+    const running = h.run.run()
+    await waitFor(() => h.requests.length === 1)
+    await h.run.stop()
+    await running
+    expect(h.state().status).toBe('stopped')
+    let problems = ['Repo "web": "frontend" does not exist.']
+    const checked: GitSetup[] = []
+    engineDeps(h.run).git.checkRepos = async (scope) => { checked.push(scope); return problems }
+    await h.run.resume()
+    const escalation = h.run.pendingEscalation()!
+    expect(escalation).toMatchObject({ node: 'generate', kind: 'engine' })
+    expect(escalation.message).toBe('The run\'s git repositories changed since it started:\n- Repo "web": "frontend" does not exist.\n\nRestore them and retry, or stop the run.')
+    expect(checked).toEqual([h.state().git])
+    problems = []
+    await h.run.answer(escalation.id, { action: 'retry', text: 'restored', by: 'strategist' })
+    await waitFor(() => h.run.isFinal())
+    expect(h.state().result).toBe('success')
+  })
+})
+
+describe('commitUnsupported', () => {
+  it('lets a single repo with commits on commit, and names why the others cannot', () => {
+    expect(commitUnsupported('commit', rootSetup('/p'))).toBeNull()
+    expect(commitUnsupported('commit', { mode: 'git', repos: [{ id: 'web', path: 'frontend', abs: '/p/frontend' }], commits: true })).toBeNull()
+    expect(commitUnsupported('commit', { mode: 'none' })).toMatch(/^Commit step "commit" cannot commit: .*no-git mode/)
+    expect(commitUnsupported('commit', { mode: 'git', repos: [{ id: 'root', path: '.', abs: '/p' }], commits: false })).toContain('"git.commits": false')
+    expect(commitUnsupported('commit', { mode: 'git', repos: [{ id: 'web', path: 'frontend', abs: '' }, { id: 'api', path: 'backend', abs: '' }], commits: true })).toContain('several repositories (web, api)')
   })
 })
 

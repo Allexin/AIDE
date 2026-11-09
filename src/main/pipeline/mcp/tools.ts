@@ -204,14 +204,15 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     },
     {
       name: 'pipeline_validate',
-      description: 'Validate machine files (all, or one by id): step tree, ids, references, role files, loop bounds and targets, sessions. Fix every error before starting a run.',
+      description: 'Validate machine files (all, or one by id): step tree, ids, references, role files, loop bounds and targets, sessions. Also checks the project: its git setup (the "git" setting of aide/config.json). Fix every error before starting a run.',
       inputSchema: OBJECT({ machineId: { type: 'string' } }),
-      handler: (args, { projectPath }) => {
+      handler: async (args, { projectPath }) => {
         const { machines, errors } = manager().listMachines(projectPath)
         const selected = typeof args.machineId === 'string' ? machines.filter((m) => m.id === args.machineId) : machines
         if (typeof args.machineId === 'string' && selected.length === 0) return fail(`Unknown machine "${args.machineId}".`)
-        const result = { machines: selected.map((m) => ({ id: m.id, file: m.file, errors: m.validation.errors, warnings: m.validation.warnings })), unreadableFiles: errors }
-        const allValid = result.machines.every((m) => m.errors.length === 0) && errors.length === 0
+        const project = await manager().projectCheck(projectPath)
+        const result = { project, machines: selected.map((m) => ({ id: m.id, file: m.file, errors: m.validation.errors, warnings: m.validation.warnings })), unreadableFiles: errors }
+        const allValid = result.machines.every((m) => m.errors.length === 0) && errors.length === 0 && project.errors.length === 0
         return data(result, allValid ? 'All valid.' : 'Problems found.')
       }
     },

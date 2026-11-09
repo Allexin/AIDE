@@ -84,9 +84,9 @@ export type EscalationTo = 'agent' | 'user' | 'orchestrator'
 /** An input with a path filter; filters apply to `run.diff`, `run.stagedDiff` and `run.changedFiles`. */
 export interface AgentInput {
   ref: string
-  /** Globs over repo-relative paths: only matching files are kept. */
+  /** Globs over project-relative paths: only matching files are kept. */
   include?: string[]
-  /** Globs over repo-relative paths: matching files are dropped. */
+  /** Globs over project-relative paths: matching files are dropped. */
   exclude?: string[]
 }
 
