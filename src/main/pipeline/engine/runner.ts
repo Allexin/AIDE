@@ -4,7 +4,9 @@ import type { HeadlessRun, HeadlessRunOptions } from '../headless/types'
 import type { ProcessHandle } from '../processRunner'
 import type { CommitResult, FileChange, IndexCommit } from '../git'
 import { checkCommitCoverage } from '../git'
-import { resolveCommitRepos, rootSetup, type GitSetup } from '../gitConfig'
+import { commitSkipReason, resolveCommitRepos, rootSetup, type GitSetup } from '../gitConfig'
+import { unavailableDiff, type ShadowStore, type ShadowTarget } from '../shadow'
+import { logEvent } from '../../diagnostics'
 import { clip, type PipelineEventType } from '../events'
 import { inputRef, type AgentInputRecord } from '../../../shared/pipelineMachine'
 import { walkSteps } from '../../../shared/pipelineMachine'
@@ -49,6 +51,8 @@ export interface EngineDeps {
     /** Problems with the run's repos (gone, no longer a work-tree top level); checked when a run resumes. */
     checkRepos?(scope: GitSetup, projectPath: string): Promise<string[]>
   }
+  /** Snapshots for runs without commits (no git, `commits: false`). Absent: such a run has the "diff unavailable" note. */
+  shadow?: Pick<ShadowStore, 'snapshot' | 'diff' | 'changes' | 'remove'>
   readRole(machineDir: string, rolePath: string): string
   /** Pipeline event for the orchestrator feed and the UI. */
   emit(runId: string, type: PipelineEventType, data: Record<string, unknown>): void
@@ -475,12 +479,15 @@ export class PipelineRun {
   // ── Loop ──────────────────────────────────────────────────────────────────
 
   private async execute(): Promise<void> {
+    if (!(await this.ensureBaseline())) return
     while (this.state.status === 'running' || this.state.status === 'pausing') {
       const id = this.state.current
       if (!id) { this.finish('success', null); return }
       const leaf = this.tree.leaf(id)
       if (!leaf) { this.finish('failure', `unknown step "${id}"`); return }
       const step = leaf.step
+      // A run that already stood on a commit prep when commits became skipped (a stored run) goes on to the commit action.
+      if (commitSkipReason(this.gitSetup()) && leaf.parent.kind === 'commit' && step.type === 'agent') { this.state.current = leaf.parent.id; continue }
       const visits = (this.state.visits[id] ?? 0) + 1
       this.state.visits[id] = visits
 
@@ -597,6 +604,53 @@ export class PipelineRun {
     }
   }
 
+  /**
+   * The shadow baseline, before the first step: changes made before the run stay
+   * out of its diff. Returns false when a stop or pause came in meanwhile; the run
+   * then holds before its first step.
+   */
+  private async ensureBaseline(): Promise<boolean> {
+    if (!commitSkipReason(this.gitSetup()) || this.state.shadow || this.state.shadowDisabled) return true
+    await this.takeShadow('baseline')
+    if (this.interruptRequested) {
+      this.interruptRequested = false
+      this.setStatus('stopped')
+      if (!this.amending) this.deps.emit(this.runId, 'run_stopped', { node: this.state.current, summary: 'run stopped before its first step; resume with pipeline_resume' })
+      return false
+    }
+    if (this.state.status === 'pausing') {
+      this.setStatus('paused')
+      this.deps.emit(this.runId, 'run_paused', { next: this.state.current, summary: `run paused before ${this.state.current}; resume with pipeline_resume` })
+      return false
+    }
+    return true
+  }
+
+  private shadowTarget(): ShadowTarget {
+    return { runId: this.runId, projectPath: this.state.projectPath, setup: this.gitSetup() }
+  }
+
+  /** Records the work tree as the checkpoint `run.diff` compares with; returns its sha, null with the shadow off. */
+  private async takeShadow(label: string): Promise<string | null> {
+    if (this.state.shadowDisabled) return null
+    try {
+      if (!this.deps.shadow) throw new Error('shadow snapshots are not available')
+      this.state.shadow = await this.deps.shadow.snapshot(this.shadowTarget(), label)
+      this.save()
+      return Object.values(this.state.shadow)[0] ?? null
+    } catch (err) {
+      this.disableShadow(err)
+      return null
+    }
+  }
+
+  /** The shadow failed or hit a limit: the run goes on without a diff. */
+  private disableShadow(err: unknown): void {
+    this.state.shadowDisabled = (err instanceof Error ? err.message : String(err)).split('\n')[0]
+    this.save()
+    logEvent('pipeline.shadow_disabled', { runId: this.runId, reason: this.state.shadowDisabled }, 'warn')
+  }
+
   /** Where control goes after a leaf completed: an escalation, a loop repeat, or the next step. */
   private afterLeaf(leaf: TreeLeaf, outcome: Outcome, output: unknown): void {
     const step = leaf.step
@@ -675,7 +729,8 @@ export class PipelineRun {
         delete this.state.bonus[block.id]
         this.clearNested(block)
       },
-      evaluate: (condition, block) => evaluateCondition(condition, this.scope({}, block))
+      evaluate: (condition, block) => evaluateCondition(condition, this.scope({}, block)),
+      skipCommits: () => commitSkipReason(this.gitSetup()) !== null
     }
   }
 
@@ -700,10 +755,42 @@ export class PipelineRun {
     const wanted = new Set(refs.filter((r) => r.startsWith('run.')).map((r) => r.split('.')[1]))
     const values: Record<string, unknown> = {}
     const setup = this.gitSetup()
+    if (commitSkipReason(setup)) {
+      if (wanted.has('diff')) values.diff = await this.shadowDiff()
+      if (wanted.has('stagedDiff')) values.stagedDiff = ''
+      if (wanted.has('changedFiles')) values.changedFiles = (await this.shadowChanges()).map((c) => `${c.path} (${c.kind}${c.staged ? ', staged' : ''})`)
+      return values
+    }
     if (wanted.has('diff')) values.diff = await this.deps.git.workingDiff(setup)
     if (wanted.has('stagedDiff')) values.stagedDiff = await this.deps.git.stagedDiff(setup)
     if (wanted.has('changedFiles')) values.changedFiles = (await this.deps.git.status(setup)).map((c) => `${c.path} (${c.kind}${c.staged ? ', staged' : ''})`)
     return values
+  }
+
+  /** The changes since the last checkpoint, or the note when the shadow is off. */
+  private async shadowDiff(): Promise<string> {
+    if (!this.state.shadowDisabled) {
+      try {
+        if (!this.deps.shadow || !this.state.shadow) throw new Error('shadow snapshots are not available')
+        return await this.deps.shadow.diff(this.shadowTarget(), this.state.shadow)
+      } catch (err) {
+        this.disableShadow(err)
+      }
+    }
+    return unavailableDiff(this.state.shadowDisabled ?? 'unknown reason')
+  }
+
+  /** The files `shadowDiff` shows; with the shadow off, what git can tell (nothing in a project without git). */
+  private async shadowChanges(): Promise<FileChange[]> {
+    if (!this.state.shadowDisabled) {
+      try {
+        if (!this.deps.shadow || !this.state.shadow) throw new Error('shadow snapshots are not available')
+        return await this.deps.shadow.changes(this.shadowTarget(), this.state.shadow)
+      } catch (err) {
+        this.disableShadow(err)
+      }
+    }
+    return this.deps.git.status(this.gitSetup()).catch(() => [])
   }
 
   // ── Step kinds ────────────────────────────────────────────────────────────
@@ -858,8 +945,8 @@ export class PipelineRun {
     const message = prep.commitMessage ?? ''
     const excluded = prep.excluded ?? []
     const setup = this.gitSetup()
-    const unsupported = commitUnsupported(id, setup)
-    if (unsupported) return { kind: 'escalate', message: unsupported }
+    const skip = commitSkipReason(setup)
+    if (skip) return this.skipCommit(id, skip)
     const { repos } = setup as Extract<GitSetup, { mode: 'git' }>
     const repo = repos.find((r) => r.id === this.state.commitRepos?.[id])
     if (!repo) return { kind: 'escalate', message: `Commit step "${id}" has no repository: the project has several (${repos.map((r) => r.id).join(', ')}) and the step names none. Add "repo" to the step and reload the machine, or stop the run.` }
@@ -922,6 +1009,18 @@ export class PipelineRun {
     const several = repos.length > 1
     this.deps.emit(this.runId, 'commit_done', { node: id, sha: commit.sha, ...(several ? { repo: repo.id } : {}), summary: `committed ${several ? `in ${repo.id} ` : ''}${commit.sha.slice(0, 10)} ${commit.message.split('\n')[0]} (${commit.files.length} files)` })
     return { kind: 'done', outcome: 'ok', output: { ...commit, issues: [] } }
+  }
+
+  /**
+   * A commit block where AIDE does not commit (spec §4): the task of the last one
+   * is marked done as usual, and a checkpoint keeps this work out of the next `run.diff`.
+   */
+  private async skipCommit(id: string, reason: 'commits disabled' | 'no git'): Promise<NodeResult> {
+    const link = this.state.planTask
+    if (link && this.isLastCommit(id)) await this.deps.planCommit?.(link, this.nonBlockingFindings())
+    const checkpoint = await this.takeShadow(`checkpoint ${id}`)
+    this.deps.emit(this.runId, 'commit_skipped', { node: id, reason, checkpoint, summary: 'commit skipped: the project does not let AIDE commit' })
+    return { kind: 'done', outcome: 'ok', output: { skipped: reason, checkpoint, issues: [] } }
   }
 
   /** Whether no commit step follows this one in the machine. */
@@ -1062,6 +1161,14 @@ export class PipelineRun {
       // Everything the orchestrator needs to update the plan; pipeline_report is only for more detail.
       report: compactReport(report)
     })
+    // The run is over: nothing compares with its snapshots any more (a stopped or waiting run keeps them).
+    if (commitSkipReason(this.gitSetup())) {
+      try {
+        await this.deps.shadow?.remove(this.runId)
+      } catch (err) {
+        logEvent('pipeline.shadow_remove_failed', { runId: this.runId, message: err instanceof Error ? err.message : String(err) }, 'warn')
+      }
+    }
   }
 
   buildReport(reason: string | null = this.endReason, uncommitted?: string[]): RunReport & { reason: string | null } {
@@ -1175,17 +1282,6 @@ export class PipelineRun {
 /** Where a machine sends a decision; "orchestrator" is the pre-engine-6 name of "agent". */
 function target(to: EscalationTo | undefined): Escalation['to'] {
   return to === 'user' ? 'user' : 'agent'
-}
-
-/**
- * Why a commit step cannot commit in this setup, or null. Skipping commit blocks
- * (no git, commits off) comes with a later step of docs/pipeline-git-modes-spec.md
- * (§4). Until then the run asks instead of committing where it must not.
- */
-export function commitUnsupported(id: string, setup: GitSetup): string | null {
-  if (setup.mode !== 'git') return `Commit step "${id}" cannot commit: the project has no git repository AIDE uses (no-git mode). Skipping commit steps in this mode is not supported yet; stop the run, or make the project a git repository and retry.`
-  if (!setup.commits) return `Commit step "${id}" cannot commit: the project does not let AIDE commit ("git.commits": false). Skipping commit steps in this mode is not supported yet; stop the run.`
-  return null
 }
 
 /** The commit message with the plan task as a trailer, in the message's trailer block when it ends with one. */

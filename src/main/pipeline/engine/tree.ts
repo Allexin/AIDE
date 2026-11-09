@@ -56,6 +56,8 @@ export interface DescendContext {
   enterLoop(block: TreeBlock): void
   /** Evaluate the condition of an `if` block (`run.iteration` is that block's innermost loop). */
   evaluate(condition: string, block: TreeBlock): boolean
+  /** Whether commit blocks are skipped: entering one goes straight to its commit action, without using its loop counter. */
+  skipCommits?(): boolean
 }
 
 export class MachineTree {
@@ -169,6 +171,7 @@ export class MachineTree {
     for (let i = from; i < nodes.length; i++) {
       const node = nodes[i]
       if (node.kind === 'leaf') return node.id
+      if (node.kind === 'commit' && ctx.skipCommits?.()) return node.lists[0].at(-1)!.id
       if (node.kind === 'loop' || node.kind === 'commit') ctx.enterLoop(node)
       if (node.kind === 'if') {
         const step = node.step as Extract<Step, { type: 'if' }>

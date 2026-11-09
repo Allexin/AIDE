@@ -21,6 +21,7 @@ import { failedRun } from './headless/common'
 import { killAllProcessTreesSync, runShellCommand } from './processRunner'
 import { commitIndex, commitsSince, headSha, stagedDiff, status, workingDiff } from './git'
 import { checkRepos, resolveGitSetup } from './gitConfig'
+import { ShadowStore } from './shadow'
 import { PlanService } from './plan/planService'
 import { tabCacheTtl } from './promptCache'
 import { smokeTestMachine } from './smoke'
@@ -41,7 +42,7 @@ export const pipelineManager = new PipelineManager({
     { dir: getProjectUserPath(projectPath, 'pipelines'), source: 'personal' }
   ],
   headlessClis: () => getRegisteredTools().filter((tool) => tool.headless).map((tool) => tool.id),
-  deps: () => ({
+  deps: (projectPath) => ({
     startAgent: ({ cli, ...options }) => {
       const tool = getToolById(cli)
       if (!tool) return failedRun('not_installed', `CLI "${cli}" is not registered in AIDE`)
@@ -54,6 +55,7 @@ export const pipelineManager = new PipelineManager({
     runCheck: ({ commandLine, cwd, timeoutMs, label, onOutput }) =>
       runShellCommand({ commandLine, cwd, timeoutMs, label, onStdoutLine: (line) => onOutput(line + '\n'), onStderr: onOutput }),
     git: { workingDiff, stagedDiff, status, headSha, commitIndex, checkRepos },
+    shadow: new ShadowStore(getProjectUserPath(projectPath, 'shadow')),
     accountPool: poolHandles
   }),
   gitSetup: (projectPath) => resolveGitSetup(projectPath)

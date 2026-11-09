@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join, resolve } from 'path'
 import { tmpdir } from 'os'
 import { PipelineManager, type ManagerEnvironment } from './manager'
@@ -11,6 +11,7 @@ import type { MachineDefinition } from './engine/types'
 import type { HeadlessResult } from './headless/types'
 import { NO_GIT_DIFF, commitIndex, git, headSha, parsePorcelain, stagedDiff, status, workingDiff } from './git'
 import { resolveGitSetup } from './gitConfig'
+import { ShadowStore } from './shadow'
 import { orchestrators } from './orchestrators'
 import { pipelineEvents } from './events'
 import { ENGINE_VERSION } from './engine/compat'
@@ -289,7 +290,7 @@ describe('PipelineManager through the MCP tools', () => {
 
 describe('the git setup of a run', () => {
   /** The test environment with real git reads and the real config resolution; records the agents' prompts. */
-  function gitEnvironment(agent: (label: string) => Partial<HeadlessResult>, prompts: Map<string, string>): ManagerEnvironment {
+  function gitEnvironment(agent: (label: string) => Partial<HeadlessResult>, prompts: Map<string, string>, work?: (label: string, cwd: string) => void): ManagerEnvironment {
     const env = environment(agent)
     const deps = env.deps
     return {
@@ -298,8 +299,9 @@ describe('the git setup of a run', () => {
         const base = deps(p)
         return {
           ...base,
-          startAgent: (request) => { prompts.set(request.label, request.prompt); return base.startAgent(request) },
-          git: { workingDiff, stagedDiff, status, headSha, commitIndex }
+          startAgent: (request) => { work?.(request.label, request.cwd); prompts.set(request.label, request.prompt); return base.startAgent(request) },
+          git: { workingDiff, stagedDiff, status, headSha, commitIndex },
+          shadow: new ShadowStore(join(p, '.aide', 'users', 'u', 'shadow'))
         }
       },
       gitSetup: (p) => resolveGitSetup(p)
@@ -335,22 +337,77 @@ describe('the git setup of a run', () => {
     expect(validated.data?.project).toMatchObject({ git: 'git: invalid config', errors: expect.arrayContaining(['aide/config.json: git.repos.api: "backend" does not exist.']) })
   })
 
-  it('a project whose root is not a repo starts a run; run.diff is a note and the commit step asks', async () => {
+  /** Starts a run and resolves with its run id once it has ended (or asks for a decision). */
+  async function runToEnd(manager: PipelineManager, dir: string, params: Record<string, unknown>): Promise<{ runId: string; end: string; warnings: string[] }> {
+    const ended = new Promise<string>((resolve) => manager.on('event', (p: string, _r, type: string) => { if (p === dir && ['run_finished', 'run_failed', 'escalation'].includes(type)) resolve(type) }))
+    const { runId, warnings } = await manager.start(dir, 'code-feature', params)
+    const end = await ended
+    await manager.activeRun(dir)?.abandon('test').catch(() => {})
+    return { runId, end, warnings }
+  }
+
+  /** The implementer of these runs writes src/new.ts. */
+  const implementWrites = (label: string, cwd: string): void => {
+    if (!label.endsWith(':implement')) return
+    mkdirSync(join(cwd, 'src'), { recursive: true })
+    writeFileSync(join(cwd, 'src', 'new.ts'), 'export const x = 1\n')
+  }
+
+  it('a project whose root is not a repo: run.diff shows the run\'s changes from the shadow baseline, commit blocks are skipped', async () => {
     const dir = project('g2', guideExample())
+    writeFileSync(join(dir, 'before.txt'), 'changed before the run\n')
     const prompts = new Map<string, string>()
-    const manager = new PipelineManager(gitEnvironment(happy, prompts))
-    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', manager })))
-    const started = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] } })
-    expect(started.isError).toBeUndefined()
-    expect(started.text).toContain('no-git mode')
-    const runId = /Run (\S+) started/.exec(started.text)![1]
-    expect(manager.activeRun(dir)?.state.git).toEqual({ mode: 'none' })
-    const event = await call(server, dir, 'pipeline_wait', { runId, timeoutSec: 5 })
-    expect(event.data).toMatchObject({ type: 'escalation', data: { node: 'commit', kind: 'engine' } })
-    expect(String((event.data?.data as Record<string, unknown>).message)).toContain('no-git mode')
-    expect(manager.runState(dir)?.history.map((h) => h.node)).toEqual(['implement', 'checks', 'review', 'commitPrep', 'commit'])
-    expect(prompts.get('codex:review')).toContain(NO_GIT_DIFF.trim())
-    expect((await call(server, dir, 'pipeline_validate')).data?.project).toMatchObject({ git: expect.stringMatching(/^git: none/), errors: [] })
+    const manager = new PipelineManager(gitEnvironment(happy, prompts, implementWrites))
+    const { runId, end, warnings } = await runToEnd(manager, dir, { taskSpec: 'Y', acceptance: [] })
+    expect(warnings.join('\n')).toContain('no-git mode')
+    expect(end).toBe('run_finished')
+    const state = manager.runState(dir, runId)!
+    expect(state.git).toEqual({ mode: 'none' })
+    expect(state.history.map((h) => h.node)).toEqual(['implement', 'checks', 'review', 'commit'])
+    expect(state.outputs.commit).toMatchObject({ skipped: 'no git', checkpoint: expect.stringMatching(/^[0-9a-f]{40}$/), issues: [] })
+    const review = prompts.get('codex:review')!
+    expect(review).toContain('diff --git a/src/new.ts b/src/new.ts')
+    expect(review).not.toContain('before.txt')
+    expect(review).not.toContain(NO_GIT_DIFF.trim())
+    expect(prompts.has('claude-code:commitPrep')).toBe(false)
+    // The shadow goes with the run; the project gets no .git.
+    expect(existsSync(join(dir, '.aide', 'users', 'u', 'shadow', runId))).toBe(false)
+    expect(existsSync(join(dir, '.git'))).toBe(false)
+    expect((await call(new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', manager }))), dir, 'pipeline_validate')).data?.project).toMatchObject({ git: expect.stringMatching(/^git: none/), errors: [] })
+  })
+
+  it('git.commits false: no prep agent, no commit, no dirty-tree warning; changes before the run stay out of run.diff', async () => {
+    const dir = project('g8', guideExample())
+    writeFileSync(join(dir, 'a.ts'), 'one\n')
+    await initRepo(dir, 'b.ts')
+    writeFileSync(join(dir, 'aide', 'config.json'), JSON.stringify({ git: { commits: false } }))
+    writeFileSync(join(dir, 'a.ts'), 'changed before the run\n')
+    const head = (await git(dir, ['rev-parse', 'HEAD'])).stdout
+    const statusBefore = (await git(dir, ['status', '--porcelain'])).stdout
+    const prompts = new Map<string, string>()
+    const manager = new PipelineManager(gitEnvironment(happy, prompts, implementWrites))
+    const { runId, end, warnings } = await runToEnd(manager, dir, { taskSpec: 'Y', acceptance: [] })
+    expect(end).toBe('run_finished')
+    expect(warnings.join('\n')).not.toContain('uncommitted change')
+    expect(prompts.has('claude-code:commitPrep')).toBe(false)
+    expect(manager.runState(dir, runId)!.outputs.commit).toMatchObject({ skipped: 'commits disabled' })
+    const review = prompts.get('codex:review')!
+    expect(review).toContain('diff --git a/src/new.ts b/src/new.ts')
+    expect(review).not.toContain('a.ts')
+    expect((await git(dir, ['rev-parse', 'HEAD'])).stdout).toBe(head)
+    // The repo sees the run's work and AIDE's own folder (runs, shadow), nothing else changed.
+    const statusAfter = (await git(dir, ['status', '--porcelain'])).stdout.split('\n').filter((line) => line !== '?? .aide/')
+    expect(statusAfter.join('\n')).toBe(statusBefore + '?? src/\n')
+    expect(existsSync(join(dir, '.aide', 'users', 'u', 'shadow', runId))).toBe(false)
+  })
+
+  it('opening a project deletes the shadow dirs of runs that are not active', async () => {
+    const dir = project('g9', guideExample())
+    const leftover = join(dir, '.aide', 'users', 'u', 'shadow', 'gone-run', 'project.git')
+    mkdirSync(leftover, { recursive: true })
+    const manager = new PipelineManager(gitEnvironment(happy, new Map()))
+    manager.recover(dir)
+    await vi.waitFor(() => expect(existsSync(join(dir, '.aide', 'users', 'u', 'shadow', 'gone-run'))).toBe(false))
   })
 
   /** The guide's example with a `repo` on its commit step (and a `repo` param when it is a template). */

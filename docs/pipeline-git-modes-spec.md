@@ -1,11 +1,37 @@
 # Pipeline git modes: repos in subfolders, no commits, no git
 
-Status: steps 1–2 of §10 implemented (2026-11-09): `gitConfig.ts`, repo-aware
+Status: steps 1–3 of §10 implemented (2026-11-09): `gitConfig.ts`, repo-aware
 reads, `RunState.git`, the resume re-check, project errors in
 `pipeline_validate`; the commit step's `repo`, `RunState.commitRepos`, the
-report's `uncommitted`. Until step 3, a commit step escalates instead of
-committing in no-git mode or with `commits: false`; no-git reads give a note
-(`NO_GIT_DIFF`) instead of a shadow diff. Steps 3–4 are not implemented.
+report's `uncommitted`; the shadow snapshot (`shadow.ts`) and skipped commit
+blocks. Step 4 (state migration, UI labels, the rest of the guide) is not
+implemented.
+
+Implementation notes for step 3:
+- `ShadowStore` (`shadow.ts`) lives in `.aide/users/<user>/shadow/<runId>/`;
+  the runner takes the baseline before the first step (`RunState.shadow`, sha per
+  scope) and a checkpoint at each skipped commit block. In no-commit mode with a
+  root that is not a repo, the extra scope covering non-repo files has id
+  `project` (`project~` if a repo is called `project`).
+- The private git dir is bare, created with an empty template; commands add
+  `core.hooksPath` to an empty folder, `commit.gpgsign=false` and a fixed
+  identity, so the user's config cannot reach private commits. Embedded
+  repositories that `ls-files` lists as `dir/` are left out of `add`.
+- Big files (over 256 KB) are never added; their sizes at the last snapshot are
+  kept in `<scope>.git/aide-big-files.json`, and the diff shows a stub for one
+  that appeared, changed size or disappeared.
+- A shadow failure (limits, timeout, no git binary, any git error) sets
+  `RunState.shadowDisabled` to the reason; `run.diff` is then
+  `unavailableDiff(reason)` for the rest of the run and `run.changedFiles` falls
+  back to git status (empty without git).
+- Skipping: `DescendContext.skipCommits` makes the tree enter a commit block at
+  its commit action (no `enterLoop`, so no loop counter); the runner also moves a
+  stored run that stands on a prep step to the action. `commitSkipReason(setup)`
+  (`gitConfig.ts`) is the single test of the mode.
+- The run removes its shadow dir after its end event; `PipelineManager.recover`
+  (project open) removes the dirs of every run that is not the active one.
+- `pipeline.shadow_disabled` and `pipeline.shadow_remove_failed` are the
+  diagnostics events.
 
 Implementation notes for step 2:
 - `resolveCommitRepos` (`gitConfig.ts`) runs at start, and again on

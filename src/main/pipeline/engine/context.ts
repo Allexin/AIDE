@@ -1,5 +1,6 @@
 import type { AgentStep, MachineDefinition, Step } from '../../../shared/pipelineMachine'
 import type { LoopFeedback, RunState } from './types'
+import { commitSkipReason } from '../gitConfig'
 import { evaluateCondition, parseCondition, renderTemplate, resolveRef, type Scope } from './expressions'
 import { renderInputs } from './inputs'
 import { MachineTree, blockLimit, blockName, type LeafStep, type TreeBlock, type TreeNode } from './tree'
@@ -111,7 +112,10 @@ function outline(tree: MachineTree, current: string, state: RunState, params: Re
       }
       const step = node.step!
       const iteration = enclosing.has(node.id) ? state.iterations[node.id] : undefined
-      if (node.kind === 'loop' || node.kind === 'commit') {
+      const skip = node.kind === 'commit' ? commitSkipReason(state.git) : null
+      if (skip) {
+        lines.push(`${pad}- commit ${node.id} (skipped: ${skip})`)
+      } else if (node.kind === 'loop' || node.kind === 'commit') {
         const name = node.kind === 'loop' && blockName(node) !== node.id ? ` "${blockName(node)}"` : ''
         const limit = blockLimit(node) + (state.bonus?.[node.id] ?? 0)
         const what = node.kind === 'commit' ? `commit ${node.id} (up to ${limit} attempts)` : `loop ${node.id}${name} (repeats until a pass completes, at most ${limit} iterations)`
@@ -150,6 +154,9 @@ export function buildPipelineContext(machine: MachineDefinition, current: string
   // Params changed by an answer can rule out the branch the run is already in: show all branches then.
   if (skippedLeaves(tree, params).has(current)) params = undefined
   const skipped = skippedLeaves(tree, params)
+  const commitsSkipped = commitSkipReason(state.git) !== null
+  // A skipped commit block has no steps: nothing in it comes "next", and nobody prepares a commit.
+  if (commitsSkipped) for (const block of tree.blocks.values()) if (block.kind === 'commit') for (const id of tree.leavesIn(block)) skipped.add(id)
   const lines: string[] = []
   lines.push(`You are one step of the AIDE pipeline "${machine.name}". AIDE runs the steps top to bottom; each step is done by its own performer. Loops start over when a step inside asks for another iteration. The pipeline:`)
   lines.push(...outline(tree, current, state, params, skipped))
@@ -170,7 +177,8 @@ export function buildPipelineContext(machine: MachineDefinition, current: string
   if (next) lines.push(`- Next in order: ${next} — ${stepSummary(tree.leaves.get(next)!.step)}.`)
   else lines.push('- You are the last step; the run ends after you.')
   if (checks.length) lines.push(`- AIDE itself runs these checks later: ${checks.map((c) => `\`${c.command}\``).join(', ')}. Do not run them to verify your finished work: if they fail, the failure output comes back to the steps that must fix it. While you work, building and running the tests you add or change is fine; run a whole check yourself only when your task or a decision explicitly asks for it.`)
-  if (isCommitPrep) lines.push(...commitPrepLines(leaf.parent.id, state))
+  if (commitsSkipped) lines.push('- This project does not let AIDE commit: do not stage or commit; leave your changes in the working tree.')
+  else if (isCommitPrep) lines.push(...commitPrepLines(leaf.parent.id, state))
   else if (commitLater) lines.push('- Staging and committing happen in a later step. Do not stage or commit.')
   // Facts about the machine and the engine only. How an agent should work (finish
   // everything now, plan increments, …) belongs in its role file: AIDE does not

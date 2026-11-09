@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { git } from './git'
-import { GitConfigError, checkRepos, describeGitSetup, normalizeRepoPath, resolveCommitRepos, resolveGitSetup, rootSetup, type GitSetup } from './gitConfig'
+import { GitConfigError, checkRepos, commitSkipReason, describeGitSetup, normalizeRepoPath, resolveCommitRepos, resolveGitSetup, rootSetup, type GitSetup } from './gitConfig'
 import type { Step } from '../../shared/pipelineMachine'
 
 const base = mkdtempSync(join(tmpdir(), 'aide-gitconfig-'))
@@ -59,6 +59,15 @@ describe('resolveGitSetup', () => {
   it('without repos, an object config keeps the root repo (or no git) and sets commits', async () => {
     expect(await resolveGitSetup(repoRoot, { commits: false })).toEqual({ ...rootSetup(repoRoot), commits: false })
     expect(await resolveGitSetup(project, { commits: false })).toEqual({ mode: 'none' })
+  })
+
+  it('keeps git.shadowExclude in the setup; commit blocks are skipped without git or with commits off', async () => {
+    expect(await resolveGitSetup(repoRoot, { commits: false, shadowExclude: ['assets/raw/'] })).toEqual({ ...rootSetup(repoRoot), commits: false, shadowExclude: ['assets/raw/'] })
+    expect(await resolveGitSetup(project, { shadowExclude: ['x/'] })).toEqual({ mode: 'none', shadowExclude: ['x/'] })
+    expect(commitSkipReason(rootSetup(repoRoot))).toBeNull()
+    expect(commitSkipReason(undefined)).toBeNull()
+    expect(commitSkipReason({ mode: 'git', repos: [], commits: false })).toBe('commits disabled')
+    expect(commitSkipReason({ mode: 'none' })).toBe('no git')
   })
 
   it('reports every problem: bad id, missing path, a path inside a repo, not a work tree, escaping paths', async () => {

@@ -242,6 +242,10 @@ function validateRef(ref: string, machine: MachineDefinition, tree: MachineTree,
       const properties = (schema?.properties ?? {}) as Record<string, unknown>
       if (schema && !(second in properties)) err(`${where}: "${ref}" — "${second}" is not in the output schema of "${first}".`)
     }
+    // Machines are project-agnostic: whether commits are skipped is only known when a run starts.
+    if (leaf.parent.kind === 'commit' && leaf.step.type === 'agent' && from.parent !== leaf.parent) {
+      warnings.push(`${where}: "${ref}" is the output of the commit prep step "${first}"; it is empty in a project where commit blocks are skipped (no git, or "git.commits": false).`)
+    }
     if (from.kind === 'leaf' && leaf.order >= from.order && !sharesLoop(tree, leaf, from)) {
       warnings.push(`${where}: "${ref}" refers to a step that has not run yet at that point; it will be empty.`)
     }

@@ -22,9 +22,9 @@ export interface Repo {
 
 export type GitSetup =
   /** Root mode (no config, the root is in a work tree) and repos mode (`git.repos`). */
-  | { mode: 'git'; repos: Repo[]; commits: boolean }
+  | { mode: 'git'; repos: Repo[]; commits: boolean; shadowExclude?: string[] }
   /** No-git mode: `git: false`, or no config and the root is not in a work tree. */
-  | { mode: 'none' }
+  | { mode: 'none'; shadowExclude?: string[] }
 
 /** The git config is invalid; `problems` lists every problem found. */
 export class GitConfigError extends Error {
@@ -78,8 +78,16 @@ export async function resolveGitSetup(projectPath: string, config: unknown = rea
     }
   }
   if (problems.length) throw new GitConfigError(problems)
-  if (!list) return { mode: 'none' }
-  return { mode: 'git', repos: list, commits: commits !== false }
+  const extra = Array.isArray(shadowExclude) && shadowExclude.length ? { shadowExclude: shadowExclude as string[] } : {}
+  if (!list) return { mode: 'none', ...extra }
+  return { mode: 'git', repos: list, commits: commits !== false, ...extra }
+}
+
+/** Why a commit block is skipped in this setup (spec §4), or null when it commits. A run stored before `RunState.git` existed commits. */
+export function commitSkipReason(setup: GitSetup | undefined): 'commits disabled' | 'no git' | null {
+  if (!setup) return null
+  if (setup.mode === 'none') return 'no git'
+  return setup.commits ? null : 'commits disabled'
 }
 
 /** Repos of a stored setup that are gone or no longer a work-tree top level (checked when a run resumes). */

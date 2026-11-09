@@ -162,6 +162,10 @@ export interface RunState {
    * commit (no git, commits off). Filled on load for runs stored before it existed.
    */
   commitRepos?: Record<string, string>
+  /** No git or commits off: the last snapshot of each shadow scope, the baseline `run.diff` compares with (spec §5). */
+  shadow?: Record<string, string>
+  /** Why the shadow is off for the rest of this run: `run.diff` is then a note. */
+  shadowDisabled?: string
   /** HEAD of the run's first repo when it started. */
   startCommit: string | null
   result: 'success' | 'failure' | null

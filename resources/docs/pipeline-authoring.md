@@ -213,12 +213,18 @@ AIDE composes the prompt; you only write the role file and the step fields.
     subfolders lists them (`"git": {"repos": {"web": "frontend", "api":
     "backend"}}`): the refs then cover every listed repository, in that order,
     with project-relative paths (`frontend/src/a.ts`), and files outside them
-    are not in it. A project without git (no repository at the root and no
-    config, or `"git": false`) gets a note instead of `run.diff`, and empty
-    `run.stagedDiff` / `run.changedFiles`; its agents must report the files
-    they changed. Commit steps stop the run with an escalation in a project
-    without git or with `"commits": false`, for now; with several repositories
-    each commit step names its own (§4).
+    are not in it. With several repositories each commit step names its own (§4).
+  - A project without git (no repository at the root and no config, or
+    `"git": false`) and a project that does not let AIDE commit
+    (`"git": {"commits": false}`) get `run.diff` and `run.changedFiles` from a
+    private snapshot AIDE takes when the run starts and at every skipped commit
+    block (§4): they show the run's own changes since then, never what was
+    changed before the run. `run.stagedDiff` is empty. Without git the snapshot
+    leaves out `node_modules/`, `dist/`, `build/`, `out/`, `target/`, virtual
+    environments, `coverage/` and `*.log`; a project adds its own patterns in
+    `git.shadowExclude`. A project with more than 50,000 files to snapshot, or a
+    machine without git installed, gets a note instead of `run.diff`, and the
+    run goes on: its agents must then report the files they changed.
 - **Feedback** of the loops it is in, from the second iteration on (§2).
 - **Output contract**: the schema named by `output`. Built-ins:
   - `implementerReport`: `status` (`done` | `blocked` | `plan_wrong`), `summary`, `docsChanged`, `pipelineIssues[]`
@@ -308,9 +314,21 @@ stage (`git -C frontend add …`). Changes left in other repositories do not fai
 step: at the end of the run the report lists every path still changed, in any
 repository, as `uncommitted`, so work no commit step took is visible.
 
+**Projects where AIDE does not commit** (no git, or `"commits": false` in
+`git` of `aide/config.json`). Every commit block is skipped as a whole: its prep
+agent and reviewer do not run, AIDE commits nothing, and the block counts as one
+passed visit whose output is `{ "skipped": "commits disabled" | "no git",
+"checkpoint": <snapshot id or null>, "issues": [] }` (event `commit_skipped`).
+Every agent is told not to stage or commit and to leave its changes in the
+working tree. The prep step's outputs (`outputs.<prep id>.*`) are empty in these
+projects; `pipeline_validate` warns about inputs and conditions that use them.
+Build machines that work everywhere on `run.diff` and the implementer's report,
+not on the prep step's output.
+
 **Plan bookkeeping.** A run linked to a task of an AIDE plan (`planTask`) needs none:
 AIDE marks the task done and records the findings in the plan file (it never stages it); do not have
-agents touch `aide/plans/`. For a plan kept in the project's own documents, let the
+agents touch `aide/plans/`. Where commit blocks are skipped, this happens at the
+skipped last commit block. For a plan kept in the project's own documents, let the
 prep agent do it. If the project keeps a plan with
 task statuses and a list of follow-ups, give the prep agent the reviewers'
 findings (`inputs: ["outputs.review.non_blocking"]`) and have its role mark the

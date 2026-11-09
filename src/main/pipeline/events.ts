@@ -13,6 +13,8 @@ export type PipelineEventType =
   | 'loop_repeated'
   | 'escalation'
   | 'commit_done'
+  /** A commit block in a project where AIDE does not commit (no git, `git.commits: false`). */
+  | 'commit_skipped'
   | 'pipeline_issue'
   | 'amended'
   | 'run_paused'

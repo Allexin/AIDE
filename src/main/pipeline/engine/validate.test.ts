@@ -117,6 +117,18 @@ describe('validateMachine', () => {
     expect(looped.warnings).toEqual([])
   })
 
+  it('warns that the outputs of a commit prep step are empty where commit blocks are skipped', () => {
+    const commit = { type: 'commit', id: 'commit', review: 'algorithmic', prep: agent('prep', { output: 'commitPrep' }) } as Step
+    const result = validateMachine(machine([agent('a'), commit, agent('after', { inputs: ['outputs.prep.commitMessage'] }), { type: 'if', id: 'i', condition: "outputs.prep.commitMessage == 'x'", then: [agent('b')] } as Step]), env)
+    expect(result.errors).toEqual([])
+    expect(result.warnings).toEqual([
+      'Step "after" input: "outputs.prep.commitMessage" is the output of the commit prep step "prep"; it is empty in a project where commit blocks are skipped (no git, or "git.commits": false).',
+      'Step "i" "condition": "outputs.prep.commitMessage" is the output of the commit prep step "prep"; it is empty in a project where commit blocks are skipped (no git, or "git.commits": false).'
+    ])
+    // The commit result itself is no prep output.
+    expect(validateMachine(machine([agent('a'), commit, agent('after', { inputs: ['outputs.commit'] })]), env).warnings).toEqual([])
+  })
+
   it('checks effort levels per CLI', () => {
     expect(validateMachine(machine([agent('a', { effort: 'high' }), agent('b', { cli: 'codex', effort: 'ultra' })]), env).errors).toEqual([])
     const text = errorsOf(machine([agent('a', { effort: 'ultra' })], { defaults: { cli: 'claude-code', effort: 'turbo' } }))

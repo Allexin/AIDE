@@ -19,7 +19,7 @@ const GIT_TIMEOUT_MS = 15_000
 const COMMIT_TIMEOUT_MS = 10 * 60_000
 const MAX_BUFFER = 64 * 1024 * 1024
 /** Untracked files larger than this are listed in the diff without content. */
-const MAX_UNTRACKED_DIFF_BYTES = 256 * 1024
+export const MAX_UNTRACKED_DIFF_BYTES = 256 * 1024
 
 interface GitResult { code: number; stdout: string; stderr: string }
 
@@ -52,7 +52,7 @@ export interface FileChange {
   unstaged: boolean
 }
 
-function kindOf(code: string): ChangeKind {
+export function kindOf(code: string): ChangeKind {
   if (code === 'A') return 'added'
   if (code === 'D') return 'deleted'
   if (code === 'R' || code === 'C') return 'renamed'
@@ -90,7 +90,7 @@ interface RepoRead {
   nested: string[]
 }
 
-/** The note `run.diff` gets in no-git mode (until the shadow snapshot, spec §5). */
+/** What `workingDiff` returns for a no-git setup. A run does not ask: its `run.diff` comes from the shadow (`shadow.ts`). */
 export const NO_GIT_DIFF = '(diff unavailable: the project is not a git repository AIDE reads (no-git mode); read the files the implementer reports)\n'
 
 /** The reads of a setup's repos, or of one of them. Nested repos are worked out against the whole setup either way. */
@@ -114,12 +114,12 @@ const rootRead = (cwd: string): RepoRead => ({ cwd, prefix: '', nested: [] })
  * diff prefixes are: make them project-relative too. (A line of a hunk starts
  * with a space, `+`, `-` or `\`, so only header lines match.)
  */
-function prefixRenameLines(read: RepoRead, diff: string): string {
+export function prefixRenameLines(read: Pick<RepoRead, 'prefix'>, diff: string): string {
   return read.prefix ? diff.replace(/^((?:rename|copy) (?:from|to) )/gm, `$1${read.prefix}`) : diff
 }
 
 /** `--src-prefix`/`--dst-prefix` of a prefixed repo; nothing for the root (git's defaults). */
-function prefixArgs(read: RepoRead): string[] {
+export function prefixArgs(read: Pick<RepoRead, 'prefix'>): string[] {
   return read.prefix ? [`--src-prefix=a/${read.prefix}`, `--dst-prefix=b/${read.prefix}`] : []
 }
 

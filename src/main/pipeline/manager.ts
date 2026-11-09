@@ -11,7 +11,8 @@ import type { RunVisitInfo } from '../../shared/plan'
 import type { HeadlessRun } from './headless/types'
 import type { AgentRequest } from './engine/runner'
 import { pipelineEvents, type PipelineEventType } from './events'
-import { GitConfigError, describeGitSetup, resolveCommitRepos, rootSetup, type GitSetup } from './gitConfig'
+import type { ShadowStore } from './shadow'
+import { GitConfigError, commitSkipReason, describeGitSetup, resolveCommitRepos, rootSetup, type GitSetup } from './gitConfig'
 
 /**
  * Owns pipeline runs per project: the machine library, the single active run,
@@ -30,7 +31,7 @@ export interface ManagerEnvironment {
   libraryDirs(projectPath: string): Array<{ dir: string; source: 'shared' | 'personal' }>
   headlessClis(): string[]
   /** Engine dependencies except `emit`, `onStateChange`, `onTranscript`, `readRole`, which the manager supplies. */
-  deps(projectPath: string): Pick<EngineDeps, 'startAgent' | 'runCheck' | 'git' | 'accountPool'>
+  deps(projectPath: string): Pick<EngineDeps, 'startAgent' | 'runCheck' | 'git' | 'accountPool'> & { shadow?: ShadowStore }
   /**
    * The project's git setup (`resolveGitSetup`); throws `GitConfigError` on an invalid config.
    * Absent (tests): the project root's repo, as before git modes existed.
@@ -225,9 +226,12 @@ export class PipelineManager extends EventEmitter {
     const commitRepos = resolveCommitRepos(entry.machine.steps, params, git)
     if (commitRepos.problems.length) throw new Error(commitRepos.problems.join('\n'))
     const deps = this.env.deps(projectPath)
-    const dirty = await deps.git.status(git).catch(() => [])
-    if (dirty.length) warnings.push(`The working tree has ${dirty.length} uncommitted change(s); they will mix into this run's diff and commits.`)
-    if (git.mode === 'none') warnings.push('The project is not a git repository AIDE uses (no-git mode): run.diff is a note instead of a diff, and a commit step stops the run with an escalation.')
+    // Without commits the shadow baseline keeps earlier changes out of the run's diff.
+    if (!commitSkipReason(git)) {
+      const dirty = await deps.git.status(git).catch(() => [])
+      if (dirty.length) warnings.push(`The working tree has ${dirty.length} uncommitted change(s); they will mix into this run's diff and commits.`)
+    }
+    if (git.mode === 'none') warnings.push('The project is not a git repository AIDE uses (no-git mode): run.diff comes from a private snapshot, and commit steps are skipped.')
 
     // Checked again: the git call above yields, and the autopilot may have started a step meanwhile.
     const raced = this.active.get(projectPath)
@@ -245,8 +249,15 @@ export class PipelineManager extends EventEmitter {
     return { runId: run.runId, warnings }
   }
 
-  /** After an AIDE restart: reattach the newest unfinished run, paused. */
+  /** After an AIDE restart: reattach the newest unfinished run, paused, and drop the snapshots of every other run. */
   recover(projectPath: string): RunSnapshot | null {
+    const snapshot = this.reattach(projectPath)
+    const active = this.active.get(projectPath)
+    void this.env.deps(projectPath).shadow?.removeLeftovers(active ? [active.runId] : [])
+    return snapshot
+  }
+
+  private reattach(projectPath: string): RunSnapshot | null {
     if (this.active.has(projectPath)) return this.snapshot(projectPath)
     const store = this.store(projectPath)
     for (const runId of store.list()) {

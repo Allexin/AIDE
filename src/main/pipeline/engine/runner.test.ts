@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { PipelineRun, UNAVAILABLE_RETRY_MS, commitUnsupported, type AgentRequest, type EngineDeps } from './runner'
+import { PipelineRun, UNAVAILABLE_RETRY_MS, type AgentRequest, type EngineDeps } from './runner'
 import { rootSetup, type GitSetup } from '../gitConfig'
 import { RunStore } from './runStore'
 import { isSignificant } from '../events'
@@ -840,12 +840,15 @@ describe('the run git setup', () => {
     expect(cwds).toEqual([root])
   })
 
-  it('in no-git mode the commit step escalates instead of committing', async () => {
+  it('in no-git mode the commit block is skipped; without a shadow, run.diff is the note', async () => {
     const h = harness({ agent: happy })
     h.state().git = { mode: 'none' }
     await h.run.run()
     expect(h.state().startCommit).toBeNull()
-    expect(h.run.pendingEscalation()).toMatchObject({ node: 'commit', kind: 'engine', message: expect.stringContaining('no-git mode') })
+    expect(h.run.pendingEscalation()).toBeNull()
+    expect(h.state().result).toBe('success')
+    expect(h.state().outputs.commit).toEqual({ skipped: 'no git', checkpoint: null, issues: [] })
+    expect(h.requests.find((r) => r.label.endsWith(':review'))?.prompt).toContain('(diff unavailable: shadow snapshots are not available; read the files the implementer reports)')
     expect(h.commits).toEqual([])
   })
 
@@ -1020,13 +1023,99 @@ describe('the repo of a commit step', () => {
   })
 })
 
-describe('commitUnsupported', () => {
-  it('lets a single repo with commits on commit, and names why the others cannot', () => {
-    expect(commitUnsupported('commit', rootSetup('/p'))).toBeNull()
-    expect(commitUnsupported('commit', { mode: 'git', repos: [{ id: 'web', path: 'frontend', abs: '/p/frontend' }], commits: true })).toBeNull()
-    expect(commitUnsupported('commit', { mode: 'none' })).toMatch(/^Commit step "commit" cannot commit: .*no-git mode/)
-    expect(commitUnsupported('commit', { mode: 'git', repos: [{ id: 'root', path: '.', abs: '/p' }], commits: false })).toContain('"git.commits": false')
-    expect(commitUnsupported('commit', { mode: 'git', repos: [{ id: 'web', path: 'frontend', abs: '' }, { id: 'api', path: 'backend', abs: '' }], commits: true })).toBeNull()
+describe('commit blocks without commits (no git, commits off)', () => {
+  const engineDeps = (run: PipelineRun): EngineDeps => (run as unknown as { deps: EngineDeps }).deps
+  const COMMITS_OFF: GitSetup = { mode: 'git', repos: [{ id: 'root', path: '.', abs: root }], commits: false }
+  /** The guide-like machine with a step after the commit that reads run.diff. */
+  const withLaterStep = (): MachineDefinition => {
+    const machine = structuredClone(MACHINE)
+    machine.steps.push({ type: 'agent', id: 'docs', summary: 'documents the change', role: 'roles/implementer.md', output: 'implementerReport', inputs: ['run.diff'] })
+    return machine
+  }
+
+  /** A run in `setup` with a fake shadow: each snapshot is sha-<n>, the diff names the checkpoint it compares with. */
+  function skipping(setup: GitSetup, machine: MachineDefinition = MACHINE, snapshot?: () => never) {
+    const h = harness({ agent: happy }, machine)
+    h.state().git = setup
+    const labels: string[] = []
+    const removed: string[] = []
+    engineDeps(h.run).shadow = {
+      snapshot: async (_target, label) => { snapshot?.(); labels.push(label); return { project: `sha-${labels.length}` } },
+      diff: async (_target, shas) => `diff --git a/x b/x\n+since ${shas.project}`,
+      changes: async () => [],
+      remove: async (runId) => { removed.push(runId) }
+    }
+    return { ...h, labels: h.labels, snapshots: labels, removed }
+  }
+  const prompt = (h: ReturnType<typeof harness>, step: string): AgentRequest => h.requests.find((r) => r.label.endsWith(`:${step}`))!
+
+  it('commits off: the prep agent does not run, nothing is committed, the block is one ok visit with a checkpoint', async () => {
+    const h = skipping(COMMITS_OFF)
+    await h.run.run()
+    expect(h.state().result).toBe('success')
+    expect(h.labels()).toEqual(['generate', 'contentReview', 'implement', 'review'])
+    expect(h.commits).toEqual([])
+    expect(h.state().history.filter((v) => v.node === 'commit').map((v) => v.outcome)).toEqual(['ok'])
+    expect(h.state().iterations.commit).toBeUndefined()
+    expect(h.state().outputs.commit).toEqual({ skipped: 'commits disabled', checkpoint: 'sha-2', issues: [] })
+    expect(h.events.find((e) => e.type === 'commit_skipped')?.data).toEqual({ node: 'commit', reason: 'commits disabled', checkpoint: 'sha-2', summary: 'commit skipped: the project does not let AIDE commit' })
+    expect(h.snapshots).toEqual(['baseline', 'checkpoint commit'])
+    expect(prompt(h, 'review').prompt).toContain('+since sha-1')
+    // The run is over: its snapshots go.
+    expect(h.removed).toEqual(['run-1'])
+  })
+
+  it('run.diff after a skipped commit shows only the later changes', async () => {
+    const h = skipping({ mode: 'none' }, withLaterStep())
+    await h.run.run()
+    expect(h.state().outputs.commit).toMatchObject({ skipped: 'no git' })
+    expect(prompt(h, 'docs').prompt).toContain('+since sha-2')
+  })
+
+  it('tells every agent not to stage or commit, and shows the commit block as skipped', async () => {
+    const off = skipping(COMMITS_OFF, withLaterStep())
+    await off.run.run()
+    const implement = prompt(off, 'implement').systemAppend ?? ''
+    expect(implement).toContain('- This project does not let AIDE commit: do not stage or commit; leave your changes in the working tree.')
+    expect(implement).not.toContain('Staging and committing happen in a later step')
+    expect(implement).toContain('  - commit commit (skipped: commits disabled)\n6. docs [agent]')
+    expect(implement).not.toContain('commitPrep')
+    expect(prompt(off, 'docs').systemAppend).toContain('This project does not let AIDE commit')
+
+    const none = skipping({ mode: 'none' })
+    await none.run.run()
+    expect(prompt(none, 'review').systemAppend).toContain('  - commit commit (skipped: no git)')
+    expect(prompt(none, 'review').systemAppend).toContain('- You are the last step; the run ends after you.')
+  })
+
+  it('a project over the file-count limit gets the note instead of run.diff, and the run goes on', async () => {
+    const h = skipping({ mode: 'none' }, MACHINE, () => { throw new Error('the project has more than 50000 files to snapshot (see "git.shadowExclude")') })
+    await h.run.run()
+    expect(h.state().result).toBe('success')
+    expect(prompt(h, 'review').prompt).toContain('(diff unavailable: the project has more than 50000 files to snapshot (see "git.shadowExclude"); read the files the implementer reports)')
+    expect(h.state().shadowDisabled).toContain('more than 50000 files')
+    expect(h.state().outputs.commit).toEqual({ skipped: 'no git', checkpoint: null, issues: [] })
+    expect(h.snapshots).toEqual([])
+    expect(h.removed).toEqual(['run-1'])
+  })
+
+  it('a plan task is marked done at the skipped last commit', async () => {
+    const h = skipping(COMMITS_OFF)
+    h.state().planTask = { plan: 'p', task: 't' }
+    const marked: string[] = []
+    engineDeps(h.run).planCommit = async (link, findings) => { marked.push(`${link.plan}/${link.task} ${findings.join(',')}`); return () => {} }
+    await h.run.run()
+    expect(marked).toEqual(['p/t rename foo,rename foo'])
+    expect(h.commits).toEqual([])
+  })
+
+  it('a project that commits keeps its commit block and takes no snapshot', async () => {
+    const h = skipping(rootSetup(root))
+    await h.run.run()
+    expect(h.commits).toEqual(['Add feature X'])
+    expect(h.snapshots).toEqual([])
+    expect(h.removed).toEqual([])
+    expect(prompt(h, 'review').prompt).toContain('+line')
   })
 })
 
