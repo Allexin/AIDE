@@ -93,9 +93,10 @@ interface RepoRead {
 /** The note `run.diff` gets in no-git mode (until the shadow snapshot, spec §5). */
 export const NO_GIT_DIFF = '(diff unavailable: the project is not a git repository AIDE reads (no-git mode); read the files the implementer reports)\n'
 
-function repoReads(setup: GitSetup): RepoRead[] {
+/** The reads of a setup's repos, or of one of them. Nested repos are worked out against the whole setup either way. */
+function repoReads(setup: GitSetup, repoId?: string): RepoRead[] {
   if (setup.mode !== 'git') return []
-  return setup.repos.map((repo) => {
+  return setup.repos.filter((repo) => repoId === undefined || repo.id === repoId).map((repo) => {
     const nested = setup.repos.filter((other) => other !== repo && isInside(other.path, repo.path)).map((other) => repo.path === '.' ? other.path : other.path.slice(repo.path.length + 1))
     return { cwd: repo.abs, prefix: repo.path === '.' ? '' : `${repo.path}/`, nested }
   })
@@ -138,13 +139,13 @@ function nestedPathspec(read: RepoRead): string[] {
  * to the commit coverage check. So are plan files: AIDE edits them while a run
  * works, and they are not part of its work.
  *
- * With a run's setup, every repo is read in config order and paths are
- * project-relative (`frontend/src/a.ts`); no-git mode has no changes.
+ * With a run's setup, every repo (or only `repoId`) is read in config order and
+ * paths are project-relative (`frontend/src/a.ts`); no-git mode has no changes.
  */
-export async function status(target: string | GitSetup): Promise<FileChange[]> {
+export async function status(target: string | GitSetup, repoId?: string): Promise<FileChange[]> {
   if (typeof target === 'string') return statusIn(rootRead(target))
   const changes: FileChange[] = []
-  for (const read of repoReads(target)) changes.push(...await statusIn(read))
+  for (const read of repoReads(target, repoId)) changes.push(...await statusIn(read))
   return changes
 }
 
@@ -252,11 +253,11 @@ async function untrackedDiff(read: RepoRead, path: string): Promise<string> {
   return result.stdout.trimEnd()
 }
 
-/** The index against HEAD; with a run's setup, every repo's in config order (no-git mode: nothing is staged). */
-export async function stagedDiff(target: string | GitSetup): Promise<string> {
+/** The index against HEAD; with a run's setup, every repo's (or only `repoId`'s) in config order (no-git mode: nothing is staged). */
+export async function stagedDiff(target: string | GitSetup, repoId?: string): Promise<string> {
   if (typeof target === 'string') return stagedDiffIn(rootRead(target))
   const parts: string[] = []
-  for (const read of repoReads(target)) parts.push(prefixRenameLines(read, await stagedDiffIn(read)))
+  for (const read of repoReads(target, repoId)) parts.push(prefixRenameLines(read, await stagedDiffIn(read)))
   return parts.join('')
 }
 
@@ -302,9 +303,15 @@ export function checkCommitCoverage(changes: FileChange[], message: string, excl
 
 export interface CommitResult {
   sha: string
+  /** Project-relative. */
   files: string[]
   message: string
+  /** Id of the repo the commit was made in. */
+  repo: string
 }
+
+/** What `git commit` knows: `files` are relative to the repo, which the caller names. */
+export type IndexCommit = Omit<CommitResult, 'repo'>
 
 /**
  * Commit exactly the current index with the given message. Hooks run as usual.
@@ -316,7 +323,7 @@ export interface CommitResult {
  * the timeout leaves room for hooks, and a new HEAD on top of the old one counts
  * as a commit whatever happened after it.
  */
-export async function commitIndex(cwd: string, message: string): Promise<CommitResult> {
+export async function commitIndex(cwd: string, message: string): Promise<IndexCommit> {
   const files = (await gitOk(cwd, ['diff', '--cached', '--name-only', '-z'])).split('\0').filter(Boolean)
   const before = await headSha(cwd)
   const result = await git(cwd, ['-c', 'gc.auto=0', 'commit', '-F', '-'], message, undefined, COMMIT_TIMEOUT_MS)

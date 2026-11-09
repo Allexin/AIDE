@@ -11,7 +11,7 @@ import type { RunVisitInfo } from '../../shared/plan'
 import type { HeadlessRun } from './headless/types'
 import type { AgentRequest } from './engine/runner'
 import { pipelineEvents, type PipelineEventType } from './events'
-import { GitConfigError, describeGitSetup, rootSetup, type GitSetup } from './gitConfig'
+import { GitConfigError, describeGitSetup, resolveCommitRepos, rootSetup, type GitSetup } from './gitConfig'
 
 /**
  * Owns pipeline runs per project: the machine library, the single active run,
@@ -179,7 +179,7 @@ export class PipelineManager extends EventEmitter {
       emit: (runId: string, type: PipelineEventType, rawData: Record<string, unknown>) => {
         // The end of a run the autopilot started goes to the autopilot; it wakes the Strategist when needed.
         const run = this.active.get(projectPath)
-        const auto = (type === 'run_finished' || type === 'run_failed') && run?.state.planAuto === true
+        const auto = (type === 'run_finished' || type === 'run_failed') && run?.runId === runId && run.state.planAuto === true
         // So may an escalation of such a run: the plan's Orchestrator answers it or passes it on.
         const escalation = type === 'escalation' && run?.runId === runId ? run.state.escalations.find((e) => e.id === rawData.escalationId && !e.answer) : undefined
         const claimed = !!escalation && rawData.forwarded !== true && !!this.planHooks?.claimEscalation(projectPath, run!.state, escalation)
@@ -223,6 +223,8 @@ export class PipelineManager extends EventEmitter {
     if (outdated) warnings.push(`Started although "${machineId}" was written for an older pipeline engine (acceptOutdated).`)
     // Resolved once: a config edit does not change a running run (an invalid config refuses the start with its problems).
     const git = await this.gitSetup(projectPath)
+    const commitRepos = resolveCommitRepos(entry.machine.steps, params, git)
+    if (commitRepos.problems.length) throw new Error(commitRepos.problems.join('\n'))
     const deps = this.env.deps(projectPath)
     const dirty = await deps.git.status(git).catch(() => [])
     if (dirty.length) warnings.push(`The working tree has ${dirty.length} uncommitted change(s); they will mix into this run's diff and commits.`)
@@ -236,7 +238,7 @@ export class PipelineManager extends EventEmitter {
     // Run ids have a resolution of a second; two runs of a machine in one second must not share a directory.
     let runId = newRunId(machineId)
     for (let n = 2; store.exists(runId); n++) runId = `${newRunId(machineId)}-${n}`
-    const run = PipelineRun.create({ machine: entry.machine, machineDir: entry.machineDir }, params, runId, projectPath, store, this.engineDeps(projectPath, store), { planTask: options.planTask, auto: options.auto, instructions: options.instructions, git })
+    const run = PipelineRun.create({ machine: entry.machine, machineDir: entry.machineDir }, params, runId, projectPath, store, this.engineDeps(projectPath, store), { planTask: options.planTask, auto: options.auto, instructions: options.instructions, git, commitRepos: commitRepos.repos })
     this.active.set(projectPath, run)
     options.onCreated?.(run.runId)
     this.emit('state', projectPath, this.toSnapshot(projectPath, run))
@@ -360,7 +362,7 @@ export class PipelineManager extends EventEmitter {
   async abandon(projectPath: string, reason: string, runId?: string): Promise<string[]> {
     const run = this.require(projectPath, runId)
     if (run.state.status === 'running' || run.state.status === 'pausing') throw new Error('Stop the run before abandoning it.')
-    run.abandon(reason)
+    await run.abandon(reason)
     const changes = await this.env.deps(projectPath).git.status(run.state.git ?? rootSetup(projectPath)).catch(() => [])
     return changes.map((c) => `${c.path} (${c.kind})`)
   }
@@ -402,7 +404,10 @@ export class PipelineManager extends EventEmitter {
   report(projectPath: string, runId: string): (RunReport & { reason?: string | null; note?: string }) | null {
     const active = this.active.get(projectPath)
     if (active && active.runId === runId && !active.isFinal()) return { ...active.buildReport(), note: 'The run has not ended; this is an interim report.' }
-    return this.store(projectPath).readReport(runId) as RunReport | null
+    const stored = this.store(projectPath).readReport(runId) as RunReport | null
+    // The run has just become final and its report is still being written (the report reads git).
+    if (!stored && active?.runId === runId) return { ...active.buildReport(), note: 'The run has just ended; its final report is being written.' }
+    return stored
   }
 
   /** The output of one step visit (default: its last visit) of the active or a stored run. */

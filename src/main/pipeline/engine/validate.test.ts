@@ -134,6 +134,19 @@ describe('validateMachine', () => {
     expect(text).toMatch(/not strict enough for Codex/)
   })
 
+  it('accepts a commit "repo" that is an id or a template of params, and nothing else', () => {
+    const prep = agent('prep', { output: 'commitPrep' }) as Extract<Step, { type: 'agent' }>
+    const commit = (repo: unknown): Step => ({ type: 'commit', id: 'c', review: 'algorithmic', repo, prep } as unknown as Step)
+    const declared = { params: { repo: { type: 'string' as const } } }
+    expect(validateMachine(machine([commit('web')]), env).errors).toEqual([])
+    expect(validateMachine(machine([commit('{{params.repo}}')], declared), env).errors).toEqual([])
+    expect(errorsOf(machine([commit('{{params.nope}}')], declared))).toMatch(/Step "c" "repo": unknown param "nope"/)
+    expect(errorsOf(machine([agent('a'), commit('{{outputs.a.summary}}')]))).toContain('Step "c" "repo": "{{outputs.a.summary}}" — only params.* can be used')
+    expect(errorsOf(machine([commit('{{run.id}}')]))).toContain('only params.* can be used')
+    expect(errorsOf(machine([commit(7)]))).toMatch(/Step "c": "repo" must be a repo id or a template/)
+    expect(errorsOf(machine([commit('  ')]))).toMatch(/Step "c": "repo" must be a repo id or a template/)
+  })
+
   it('requires the commit prep agent to output commitMessage and excluded', () => {
     const text = errorsOf(machine([agent('a'), { type: 'commit', id: 'c', review: 'algorithmic', prep: agent('prep') as Extract<Step, { type: 'agent' }> }]))
     expect(text).toMatch(/prep step "prep" must output "commitMessage" and "excluded"/)

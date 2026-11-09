@@ -872,13 +872,161 @@ describe('the run git setup', () => {
   })
 })
 
+describe('the repo of a commit step', () => {
+  const engineDeps = (run: PipelineRun): EngineDeps => (run as unknown as { deps: EngineDeps }).deps
+  const TWO_REPOS: GitSetup = { mode: 'git', repos: [{ id: 'web', path: 'frontend', abs: '/p/frontend' }, { id: 'api', path: 'backend', abs: '/p/backend' }], commits: true }
+  const withCommit = (change: (commit: Extract<Step, { type: 'commit' }>) => void, params?: MachineDefinition['params']): MachineDefinition => {
+    const machine = structuredClone(MACHINE)
+    if (params) machine.params = { ...machine.params, ...params }
+    const integration = machine.steps[1] as Extract<Step, { type: 'group' }>
+    change(integration.steps[1] as Extract<Step, { type: 'commit' }>)
+    return machine
+  }
+  const prepSystem = (h: ReturnType<typeof harness>): string => h.requests.find((r) => r.label.endsWith(':commitPrep'))!.systemAppend ?? ''
+  const WEB_STAGED = parsePorcelain('M  frontend/src/a.ts\0')
+  const API_LEFT = parsePorcelain('?? backend/new.go\0')
+
+  /** A run on two repos whose commit step is resolved to `web`; records what the step asked git. */
+  function twoRepos(machine: MachineDefinition = MACHINE) {
+    const h = harness({ agent: (req) => req.label.endsWith(':commit:review') ? { structured: { verdict: 'accept', issues: [] } } : happy(req) }, machine)
+    h.state().git = TWO_REPOS
+    h.state().commitRepos = { commit: 'web' }
+    const deps = engineDeps(h.run)
+    const statusAsked: Array<string | undefined> = []
+    const stagedAsked: Array<string | undefined> = []
+    const cwds: string[] = []
+    const { commitIndex } = deps.git
+    deps.git.status = async (_scope, repoId) => { statusAsked.push(repoId); return repoId === 'web' ? WEB_STAGED : [...WEB_STAGED, ...API_LEFT] }
+    deps.git.stagedDiff = async (_scope, repoId) => { stagedAsked.push(repoId); return 'staged diff of the repo' }
+    deps.git.commitIndex = async (cwd, message) => { cwds.push(cwd); return commitIndex(cwd, message) }
+    return { ...h, statusAsked, stagedAsked, cwds }
+  }
+
+  it('without "repo" in a single-repo project commits as before, in that repo', async () => {
+    const h = harness({ agent: happy })
+    expect(h.state().commitRepos).toEqual({ commit: 'root' })
+    await h.run.run()
+    const report = h.store.readReport('run-1') as { commits: unknown[] }
+    expect(report.commits).toEqual([{ sha: 'sha-1', files: ['src/a.ts'], message: 'Add feature X', repo: 'root' }])
+    expect(h.events.find((e) => e.type === 'commit_done')?.data).toEqual({ node: 'commit', sha: 'sha-1', summary: 'committed sha-1 Add feature X (1 files)' })
+    expect(prepSystem(h)).toContain('- You prepare the commit (stage files, write the message); AIDE reviews it and commits. Do not commit yourself.')
+  })
+
+  it('looks only at its repo: coverage, staged diff, commit; paths are project-relative', async () => {
+    const h = twoRepos(withCommit((commit) => { commit.review = 'agent'; commit.reviewer = { role: 'roles/reviewer.md' } }))
+    await h.run.run()
+    expect(h.state().result).toBe('success')
+    expect(h.statusAsked.slice(0, -1)).toEqual(['web'])
+    expect(h.stagedAsked).toEqual(['web'])
+    expect(h.cwds).toEqual(['/p/frontend'])
+    expect(h.requests.find((r) => r.label.endsWith(':commit:review'))?.prompt).toContain('staged diff of the repo')
+    const report = h.store.readReport('run-1') as { commits: unknown[] }
+    expect(report.commits).toEqual([{ sha: 'sha-1', files: ['frontend/src/a.ts'], message: 'Add feature X', repo: 'web' }])
+    expect(h.state().outputs.commit).toMatchObject({ repo: 'web', files: ['frontend/src/a.ts'], issues: [] })
+  })
+
+  it('names the repo in commit_done when the setup has several', async () => {
+    const h = twoRepos()
+    await h.run.run()
+    expect(h.events.find((e) => e.type === 'commit_done')?.data).toEqual({ node: 'commit', sha: 'sha-1', repo: 'web', summary: 'committed in web sha-1 Add feature X (1 files)' })
+  })
+
+  it('reports changes left in any repo as uncommitted, also to the orchestrator', async () => {
+    const h = twoRepos()
+    await h.run.run()
+    expect(h.statusAsked.at(-1)).toBeUndefined()
+    const report = h.store.readReport('run-1') as { uncommitted: string[] }
+    expect(report.uncommitted).toEqual(['frontend/src/a.ts', 'backend/new.go'])
+    const finished = h.events.find((e) => e.type === 'run_finished')!
+    expect((finished.data.report as { uncommitted: string[] }).uncommitted).toEqual(['frontend/src/a.ts', 'backend/new.go'])
+  })
+
+  it('an unreadable git leaves the list out of the report, not the report out', async () => {
+    const h = twoRepos()
+    const { status } = engineDeps(h.run).git
+    engineDeps(h.run).git.status = async (scope, repoId) => { if (repoId === undefined) throw new Error('git is gone'); return status(scope, repoId) }
+    await h.run.run()
+    expect(h.state().result).toBe('success')
+    expect(h.store.readReport('run-1')).not.toHaveProperty('uncommitted')
+    expect(h.events.at(-1)?.type).toBe('run_finished')
+  })
+
+  it('the compact report caps a long uncommitted list and leaves out an empty one', async () => {
+    const empty = harness({ agent: happy })
+    const { status } = engineDeps(empty.run).git
+    engineDeps(empty.run).git.status = async (scope, repoId) => repoId === undefined ? [] : status(scope, repoId)
+    await empty.run.run()
+    expect(empty.events.at(-1)?.data.report).not.toHaveProperty('uncommitted')
+
+    const many = Array.from({ length: 25 }, (_, i) => `f${i}.ts`)
+    const long = harness({ agent: happy })
+    const before = engineDeps(long.run).git.status
+    engineDeps(long.run).git.status = async (scope, repoId) => repoId === undefined ? parsePorcelain(many.map((f) => `?? ${f}`).join('\0') + '\0') : before(scope, repoId)
+    await long.run.run()
+    const list = (long.events.at(-1)?.data.report as { uncommitted: string[] }).uncommitted
+    expect(list).toHaveLength(21)
+    expect(list[20]).toBe('… and 5 more (pipeline_report detail: true)')
+    expect((long.store.readReport('run-1') as { uncommitted: string[] }).uncommitted).toEqual(many)
+  })
+
+  it('tells the prep agent where its repo is', async () => {
+    const h = twoRepos()
+    await h.run.run()
+    const system = prepSystem(h)
+    expect(system).toContain('- You prepare the commit in the repository at frontend/ (stage with git -C frontend add …); AIDE reviews it and commits. Do not commit yourself.')
+    expect(system).toContain('- In "excluded", give paths relative to the project root (frontend/…).')
+  })
+
+  it('a repo at the project root of a multi-repo setup keeps the plain prep text', async () => {
+    const h = harness({ agent: happy })
+    h.state().git = { mode: 'git', repos: [{ id: 'main', path: '.', abs: root }, { id: 'web', path: 'frontend', abs: join(root, 'frontend') }], commits: true }
+    h.state().commitRepos = { commit: 'main' }
+    await h.run.run()
+    expect(prepSystem(h)).toContain('- You prepare the commit (stage files, write the message); AIDE reviews it and commits. Do not commit yourself.')
+    expect(h.events.find((e) => e.type === 'commit_done')?.data.summary).toBe('committed in main sha-1 Add feature X (1 files)')
+  })
+
+  it('a step with no resolved repo among several asks instead of guessing', async () => {
+    const h = twoRepos()
+    h.state().commitRepos = {}
+    await h.run.run()
+    expect(h.run.pendingEscalation()).toMatchObject({ node: 'commit', kind: 'engine', message: expect.stringContaining('(web, api)') })
+    expect(h.commits).toEqual([])
+  })
+
+  it('an answer that changes the params resolves the repo again, and refuses an unknown one', async () => {
+    let first = true
+    const h = harness({ agent: (req) => { if (req.label.endsWith(':implement') && first) { first = false; return planWrong } return happy(req) } }, withCommit((commit) => { commit.repo = '{{params.repo}}' }, { repo: { type: 'string' } }), { taskSpec: 'x', repo: 'web' })
+    h.state().git = TWO_REPOS
+    h.state().commitRepos = { commit: 'web' }
+    await h.run.run()
+    const escalation = h.run.pendingEscalation()!
+    expect(await h.run.answer(escalation.id, { action: 'retry', text: '', by: 'strategist', params: { repo: 'nope' } })).toBe('Invalid params:\n- Commit step "commit": "nope" is not a repo of this project (web, api).')
+    expect(h.state().commitRepos).toEqual({ commit: 'web' })
+    await h.run.answer(escalation.id, { action: 'retry', text: '', by: 'strategist', params: { repo: 'api' } })
+    expect(h.state().commitRepos).toEqual({ commit: 'api' })
+    await waitFor(() => h.run.isFinal())
+    expect(h.events.find((e) => e.type === 'commit_done')?.data.repo).toBe('api')
+  })
+
+  it('a reload resolves the repos of the edited machine, and refuses a step without one', () => {
+    const h = harness({ agent: happy })
+    h.state().git = TWO_REPOS
+    h.state().commitRepos = { commit: 'web' }
+    expect(h.run.reload({ machine: MACHINE, machineDir: root })).toEqual(['Commit step "commit" must name its repo ("repo": one of web, api).'])
+    expect(h.state().commitRepos).toEqual({ commit: 'web' })
+    expect(h.run.reload({ machine: withCommit((commit) => { commit.repo = 'api' }), machineDir: root })).toEqual([])
+    expect(h.state().commitRepos).toEqual({ commit: 'api' })
+  })
+})
+
 describe('commitUnsupported', () => {
   it('lets a single repo with commits on commit, and names why the others cannot', () => {
     expect(commitUnsupported('commit', rootSetup('/p'))).toBeNull()
     expect(commitUnsupported('commit', { mode: 'git', repos: [{ id: 'web', path: 'frontend', abs: '/p/frontend' }], commits: true })).toBeNull()
     expect(commitUnsupported('commit', { mode: 'none' })).toMatch(/^Commit step "commit" cannot commit: .*no-git mode/)
     expect(commitUnsupported('commit', { mode: 'git', repos: [{ id: 'root', path: '.', abs: '/p' }], commits: false })).toContain('"git.commits": false')
-    expect(commitUnsupported('commit', { mode: 'git', repos: [{ id: 'web', path: 'frontend', abs: '' }, { id: 'api', path: 'backend', abs: '' }], commits: true })).toContain('several repositories (web, api)')
+    expect(commitUnsupported('commit', { mode: 'git', repos: [{ id: 'web', path: 'frontend', abs: '' }, { id: 'api', path: 'backend', abs: '' }], commits: true })).toBeNull()
   })
 })
 

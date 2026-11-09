@@ -162,6 +162,14 @@ export function validateMachine(machine: MachineDefinition, env: ValidationEnvir
         const prepSchema = resolveSchema(step.prep.output, machine.schemas)
         const properties = (prepSchema?.properties ?? {}) as Record<string, unknown>
         if (prepSchema && (!('commitMessage' in properties) || !('excluded' in properties))) err(`${label}: its prep step "${step.prep.id}" must output "commitMessage" and "excluded" (use the built-in "commitPrep" schema).`)
+        if (step.repo !== undefined) {
+          // Whether the id exists is a run-start check: machines are project-agnostic.
+          if (typeof step.repo !== 'string' || !step.repo.trim()) err(`${label}: "repo" must be a repo id or a template such as "{{params.repo}}".`)
+          else for (const ref of templateRefs(step.repo)) {
+            if (!ref.startsWith('params.')) err(`${label} "repo": "{{${ref}}}" — only params.* can be used, the repo is resolved when the run starts.`)
+            else validateRef(ref, machine, tree, node, `${label} "repo"`, err, warnings)
+          }
+        }
         if (step.review !== 'algorithmic' && step.review !== 'agent') err(`${label}: "review" must be "algorithmic" or "agent".`)
         if (step.maxAttempts !== undefined && (!Number.isInteger(step.maxAttempts) || step.maxAttempts < 1)) err(`${label}: "maxAttempts" must be a positive integer.`)
         if (step.onLimit !== undefined && step.onLimit !== 'escalate' && step.onLimit !== 'fail') err(`${label}: "onLimit" must be "escalate" or "fail".`)

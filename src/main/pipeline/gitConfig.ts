@@ -1,6 +1,8 @@
 import { existsSync, realpathSync, statSync } from 'fs'
 import { isAbsolute, relative, resolve } from 'path'
 import { readSharedConfig } from '../config/projectConfig'
+import { walkSteps, type Step } from '../../shared/pipelineMachine'
+import { renderTemplate } from './engine/expressions'
 import { git } from './git'
 
 /**
@@ -93,6 +95,27 @@ export async function checkRepos(setup: GitSetup, projectPath: string): Promise<
     if (problem) problems.push(`Repo "${repo.id}": ${problem}`)
   }
   return problems
+}
+
+/**
+ * The repo each commit step commits in (spec §3): repo id per step id, and why a
+ * step has none. A `repo` that renders empty (an optional param not given) counts
+ * as absent. Without commits (no git, `commits: false`) `repo` is ignored.
+ */
+export function resolveCommitRepos(steps: Step[], params: Record<string, unknown>, setup: GitSetup): { repos: Record<string, string>; problems: string[] } {
+  const repos: Record<string, string> = {}
+  const problems: string[] = []
+  if (setup.mode !== 'git' || !setup.commits) return { repos, problems }
+  const ids = setup.repos.map((r) => r.id).join(', ')
+  walkSteps(steps, (step) => {
+    if (step.type !== 'commit') return
+    const id = step.repo === undefined ? '' : renderTemplate(step.repo, { params, outputs: {}, run: {} }).trim()
+    if (id && setup.repos.some((r) => r.id === id)) repos[step.id] = id
+    else if (id) problems.push(`Commit step "${step.id}": "${id}" is not a repo of this project (${ids}).`)
+    else if (setup.repos.length === 1) repos[step.id] = setup.repos[0].id
+    else problems.push(`Commit step "${step.id}" must name its repo ("repo": one of ${ids}).`)
+  })
+  return { repos, problems }
 }
 
 /** One line for pipeline_validate: `git: repos web=frontend, api=services/api; commits on`. */

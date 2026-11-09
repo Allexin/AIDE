@@ -353,8 +353,87 @@ describe('the git setup of a run', () => {
     expect((await call(server, dir, 'pipeline_validate')).data?.project).toMatchObject({ git: expect.stringMatching(/^git: none/), errors: [] })
   })
 
+  /** The guide's example with a `repo` on its commit step (and a `repo` param when it is a template). */
+  function exampleCommittingIn(repo: string): MachineDefinition {
+    const machine = guideExample()
+    if (repo.includes('{{')) machine.params = { ...machine.params, repo: { type: 'string' } }
+    const commit = machine.steps.find((s) => s.type === 'commit') as Extract<MachineDefinition['steps'][number], { type: 'commit' }>
+    commit.repo = repo
+    return machine
+  }
+
+  it('with several repos, pipeline_start refuses a commit step without repo and names it and the repo ids', async () => {
+    const dir = project('g4', guideExample())
+    await initRepo(join(dir, 'frontend'), 'a.ts')
+    await initRepo(join(dir, 'backend'), 'main.go')
+    writeFileSync(join(dir, 'aide', 'config.json'), JSON.stringify({ git: { repos: { web: 'frontend', api: 'backend' } } }))
+    const manager = new PipelineManager(gitEnvironment(happy, new Map()))
+    const server = new McpServer({ name: 'aide', version: 't', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', manager })))
+    const refused = await call(server, dir, 'pipeline_start', { machine: 'code-feature', params: { taskSpec: 'Y', acceptance: [] } })
+    expect(refused.isError).toBe(true)
+    expect(refused.text).toContain('Commit step "commit" must name its repo ("repo": one of web, api).')
+    expect(manager.activeRun(dir)).toBeNull()
+  })
+
+  it('"repo": "{{params.repo}}" commits in that repo; changes in the other repo do not fail it and are reported', async () => {
+    const dir = project('g5', exampleCommittingIn('{{params.repo}}'))
+    await initRepo(join(dir, 'frontend'), 'a.ts')
+    await initRepo(join(dir, 'backend'), 'main.go')
+    writeFileSync(join(dir, 'aide', 'config.json'), JSON.stringify({ git: { repos: { web: 'frontend', api: 'backend' } } }))
+    writeFileSync(join(dir, 'frontend', 'a.ts'), 'two\n')
+    await git(join(dir, 'frontend'), ['add', 'a.ts'])
+    writeFileSync(join(dir, 'backend', 'new.go'), 'package main\n')
+    const manager = new PipelineManager(gitEnvironment(happy, new Map()))
+    const ended = new Promise<string>((resolve) => manager.on('event', (_p, _r, type: string) => { if (['run_finished', 'run_failed', 'escalation'].includes(type)) resolve(type) }))
+    const { runId } = await manager.start(dir, 'code-feature', { taskSpec: 'Y', acceptance: [], repo: 'web' })
+    expect(manager.activeRun(dir)?.state.commitRepos).toEqual({ commit: 'web' })
+    expect(await ended).toBe('run_finished')
+    const report = manager.report(dir, runId)!
+    expect(report.commits).toMatchObject([{ files: ['frontend/a.ts'], message: 'Add X', repo: 'web' }])
+    expect(report.uncommitted).toEqual(['backend/new.go'])
+    expect((await git(join(dir, 'frontend'), ['log', '-1', '--format=%s'])).stdout.trim()).toBe('Add X')
+    expect((await git(join(dir, 'backend'), ['log', '--format=%s'])).stdout.trim()).toBe('init')
+  })
+
+  it('a report asked for while the final one is being written carries the reason the run ended', async () => {
+    const dir = project('g7', guideExample())
+    const env = environment((label) => label.endsWith(':implement') ? { structured: { status: 'plan_wrong', summary: 'bad idea', docsChanged: [], pipelineIssues: [] } } : happy(label))
+    let hold = false
+    let release = (): void => {}
+    const manager = new PipelineManager({
+      ...env,
+      deps: (p) => {
+        const base = env.deps(p)
+        return { ...base, git: { ...base.git, status: async (scope, repoId) => { if (hold) await new Promise<void>((resolve) => { release = resolve }); return base.git.status(scope, repoId) } } }
+      }
+    })
+    const waiting = new Promise<void>((resolve) => manager.on('event', (_p, _r, type: string) => { if (type === 'escalation') resolve() }))
+    const { runId } = await manager.start(dir, 'code-feature', { taskSpec: 'Y', acceptance: [] })
+    await waiting
+
+    hold = true
+    const abandoning = manager.abandon(dir, 'giving up')
+    expect(manager.activeRun(dir)?.isFinal()).toBe(true)
+    expect(manager.report(dir, runId)).toMatchObject({ result: 'failure', reason: 'abandoned: giving up', note: expect.stringContaining('being written') })
+
+    hold = false
+    release()
+    await abandoning
+    const final = manager.report(dir, runId)!
+    expect(final).toMatchObject({ result: 'failure', reason: 'abandoned: giving up' })
+    expect(final.note).toBeUndefined()
+  })
+
+  it('a repo id the project does not have refuses the start', async () => {
+    const dir = project('g6', exampleCommittingIn('{{params.repo}}'))
+    await initRepo(join(dir, 'frontend'), 'a.ts')
+    writeFileSync(join(dir, 'aide', 'config.json'), JSON.stringify({ git: { repos: { web: 'frontend' } } }))
+    const manager = new PipelineManager(gitEnvironment(happy, new Map()))
+    await expect(manager.start(dir, 'code-feature', { taskSpec: 'Y', acceptance: [], repo: 'api' })).rejects.toThrow('Commit step "commit": "api" is not a repo of this project (web).')
+  })
+
   it('with git.repos, the dirty-tree warning and the abandon list span every repo', async () => {
-    const dir = project('g3', guideExample())
+    const dir = project('g3', exampleCommittingIn('web'))
     await initRepo(join(dir, 'frontend'), 'a.ts')
     await initRepo(join(dir, 'backend'), 'main.go')
     writeFileSync(join(dir, 'aide', 'config.json'), JSON.stringify({ git: { repos: { web: 'frontend', api: 'backend' } } }))

@@ -156,6 +156,12 @@ export interface RunState {
    * change a running run. Absent in runs stored before it existed: they work in the project root's repo.
    */
   git?: GitSetup
+  /**
+   * Repo id per commit step id, resolved at start (again when a reload or an
+   * answer changes the machine or the params). Empty when commit steps cannot
+   * commit (no git, commits off). Filled on load for runs stored before it existed.
+   */
+  commitRepos?: Record<string, string>
   /** HEAD of the run's first repo when it started. */
   startCommit: string | null
   result: 'success' | 'failure' | null

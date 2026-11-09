@@ -2,9 +2,9 @@ import { randomUUID } from 'crypto'
 import type { HistoryEntry } from '../../pty/cliTools/types'
 import type { HeadlessRun, HeadlessRunOptions } from '../headless/types'
 import type { ProcessHandle } from '../processRunner'
-import type { CommitResult, FileChange } from '../git'
+import type { CommitResult, FileChange, IndexCommit } from '../git'
 import { checkCommitCoverage } from '../git'
-import { rootSetup, type GitSetup } from '../gitConfig'
+import { resolveCommitRepos, rootSetup, type GitSetup } from '../gitConfig'
 import { clip, type PipelineEventType } from '../events'
 import { inputRef, type AgentInputRecord } from '../../../shared/pipelineMachine'
 import { walkSteps } from '../../../shared/pipelineMachine'
@@ -37,15 +37,15 @@ export interface EngineDeps {
   startAgent(request: AgentRequest): HeadlessRun
   runCheck(options: { commandLine: string; cwd: string; timeoutMs: number; label: string; onOutput(text: string): void }): ProcessHandle
   /**
-   * Reads take the run's git setup (`RunState.git`, or the part of it a step works on)
-   * and span its repos with project-relative paths; `headSha` and `commitIndex` run in one repo.
+   * Reads take the run's git setup (`RunState.git`) and span its repos, or the one
+   * named by `repoId`, with project-relative paths; `headSha` and `commitIndex` run in one repo.
    */
   git: {
     workingDiff(scope: GitSetup): Promise<string>
-    stagedDiff(scope: GitSetup): Promise<string>
-    status(scope: GitSetup): Promise<FileChange[]>
+    stagedDiff(scope: GitSetup, repoId?: string): Promise<string>
+    status(scope: GitSetup, repoId?: string): Promise<FileChange[]>
     headSha(cwd: string): Promise<string | null>
-    commitIndex(cwd: string, message: string): Promise<CommitResult>
+    commitIndex(cwd: string, message: string): Promise<IndexCommit>
     /** Problems with the run's repos (gone, no longer a work-tree top level); checked when a run resumes. */
     checkRepos?(scope: GitSetup, projectPath: string): Promise<string[]>
   }
@@ -98,6 +98,8 @@ export interface RunReport {
   nonBlockingFindings: string[]
   /** Every check step that ran: the command and its last result (absent in reports from before it existed). */
   checks?: Array<{ node: string; command: string; passed: boolean; runs: number }>
+  /** Project-relative paths still changed in any repo when the run ended: work no commit step took (absent in interim and older reports, or when git could not be read). */
+  uncommitted?: string[]
   /** Problems with the pipeline itself that agents reported (`pipelineIssues`), every visit. */
   pipelineIssues: Array<{ step: string; visit: number; issue: string }>
   amendments: Amendment[]
@@ -143,6 +145,10 @@ export class PipelineRun {
   /** Ends the wait before the next attempt at an unavailable CLI when the run is paused. */
   private retryWake: (() => void) | null = null
   private readonly commits: CommitResult[] = []
+  /** Settles when the report of a finished run is written and announced. */
+  private ended: Promise<void> = Promise.resolve()
+  /** Why the run ended, for a report built before the final one is written. */
+  private endReason: string | null = null
 
   constructor(
     stored: StoredMachine,
@@ -159,9 +165,10 @@ export class PipelineRun {
     state.feedback ??= {}
     state.iterationStart ??= {}
     state.amendments ??= []
+    state.commitRepos ??= resolveCommitRepos(stored.machine.steps, params, this.gitSetup()).repos
   }
 
-  static create(stored: StoredMachine, params: Record<string, unknown>, runId: string, projectPath: string, store: RunStore, deps: EngineDeps, plan: { planTask?: PlanTaskLink; auto?: boolean; instructions?: string[]; git?: GitSetup } = {}): PipelineRun {
+  static create(stored: StoredMachine, params: Record<string, unknown>, runId: string, projectPath: string, store: RunStore, deps: EngineDeps, plan: { planTask?: PlanTaskLink; auto?: boolean; instructions?: string[]; git?: GitSetup; commitRepos?: Record<string, string> } = {}): PipelineRun {
     const now = new Date().toISOString()
     const state: RunState = {
       runId,
@@ -184,6 +191,7 @@ export class PipelineRun {
       escalations: [],
       sessions: {},
       git: plan.git ?? rootSetup(projectPath),
+      ...(plan.commitRepos ? { commitRepos: plan.commitRepos } : {}),
       startCommit: null,
       result: null,
       startedAt: now,
@@ -236,7 +244,9 @@ export class PipelineRun {
     }
     this.setStatus('running')
     this.loop = this.execute().finally(() => { this.loop = null })
-    return this.loop
+    await this.loop
+    // Not part of `loop`: a run that yields at an escalation must be free to continue at once.
+    return this.ended
   }
 
   /** Finish the current step, then stop before the next one. */
@@ -268,10 +278,10 @@ export class PipelineRun {
     if (this.state.status === 'running' || this.state.status === 'pausing') this.interruptRequested = true
   }
 
-  /** End the run for good (after stop or an escalation answered with stop). */
-  abandon(reason: string): void {
-    if (this.isFinal()) return
-    this.finish('failure', `abandoned: ${reason}`)
+  /** End the run for good (after stop or an escalation answered with stop). Resolves when its report is written. */
+  async abandon(reason: string): Promise<void> {
+    if (!this.isFinal()) this.finish('failure', `abandoned: ${reason}`)
+    await this.ended
   }
 
   /**
@@ -317,7 +327,10 @@ export class PipelineRun {
       if (!after) problems.push(`"${id}" is part of the run's state but is no longer in the machine.`)
       else if (before && before !== after) problems.push(`"${id}" changed from ${before} to ${after}.`)
     }
+    const commitRepos = resolveCommitRepos(stored.machine.steps, this.params, this.gitSetup())
+    problems.push(...commitRepos.problems)
     if (problems.length) return problems
+    this.state.commitRepos = commitRepos.repos
     this.machine = stored.machine
     this.machineDir = stored.machineDir
     this.tree = tree
@@ -390,9 +403,14 @@ export class PipelineRun {
     if (!escalation) return `Unknown escalation ${escalationId}.`
     if (escalation.answer) return `Escalation ${escalationId} was already answered.`
     if (answer.params && Object.keys(answer.params).length && answer.action !== 'stop') {
-      const errors = validateParams(this.machine.params, { ...this.params, ...answer.params })
+      const merged = { ...this.params, ...answer.params }
+      const errors = validateParams(this.machine.params, merged)
+      // A commit step's "repo" may come from the params.
+      const commitRepos = resolveCommitRepos(this.machine.steps, merged, this.gitSetup())
+      errors.push(...commitRepos.problems)
       if (errors.length) return `Invalid params:\n- ${errors.join('\n- ')}`
       Object.assign(this.params, answer.params)
+      this.state.commitRepos = commitRepos.repos
       this.store.writeParams(this.runId, this.params)
     }
     escalation.answer = { ...answer, at: new Date().toISOString() }
@@ -400,6 +418,7 @@ export class PipelineRun {
     if (answer.action === 'stop') {
       this.save()
       this.finish('failure', `stopped at escalation: ${answer.text}`)
+      await this.ended
       return null
     }
     const leaf = this.tree.leaf(node)
@@ -445,8 +464,9 @@ export class PipelineRun {
       }
     }
     // A repeat may have hit a loop limit and raised a new escalation.
-    if (this.isFinal() || this.pendingEscalation()) return null
-    if (this.state.current === null) { this.finish('success', null); return null }
+    if (this.isFinal()) { await this.ended; return null }
+    if (this.pendingEscalation()) return null
+    if (this.state.current === null) { this.finish('success', null); await this.ended; return null }
     this.setStatus('paused')
     void this.run()
     return null
@@ -840,17 +860,18 @@ export class PipelineRun {
     const setup = this.gitSetup()
     const unsupported = commitUnsupported(id, setup)
     if (unsupported) return { kind: 'escalate', message: unsupported }
-    // One repo (checked above): coverage and the staged diff are that repo's, paths project-relative.
-    const repo = (setup as Extract<GitSetup, { mode: 'git' }>).repos[0]
-    const cwd = repo.abs
-    const coverage = checkCommitCoverage(await this.deps.git.status(setup), message, excluded.map((e) => e.path))
+    const { repos } = setup as Extract<GitSetup, { mode: 'git' }>
+    const repo = repos.find((r) => r.id === this.state.commitRepos?.[id])
+    if (!repo) return { kind: 'escalate', message: `Commit step "${id}" has no repository: the project has several (${repos.map((r) => r.id).join(', ')}) and the step names none. Add "repo" to the step and reload the machine, or stop the run.` }
+    // Coverage and the staged diff are this repo's, paths project-relative; changes in other repos are not this step's business.
+    const coverage = checkCommitCoverage(await this.deps.git.status(setup, repo.id), message, excluded.map((e) => e.path))
     if (!coverage.ok) return { kind: 'done', outcome: 'fail', output: { issues: coverage.issues } }
 
     if (node.review === 'agent' && node.reviewer) {
       const reviewer = node.reviewer
       const cli = reviewer.cli ?? this.machine.defaults?.cli
       if (!cli) return { kind: 'escalate', message: `Commit reviewer of "${id}" has no CLI.` }
-      const stagedDiff = await this.deps.git.stagedDiff(setup)
+      const stagedDiff = await this.deps.git.stagedDiff(setup, repo.id)
       const prompt = [
         'Review the prepared commit. Check that the index contains no junk (build output, temporary files, unrelated changes), that the excluded files are justified, and that the message describes the change.',
         `## Commit message\n\n${message}`,
@@ -889,15 +910,17 @@ export class PipelineRun {
     // The last commit of a run on a plan task marks the task done (in the working tree) and carries the Plan-Task trailer.
     const link = this.state.planTask
     const undo = link && this.isLastCommit(id) ? await this.deps.planCommit?.(link, this.nonBlockingFindings()) : undefined
-    let commit: CommitResult
+    let made: IndexCommit
     try {
-      commit = await this.deps.git.commitIndex(cwd, link ? withPlanTrailer(message, link) : message)
+      made = await this.deps.git.commitIndex(repo.abs, link ? withPlanTrailer(message, link) : message)
     } catch (err) {
       undo?.()
       throw err
     }
+    const commit: CommitResult = { ...made, repo: repo.id, files: repo.path === '.' ? made.files : made.files.map((file) => `${repo.path}/${file}`) }
     this.commits.push(commit)
-    this.deps.emit(this.runId, 'commit_done', { node: id, sha: commit.sha, summary: `committed ${commit.sha.slice(0, 10)} ${commit.message.split('\n')[0]} (${commit.files.length} files)` })
+    const several = repos.length > 1
+    this.deps.emit(this.runId, 'commit_done', { node: id, sha: commit.sha, ...(several ? { repo: repo.id } : {}), summary: `committed ${several ? `in ${repo.id} ` : ''}${commit.sha.slice(0, 10)} ${commit.message.split('\n')[0]} (${commit.files.length} files)` })
     return { kind: 'done', outcome: 'ok', output: { ...commit, issues: [] } }
   }
 
@@ -1016,11 +1039,21 @@ export class PipelineRun {
   private finish(result: 'success' | 'failure', reason: string | null): void {
     this.clearLimitTimer()
     this.state.limitResumeAt = null
+    this.endReason = reason
     this.state.result = result
     this.state.finishedAt = new Date().toISOString()
     if (result === 'success') this.state.current = null
     this.setStatus(result === 'success' ? 'finished' : 'failed')
-    const report = this.buildReport(reason)
+    this.ended = this.publishEnd(result, reason)
+  }
+
+  /** Write the report and announce the end. Follows the final state because the report's `uncommitted` list reads git. */
+  private async publishEnd(result: 'success' | 'failure', reason: string | null): Promise<void> {
+    let uncommitted: string[] | undefined
+    try {
+      uncommitted = (await this.deps.git.status(this.gitSetup())).map((c) => c.path)
+    } catch { /* a report without the list is still the report */ }
+    const report = this.buildReport(reason, uncommitted)
     this.store.writeReport(this.runId, report)
     this.deps.emit(this.runId, result === 'success' ? 'run_finished' : 'run_failed', {
       result,
@@ -1031,7 +1064,7 @@ export class PipelineRun {
     })
   }
 
-  buildReport(reason: string | null = null): RunReport & { reason: string | null } {
+  buildReport(reason: string | null = this.endReason, uncommitted?: string[]): RunReport & { reason: string | null } {
     const durations = this.state.history.map((h) => ({
       node: h.node,
       visit: h.visit,
@@ -1086,12 +1119,13 @@ export class PipelineRun {
       loops: this.state.iterations,
       visits: durations,
       commits: this.commits.length ? this.commits : this.state.history.flatMap((h) => {
-        const out = this.state.outputs[h.node] as { sha?: string; files?: string[]; message?: string } | undefined
-        return this.tree.leaf(h.node)?.step.type === 'commit' && out?.sha ? [{ sha: out.sha, files: out.files ?? [], message: out.message ?? '' }] : []
+        const out = this.state.outputs[h.node] as { sha?: string; files?: string[]; message?: string; repo?: string } | undefined
+        return this.tree.leaf(h.node)?.step.type === 'commit' && out?.sha ? [{ sha: out.sha, files: out.files ?? [], message: out.message ?? '', repo: out.repo ?? 'root' }] : []
       }),
       summaries,
       nonBlockingFindings: nonBlocking,
       checks: [...checks.values()],
+      ...(uncommitted ? { uncommitted } : {}),
       pipelineIssues,
       amendments: this.state.amendments ?? [],
       escalations: this.state.escalations,
@@ -1144,16 +1178,13 @@ function target(to: EscalationTo | undefined): Escalation['to'] {
 }
 
 /**
- * Why a commit step cannot commit in this setup, or null. A commit step commits in
- * the project's single repo; skipping commit blocks (no git, commits off) and
- * naming the repo of a step (several repos) come with later steps of
- * docs/pipeline-git-modes-spec.md (§3, §4). Until then the run asks instead of
- * committing where it must not.
+ * Why a commit step cannot commit in this setup, or null. Skipping commit blocks
+ * (no git, commits off) comes with a later step of docs/pipeline-git-modes-spec.md
+ * (§4). Until then the run asks instead of committing where it must not.
  */
 export function commitUnsupported(id: string, setup: GitSetup): string | null {
   if (setup.mode !== 'git') return `Commit step "${id}" cannot commit: the project has no git repository AIDE uses (no-git mode). Skipping commit steps in this mode is not supported yet; stop the run, or make the project a git repository and retry.`
   if (!setup.commits) return `Commit step "${id}" cannot commit: the project does not let AIDE commit ("git.commits": false). Skipping commit steps in this mode is not supported yet; stop the run.`
-  if (setup.repos.length > 1) return `Commit step "${id}" cannot commit: the project has several repositories (${setup.repos.map((r) => r.id).join(', ')}), and choosing the repository of a commit step is not supported yet; stop the run.`
   return null
 }
 

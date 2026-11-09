@@ -30,6 +30,8 @@ export interface CompactReport {
   /** Instructions added during the run. */
   amendments: Array<{ step: string | null; text: string }>
   decisions: Array<{ step: string; kind: string; action: string; by: string; text: string }>
+  /** Project-relative paths still changed when the run ended: work no commit step took (absent when none). */
+  uncommitted?: string[]
   note?: string
 }
 
@@ -56,6 +58,7 @@ export function compactReport(report: RunReport & { reason?: string | null; note
     pipelineIssues: (report.pipelineIssues ?? []).slice(0, MAX_FINDINGS).map((p) => ({ step: p.step, issue: clip(p.issue, 300) })),
     amendments: (report.amendments ?? []).map((a) => ({ step: a.node, text: clip(a.text, 240) })),
     decisions: report.escalations.filter((e) => e.answer).map((e) => ({ step: e.node, kind: e.kind, action: e.answer!.action, by: e.answer!.by, text: clip(e.answer!.text, 240) })),
+    ...(report.uncommitted?.length ? { uncommitted: report.uncommitted.slice(0, MAX_FINDINGS).concat(report.uncommitted.length > MAX_FINDINGS ? [`… and ${report.uncommitted.length - MAX_FINDINGS} more (pipeline_report detail: true)`] : []) } : {}),
     ...(report.note ? { note: report.note } : {})
   }
 }

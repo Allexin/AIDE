@@ -125,6 +125,7 @@ export const MACHINE_FILE_SCHEMA = {
           required: ['type', 'id', 'prep', 'review'],
           properties: {
             type: { const: 'commit' }, id: ID, summary: { type: 'string' },
+            repo: { type: 'string', description: 'Id of the repo (git.repos in aide/config.json) this step commits in; may be a template of params, e.g. "{{params.repo}}". Required when the project has several repos.' },
             prep: { $ref: '#/$defs/agent', description: 'Agent that stages the change and outputs commitMessage + excluded (schema "commitPrep"). Usually session "continue:<implementer>".' },
             review: { enum: ['algorithmic', 'agent'] },
             reviewer: { type: 'object', required: ['role'], properties: { role: { type: 'string' }, cli: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, timeoutMin: { type: 'number' } } },

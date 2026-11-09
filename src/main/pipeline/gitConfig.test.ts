@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { git } from './git'
-import { GitConfigError, checkRepos, describeGitSetup, normalizeRepoPath, resolveGitSetup, rootSetup } from './gitConfig'
+import { GitConfigError, checkRepos, describeGitSetup, normalizeRepoPath, resolveCommitRepos, resolveGitSetup, rootSetup, type GitSetup } from './gitConfig'
+import type { Step } from '../../shared/pipelineMachine'
 
 const base = mkdtempSync(join(tmpdir(), 'aide-gitconfig-'))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
@@ -123,6 +124,39 @@ describe('checkRepos', () => {
     expect(await checkRepos(rootSetup(repoRoot), repoRoot)).toEqual([])
     expect(await checkRepos(rootSetup(project), project)).toEqual(['The project root is no longer inside a git work tree.'])
     expect(await checkRepos({ mode: 'none' }, project)).toEqual([])
+  })
+})
+
+describe('resolveCommitRepos', () => {
+  const two: GitSetup = { mode: 'git', repos: [{ id: 'web', path: 'frontend', abs: '' }, { id: 'api', path: 'backend', abs: '' }], commits: true }
+  const commit = (id: string, repo?: string): Step => ({ type: 'commit', id, review: 'algorithmic', ...(repo === undefined ? {} : { repo }), prep: { type: 'agent', id: `${id}Prep`, summary: 's', role: 'r', output: 'commitPrep' } })
+
+  it('a step without repo commits in the only repo', () => {
+    expect(resolveCommitRepos([commit('c')], {}, rootSetup('/p'))).toEqual({ repos: { c: 'root' }, problems: [] })
+  })
+
+  it('with several repos a step without repo is a problem naming the step and the ids', () => {
+    expect(resolveCommitRepos([commit('commit')], {}, two)).toEqual({ repos: {}, problems: ['Commit step "commit" must name its repo ("repo": one of web, api).'] })
+  })
+
+  it('a literal or a template names a repo; steps inside blocks count', () => {
+    const steps: Step[] = [commit('a', 'web'), { type: 'loop', id: 'l', maxIterations: 2, steps: [commit('b', '{{params.repo}}')] }]
+    expect(resolveCommitRepos(steps, { repo: 'api' }, two)).toEqual({ repos: { a: 'web', b: 'api' }, problems: [] })
+  })
+
+  it('an unknown id is a problem, in a single-repo project too', () => {
+    expect(resolveCommitRepos([commit('c', '{{params.repo}}')], { repo: 'nope' }, two).problems).toEqual(['Commit step "c": "nope" is not a repo of this project (web, api).'])
+    expect(resolveCommitRepos([commit('c', 'web')], {}, rootSetup('/p')).problems).toEqual(['Commit step "c": "web" is not a repo of this project (root).'])
+  })
+
+  it('a template that renders empty counts as absent', () => {
+    expect(resolveCommitRepos([commit('c', '{{params.repo}}')], {}, rootSetup('/p'))).toEqual({ repos: { c: 'root' }, problems: [] })
+    expect(resolveCommitRepos([commit('c', '{{params.repo}}')], {}, two).problems).toEqual(['Commit step "c" must name its repo ("repo": one of web, api).'])
+  })
+
+  it('repo is ignored when commit steps do not commit', () => {
+    expect(resolveCommitRepos([commit('c', 'whatever')], {}, { mode: 'none' })).toEqual({ repos: {}, problems: [] })
+    expect(resolveCommitRepos([commit('c')], {}, { ...two, commits: false } as GitSetup)).toEqual({ repos: {}, problems: [] })
   })
 })
 

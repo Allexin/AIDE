@@ -170,7 +170,7 @@ export function buildPipelineContext(machine: MachineDefinition, current: string
   if (next) lines.push(`- Next in order: ${next} — ${stepSummary(tree.leaves.get(next)!.step)}.`)
   else lines.push('- You are the last step; the run ends after you.')
   if (checks.length) lines.push(`- AIDE itself runs these checks later: ${checks.map((c) => `\`${c.command}\``).join(', ')}. Do not run them to verify your finished work: if they fail, the failure output comes back to the steps that must fix it. While you work, building and running the tests you add or change is fine; run a whole check yourself only when your task or a decision explicitly asks for it.`)
-  if (isCommitPrep) lines.push('- You prepare the commit (stage files, write the message); AIDE reviews it and commits. Do not commit yourself.')
+  if (isCommitPrep) lines.push(...commitPrepLines(leaf.parent.id, state))
   else if (commitLater) lines.push('- Staging and committing happen in a later step. Do not stage or commit.')
   // Facts about the machine and the engine only. How an agent should work (finish
   // everything now, plan increments, …) belongs in its role file: AIDE does not
@@ -197,6 +197,18 @@ export function buildPipelineContext(machine: MachineDefinition, current: string
   }
   for (const a of state.amendments ?? []) lines.push(`- Instruction from ${actorName(a.by)}${a.node ? ` (given during "${a.node}")` : ''}: ${a.text.trim()}`)
   return lines.join('\n')
+}
+
+/** What the prep agent of a commit block is told about its commit: the repo's path unless it is the project root. */
+function commitPrepLines(commitId: string, state: RunState): string[] {
+  const repoId = state.commitRepos?.[commitId]
+  const repo = state.git?.mode === 'git' ? state.git.repos.find((r) => r.id === repoId) : undefined
+  if (!repo || repo.path === '.') return ['- You prepare the commit (stage files, write the message); AIDE reviews it and commits. Do not commit yourself.']
+  const dir = /\s/.test(repo.path) ? `"${repo.path}"` : repo.path
+  return [
+    `- You prepare the commit in the repository at ${repo.path}/ (stage with git -C ${dir} add …); AIDE reviews it and commits. Do not commit yourself.`,
+    `- In "excluded", give paths relative to the project root (${repo.path}/…).`
+  ]
 }
 
 /** History index where the outermost enclosing loop's current pass started, if known. */

@@ -138,6 +138,11 @@ export interface RepeatStep extends StepBase {
 
 export interface CommitStep extends StepBase {
   type: 'commit'
+  /**
+   * Id of the repo this step commits in; may be a template of `params.*` (`{{params.repo}}`).
+   * Required when the project has several repos; resolved at run start.
+   */
+  repo?: string
   /** Agent that stages the change and outputs `commitMessage` + `excluded`. */
   prep: AgentStep
   review: 'algorithmic' | 'agent'

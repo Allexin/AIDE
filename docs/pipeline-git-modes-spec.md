@@ -1,11 +1,25 @@
 # Pipeline git modes: repos in subfolders, no commits, no git
 
-Status: step 1 of §10 implemented (2026-11-09): `gitConfig.ts`, repo-aware
+Status: steps 1–2 of §10 implemented (2026-11-09): `gitConfig.ts`, repo-aware
 reads, `RunState.git`, the resume re-check, project errors in
-`pipeline_validate`. Until steps 2–3, a commit step escalates instead of
-committing in no-git mode, with `commits: false`, or with several repos; no-git
-reads give a note (`NO_GIT_DIFF`) instead of a shadow diff. Steps 2–4 are not
-implemented.
+`pipeline_validate`; the commit step's `repo`, `RunState.commitRepos`, the
+report's `uncommitted`. Until step 3, a commit step escalates instead of
+committing in no-git mode or with `commits: false`; no-git reads give a note
+(`NO_GIT_DIFF`) instead of a shadow diff. Steps 3–4 are not implemented.
+
+Implementation notes for step 2:
+- `resolveCommitRepos` (`gitConfig.ts`) runs at start, and again on
+  `pipeline_reload` and when an answer changes params; problems refuse the
+  start, the reload or the answer. A `repo` that renders empty counts as absent.
+- `status`/`stagedDiff` take an optional repo id instead of a narrowed setup,
+  so the outer repo of a nested pair still leaves the inner repo's path out.
+- `commitIndex` keeps taking a cwd and returns repo-relative `files`; the runner
+  adds `repo` and makes `files` project-relative.
+- The run's end event and report follow the final state by one git read (the
+  `uncommitted` list); `run()`, `answer()` and `abandon()` resolve after them.
+  `uncommitted` is absent from a report when git could not be read. A report
+  asked for during that read (views fetch it when the state turns final) is
+  built on the spot: it has the end reason, but no `uncommitted`.
 
 Implementation notes for step 1:
 - `EngineDeps.git` reads take the `GitSetup` itself (there is no separate

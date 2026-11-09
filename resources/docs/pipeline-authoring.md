@@ -216,8 +216,9 @@ AIDE composes the prompt; you only write the role file and the step fields.
     are not in it. A project without git (no repository at the root and no
     config, or `"git": false`) gets a note instead of `run.diff`, and empty
     `run.stagedDiff` / `run.changedFiles`; its agents must report the files
-    they changed. Commit steps commit only in a project with a single
-    repository; elsewhere they stop the run with an escalation for now.
+    they changed. Commit steps stop the run with an escalation in a project
+    without git or with `"commits": false`, for now; with several repositories
+    each commit step names its own (§4).
 - **Feedback** of the loops it is in, from the second iteration on (§2).
 - **Output contract**: the schema named by `output`. Built-ins:
   - `implementerReport`: `status` (`done` | `blocked` | `plan_wrong`), `summary`, `docsChanged`, `pipelineIssues[]`
@@ -290,6 +291,22 @@ outputs `commitPrep`. AIDE then reviews the prepared commit:
 On success AIDE commits and the run continues. On failure the problems go back to
 the prep agent as feedback, up to `maxAttempts` (default 3) attempts; then
 `onLimit` applies as for loops.
+
+**Which repository** (`repo`, optional). A project with one repository needs
+nothing. A project that lists several in `git.repos` of `aide/config.json` must
+name one on every commit step: `"repo": "web"`, or a template of params,
+`"repo": "{{params.repo}}"`. A machine in a shared library cannot know the ids of a
+project's repos, so it takes the repo as a param. A template may use only `params.*`,
+and a `repo` that renders empty counts as absent. AIDE resolves `repo` when the run
+starts: a step without a repo in a project with several, or an id the project does
+not have, refuses `pipeline_start` with the step and the repo ids.
+
+The step looks only at its own repository: the coverage check, the reviewer's
+staged diff and the commit. Paths are project-relative everywhere, also in the
+prep agent's `excluded` list (`frontend/src/a.ts`). The prep agent is told where to
+stage (`git -C frontend add …`). Changes left in other repositories do not fail the
+step: at the end of the run the report lists every path still changed, in any
+repository, as `uncommitted`, so work no commit step took is visible.
 
 **Plan bookkeeping.** A run linked to a task of an AIDE plan (`planTask`) needs none:
 AIDE marks the task done and records the findings in the plan file (it never stages it); do not have

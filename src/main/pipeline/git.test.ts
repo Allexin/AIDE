@@ -285,6 +285,23 @@ describe('reads over a run git setup', () => {
     expect(splitDiff(await workingDiff(setup)).map((s) => s.path)).toEqual(['root.txt', 'frontend/a.ts', 'frontend/b.ts'])
   })
 
+  it('with a repo id, status and the staged diff are that repo\'s; the outer repo still leaves the inner one out', async () => {
+    const project = join(base, 'one-of-many')
+    await initRepo(project, { 'root.txt': 'r\n' })
+    await initRepo(join(project, 'frontend'), { 'a.ts': 'a\n' })
+    const setup = await resolveGitSetup(project, { repos: { main: '.', web: 'frontend' } })
+    writeFileSync(join(project, 'root.txt'), 'r\n2\n')
+    await git(project, ['add', 'root.txt'])
+    writeFileSync(join(project, 'frontend/a.ts'), 'a\n2\n')
+    await git(join(project, 'frontend'), ['add', 'a.ts'])
+    writeFileSync(join(project, 'frontend/b.ts'), 'b\n')
+    expect(changedFiles(await status(setup, 'main'))).toEqual(['root.txt (modified, staged)'])
+    expect(changedFiles(await status(setup, 'web'))).toEqual(['frontend/a.ts (modified, staged)', 'frontend/b.ts (untracked)'])
+    expect(splitDiff(await stagedDiff(setup, 'main')).map((s) => s.path)).toEqual(['root.txt'])
+    expect(splitDiff(await stagedDiff(setup, 'web')).map((s) => s.path)).toEqual(['frontend/a.ts'])
+    expect(await status(setup, 'unknown')).toEqual([])
+  })
+
   it('no-git mode reads give a note and no changes', async () => {
     const none: GitSetup = { mode: 'none' }
     expect(await workingDiff(none)).toBe(NO_GIT_DIFF)
