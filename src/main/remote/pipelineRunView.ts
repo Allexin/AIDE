@@ -2,6 +2,7 @@ import type { RunSnapshot } from '../pipeline/manager'
 import type { Escalation, EscalationAnswer, NodeVisit, RunState, RunStatus } from '../pipeline/engine/types'
 import { blockTitle, walkSteps, type Step } from '../../shared/pipelineMachine'
 import { escalationAudience } from '../../shared/plan'
+import { hasSeveralRepos, setupSkipReason, skippedCommitReason, skippedLabel } from '../../shared/pipelineCommits'
 
 /**
  * The remote pipeline page's view of a run: the machine's step tree flattened
@@ -152,10 +153,12 @@ function buildRows(snapshot: RunSnapshot): RemoteStepRow[] {
         case 'commit': {
           const iteration = state.iterations?.[step.id]
           const limit = loopLimit(step, state)
+          const skipped = step.type === 'commit' ? skippedCommitReason(state.outputs[step.id]) : null
+          const repo = step.type === 'commit' && hasSeveralRepos(state.git) ? state.commitRepos?.[step.id] : undefined
           rows.push({
             kind: 'block', depth, id: step.id, type: step.type,
-            label: step.type === 'commit' ? `commit ${step.id}` : blockTitle(step),
-            progress: iteration !== undefined ? `${step.type === 'commit' ? 'attempt' : 'iteration'} ${iteration}/${limit}` : `max ${limit}`,
+            label: step.type === 'commit' ? `commit ${step.id}${repo ? ` · ${repo}` : ''}` : blockTitle(step),
+            progress: skipped ? skippedLabel(skipped) : iteration !== undefined ? `${step.type === 'commit' ? 'attempt' : 'iteration'} ${iteration}/${limit}` : `max ${limit}`,
             active: iteration !== undefined && active && holdsCurrent(step, state.current),
             ...(step.summary ? { summary: step.summary } : {})
           })
@@ -163,8 +166,9 @@ function buildRows(snapshot: RunSnapshot): RemoteStepRow[] {
           else {
             list([step.prep], depth + 1)
             const reviewer = step.review === 'agent'
+            const skip = skipped ?? setupSkipReason(state.git)
             leaf(step.id, 'commit', depth + 1, reviewer,
-              reviewer ? 'a reviewer agent checks the staged commit, then AIDE commits' : 'AIDE checks the staged commit and commits',
+              skip ? `${skippedLabel(skip)}: the project does not let AIDE commit` : reviewer ? 'a reviewer agent checks the staged commit, then AIDE commits' : 'AIDE checks the staged commit and commits',
               reviewer ? step.reviewer?.cli ?? fallbackCli : undefined)
           }
           break

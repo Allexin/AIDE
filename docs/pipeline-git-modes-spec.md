@@ -1,11 +1,36 @@
 # Pipeline git modes: repos in subfolders, no commits, no git
 
-Status: steps 1–3 of §10 implemented (2026-11-09): `gitConfig.ts`, repo-aware
-reads, `RunState.git`, the resume re-check, project errors in
+Status: implemented (2026-11-09), all four steps of §10: `gitConfig.ts`,
+repo-aware reads, `RunState.git`, the resume re-check, project errors in
 `pipeline_validate`; the commit step's `repo`, `RunState.commitRepos`, the
 report's `uncommitted`; the shadow snapshot (`shadow.ts`) and skipped commit
-blocks. Step 4 (state migration, UI labels, the rest of the guide) is not
-implemented.
+blocks; `RunState.startCommits`, `AutopilotState.lastCommits`, outside commits
+per repo, repo labels and skipped blocks in the run views, the guide's modes table.
+
+Implementation notes for step 4:
+- Migration on read: `currentStartCommits` (`runStore.ts`, also in the
+  `PipelineRun` constructor) gives a stored run without `startCommits`
+  `{ root: startCommit }`, or `{ <first repo>: startCommit }` when the state has
+  a `git` setup (`{}` for no git). `currentAutopilot` (`planStore.ts`) turns an
+  old `lastCommit` into `lastCommits: { root }` and drops the old field.
+- The report gains `startCommits` only when the run has several repos (its keys
+  are the repo ids; views use it as the "several repos" signal, so a single-repo
+  report is unchanged) and `commitsSkipped` (the reason) when a commit block was
+  skipped. `compactReport` adds `repo` to commits only with several repos. The
+  plan journal's run entries gain `repos` (parallel to `commits`; written when
+  the compact report of the run-end event has commits with `repo`) and
+  `commitsSkipped`.
+- The autopilot reads the setup of the run that ended (`RunState.git`; the root
+  repo for older runs; the project's current setup when there is no run yet):
+  `lastCommits` has every repo's HEAD, and is `{}` with commits off or no git, so
+  the outside-commits section is left out. `PlanEnvironment.headSha` and
+  `commitsSince` take the repo's absolute path.
+- The labels are built by `src/shared/pipelineCommits.ts` (the remote page
+  script repeats the two report lines inline). The pipeline tab and the remote
+  page show the repo next to a commit block's title with several repos, and
+  `skipped (<reason>)` as its progress and in its action's summary.
+- `pipeline_hello` adds `Project git: …` (the `describeGitSetup` line) when the
+  pipeline engine is available.
 
 Implementation notes for step 3:
 - `ShadowStore` (`shadow.ts`) lives in `.aide/users/<user>/shadow/<runId>/`;

@@ -105,7 +105,7 @@ export class PlanStore {
 
   readAutopilot(id: string): AutopilotState | null {
     try {
-      return JSON.parse(readFileSync(join(this.userDir, id, 'autopilot.json'), 'utf8')) as AutopilotState
+      return currentAutopilot(JSON.parse(readFileSync(join(this.userDir, id, 'autopilot.json'), 'utf8')) as AutopilotState)
     } catch {
       return null
     }
@@ -160,4 +160,12 @@ export class PlanStore {
     try { value = JSON.parse(readFileSync(join(dir, 'decision.json'), 'utf8')) } catch { /* no answer yet, or none usable */ }
     return { entries: this.readJsonl(join(dir, 'transcript.jsonl')), inputs: this.readJsonl(join(dir, 'input.jsonl')), decision: value }
   }
+}
+
+/** An autopilot state written before `lastCommits` had one `lastCommit`, the HEAD of the root repo: read it as `{ root }`. */
+export function currentAutopilot(state: AutopilotState): AutopilotState {
+  if (state.lastCommits && typeof state.lastCommits === 'object') return state
+  const legacy = state as AutopilotState & { lastCommit?: string | null }
+  const { lastCommit, ...rest } = legacy
+  return { ...rest, lastCommits: typeof lastCommit === 'string' && lastCommit ? { root: lastCommit } : {} }
 }

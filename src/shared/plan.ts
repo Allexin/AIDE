@@ -109,8 +109,11 @@ export interface AutopilotState {
   /** The task of the current or last run. */
   task: string | null
   runId: string | null
-  /** The commit the last plan step ended on; commits after it were made outside the plan. */
-  lastCommit: string | null
+  /**
+   * HEAD of each repo (by repo id) when the last plan step ended; commits after them were made outside the plan.
+   * Empty when AIDE does not commit in the project (no git, `git.commits: false`). An old `lastCommit` is read as `{ root }`.
+   */
+  lastCommits: Record<string, string>
   /** Tasks ended since the Strategist last acted. */
   unreviewed: number
   attention: PlanAttention | null
@@ -128,7 +131,11 @@ export type JournalEntry =
   | { kind: 'decision'; at: string; startedAt: string; decision: number; task: string; verdict: 'next' | 'wake' | 'answer' | 'escalate'; reason: string; proposal?: string; handoff?: string; costUsd: number | null; shadow?: boolean
       /** An answer to an escalation inside the task's run, rather than a decision between tasks. */
       escalation?: { runId: string; id: string; kind: EscalationKind; node: string; action?: string; text?: string } }
-  | { kind: 'run'; at: string; task: string; runId: string; result: string; commits: string[]; costUsd: number }
+  | { kind: 'run'; at: string; task: string; runId: string; result: string; commits: string[]; costUsd: number
+      /** The repo of each commit (same order), when the run has several repos. */
+      repos?: string[]
+      /** Why the run's commit blocks were skipped, when they were. */
+      commitsSkipped?: string }
   | { kind: 'attention'; at: string; attention: PlanAttention }
   | { kind: 'note'; at: string; text: string }
 

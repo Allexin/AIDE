@@ -2,6 +2,7 @@ import { existsSync, realpathSync, statSync } from 'fs'
 import { isAbsolute, relative, resolve } from 'path'
 import { readSharedConfig } from '../config/projectConfig'
 import { walkSteps, type Step } from '../../shared/pipelineMachine'
+import { setupSkipReason } from '../../shared/pipelineCommits'
 import { renderTemplate } from './engine/expressions'
 import { git } from './git'
 
@@ -85,9 +86,7 @@ export async function resolveGitSetup(projectPath: string, config: unknown = rea
 
 /** Why a commit block is skipped in this setup (spec §4), or null when it commits. A run stored before `RunState.git` existed commits. */
 export function commitSkipReason(setup: GitSetup | undefined): 'commits disabled' | 'no git' | null {
-  if (!setup) return null
-  if (setup.mode === 'none') return 'no git'
-  return setup.commits ? null : 'commits disabled'
+  return setupSkipReason(setup)
 }
 
 /** Repos of a stored setup that are gone or no longer a work-tree top level (checked when a run resumes). */

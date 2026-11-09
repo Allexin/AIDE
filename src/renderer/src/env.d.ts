@@ -155,6 +155,10 @@ interface PipelineRunState {
   limitResumeAt?: string | null
   /** The CLI whose usage limit the run waits for. */
   limitCli?: string | null
+  /** The git setup the run started with (absent in runs stored before it existed: the root repo). */
+  git?: { mode: 'git'; repos: Array<{ id: string; path: string }>; commits: boolean } | { mode: 'none' }
+  /** Repo id per commit step id. */
+  commitRepos?: Record<string, string>
 }
 
 interface PipelineRunSnapshot {

@@ -10,12 +10,13 @@ import { logEvent } from '../../diagnostics'
 import { clip, type PipelineEventType } from '../events'
 import { inputRef, type AgentInputRecord } from '../../../shared/pipelineMachine'
 import { walkSteps } from '../../../shared/pipelineMachine'
+import { skippedCommitReason } from '../../../shared/pipelineCommits'
 import type { Actor, AgentStep, Amendment, CheckStep, EscalationTo, OrchestratorHandling, CommitStep, Escalation, EscalationAnswer, LoopFeedback, MachineDefinition, NodeVisit, Outcome, PlanTaskLink, RunState } from './types'
 import { evaluateCondition, renderCommand, stringifyValue, templateRefs, type Scope } from './expressions'
 import { resolveSchema, validateAgainstSchema, BUILTIN_SCHEMAS } from './schema'
 import { DEFAULT_TIMEOUT_MIN, actorName, buildPipelineContext, buildSystemAppend, buildTaskPrompt, describeCondition, feedbackSections, invalidOutputPrompt, outputContract, stepSummary, stepSwitchPrompt } from './context'
 import { MachineTree, blockLimit, type DescendContext, type TreeBlock, type TreeLeaf, type TreeNode } from './tree'
-import type { RunStore, StoredMachine } from './runStore'
+import { currentStartCommits, type RunStore, type StoredMachine } from './runStore'
 import { compactReport } from './reportView'
 import { checkFailureLines, limitResetTime } from './failures'
 import { validateParams } from './library'
@@ -93,6 +94,10 @@ export interface RunReport {
   startedAt: string
   finishedAt: string
   startCommit: string | null
+  /** HEAD of each repo when the run started; present only when the run has several repos (its keys are the repo ids, in config order). */
+  startCommits?: Record<string, string | null>
+  /** Why commit blocks were skipped (no git, `git.commits: false`); present only when the run skipped one. */
+  commitsSkipped?: string
   /** Final iteration of every loop / commit block entered. */
   loops: Record<string, number>
   visits: Array<{ node: string; visit: number; outcome: string | null; durationMs: number | null; costUsd: number | null; error: string | null }>
@@ -170,6 +175,7 @@ export class PipelineRun {
     state.iterationStart ??= {}
     state.amendments ??= []
     state.commitRepos ??= resolveCommitRepos(stored.machine.steps, params, this.gitSetup()).repos
+    currentStartCommits(state)
   }
 
   static create(stored: StoredMachine, params: Record<string, unknown>, runId: string, projectPath: string, store: RunStore, deps: EngineDeps, plan: { planTask?: PlanTaskLink; auto?: boolean; instructions?: string[]; git?: GitSetup; commitRepos?: Record<string, string> } = {}): PipelineRun {
@@ -197,6 +203,7 @@ export class PipelineRun {
       git: plan.git ?? rootSetup(projectPath),
       ...(plan.commitRepos ? { commitRepos: plan.commitRepos } : {}),
       startCommit: null,
+      startCommits: {},
       result: null,
       startedAt: now,
       updatedAt: now,
@@ -244,7 +251,10 @@ export class PipelineRun {
     }
     if (this.state.startCommit === null && this.state.history.length === 0) {
       const setup = this.gitSetup()
-      this.state.startCommit = setup.mode === 'git' ? await this.deps.git.headSha(setup.repos[0].abs).catch(() => null) : null
+      const starts: Record<string, string | null> = {}
+      if (setup.mode === 'git') for (const repo of setup.repos) starts[repo.id] = await this.deps.git.headSha(repo.abs).catch(() => null)
+      this.state.startCommits = starts
+      this.state.startCommit = setup.mode === 'git' ? starts[setup.repos[0].id] ?? null : null
     }
     this.setStatus('running')
     this.loop = this.execute().finally(() => { this.loop = null })
@@ -1205,6 +1215,12 @@ export class PipelineRun {
         pipelineIssues.push({ step: h.node, visit: h.visit, issue: issue.trim() })
       }
     }
+    const setup = this.gitSetup()
+    let commitsSkipped: string | undefined
+    for (const h of this.state.history) {
+      if (this.tree.leaf(h.node)?.step.type !== 'commit' || h.outcome !== 'ok') continue
+      commitsSkipped = skippedCommitReason(this.store.readOutput(this.runId, h.node, h.visit) ?? this.state.outputs[h.node]) ?? commitsSkipped
+    }
     const checks = new Map<string, NonNullable<RunReport['checks']>[number]>()
     for (const h of this.state.history) {
       const step = this.tree.leaf(h.node)?.step
@@ -1223,6 +1239,8 @@ export class PipelineRun {
       startedAt: this.state.startedAt,
       finishedAt: this.state.finishedAt ?? new Date().toISOString(),
       startCommit: this.state.startCommit,
+      ...(setup.mode === 'git' && setup.repos.length > 1 ? { startCommits: this.state.startCommits } : {}),
+      ...(commitsSkipped ? { commitsSkipped } : {}),
       loops: this.state.iterations,
       visits: durations,
       commits: this.commits.length ? this.commits : this.state.history.flatMap((h) => {

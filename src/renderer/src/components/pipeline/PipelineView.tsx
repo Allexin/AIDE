@@ -6,6 +6,7 @@ import { AccountLabel, UsageLabel, useAccountUsage } from '../cli/AccountUsage'
 import { DecisionDetail, PlanPanel, planNeedsAttention, usePastRun } from './PlanView'
 import { hasPlans, usePlanStore } from '../../store/usePlanStore'
 import { escalationAudience, planProgress } from '../../../../shared/plan'
+import { commitLine, hasSeveralRepos, reportHasSeveralRepos, setupSkipReason, skippedCommitReason, skippedLabel } from '../../../../shared/pipelineCommits'
 
 /**
  * Pipeline run view (plan §4.1), shown as a tab of the terminal panel next to
@@ -252,18 +253,23 @@ function StepRow({ step, ...props }: FlowProps & { step: Step }): React.ReactEle
       const iteration = state.iterations?.[step.id]
       const limit = loopLimit(step, state)
       const active = iteration !== undefined && isRunActive(state.status) && holdsCurrent(step, state.current)
+      const skipped = step.type === 'commit' ? skippedCommitReason(state.outputs[step.id]) : null
+      // Skipped already, or will be: the setup does not let AIDE commit.
+      const skipReason = skipped ?? (step.type === 'commit' ? setupSkipReason(state.git) : null)
+      const repo = step.type === 'commit' && hasSeveralRepos(state.git) ? state.commitRepos?.[step.id] : undefined
       return <div style={{ marginTop: 2 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 10px', fontSize: 12, color: active ? '#dcdcaa' : '#999' }} title={step.summary}>
           <span style={{ width: 14, textAlign: 'center' }}>{step.type === 'commit' ? '⎇' : '↺'}</span>
           <span>{step.type === 'commit' ? `commit ${step.id}` : blockTitle(step)}</span>
+          {repo && <span style={{ fontSize: 11, color: '#888' }} title={`Commits in the repository "${repo}"`}>{repo}</span>}
           <span style={{ marginLeft: 'auto', fontSize: 11, color: active ? '#dcdcaa' : '#777' }}>
-            {iteration !== undefined ? `${step.type === 'commit' ? 'attempt' : 'iteration'} ${iteration}/${limit}` : `max ${limit}`}
+            {skipped ? skippedLabel(skipped) : iteration !== undefined ? `${step.type === 'commit' ? 'attempt' : 'iteration'} ${iteration}/${limit}` : `max ${limit}`}
           </span>
         </div>
         <Nested color={active ? '#6a6a3a' : undefined}>
           {step.type === 'loop' ? <StepList steps={step.steps} {...props} /> : <>
             <StepRow step={step.prep} {...props} />
-            <LeafRow id={step.id} type="commit" summary={step.review === 'agent' ? 'a reviewer agent checks the staged commit, then AIDE commits' : 'AIDE checks the staged commit and commits'} {...props} />
+            <LeafRow id={step.id} type="commit" summary={skipReason ? `${skippedLabel(skipReason)}: the project does not let AIDE commit` : step.review === 'agent' ? 'a reviewer agent checks the staged commit, then AIDE commits' : 'AIDE checks the staged commit and commits'} {...props} />
           </>}
         </Nested>
       </div>
@@ -407,14 +413,17 @@ function ReportPanel({ runId }: { runId: string }): React.ReactElement | null {
   const [report, setReport] = useState<Record<string, unknown> | null>(null)
   useEffect(() => { void window.editorApi.pipelineGetReport(runId).then(setReport) }, [runId])
   if (!report) return null
-  const commits = (report.commits as Array<{ sha: string; message: string }> | undefined) ?? []
+  const commits = (report.commits as Array<{ sha: string; message: string; repo?: string }> | undefined) ?? []
+  const withRepo = reportHasSeveralRepos(report)
+  const skipped = typeof report.commitsSkipped === 'string' ? report.commitsSkipped : null
   const findings = (report.nonBlockingFindings as string[] | undefined) ?? []
   const cost = typeof report.costUsd === 'number' ? report.costUsd : 0
   return <div style={{ padding: '8px 12px', borderBottom: '1px solid #2d2d2d', fontSize: 12, lineHeight: 1.5 }}>
     <div style={{ fontWeight: 600, color: report.result === 'success' ? '#4ec9b0' : '#f48771' }}>
       Run {String(report.result)}{report.reason ? ` — ${String(report.reason)}` : ''}
     </div>
-    {commits.length > 0 && <div>Commits: {commits.map((c) => `${c.sha.slice(0, 8)} ${c.message.split('\n')[0]}`).join('; ')}</div>}
+    {commits.length > 0 && <div>Commits: {commits.map((c) => commitLine(c, withRepo)).join('; ')}</div>}
+    {commits.length === 0 && skipped && <div style={{ color: '#888' }}>Commits: {skippedLabel(skipped)}</div>}
     {findings.length > 0 && <div>Non-blocking findings: {findings.length}<ul style={{ margin: '2px 0 0 18px', padding: 0 }}>{findings.slice(0, 8).map((f, i) => <li key={i}>{f}</li>)}</ul></div>}
     {cost > 0 && <div style={{ color: '#888' }}>Cost: ${cost.toFixed(2)}</div>}
   </div>

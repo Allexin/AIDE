@@ -11,6 +11,8 @@ import { clip, pipelineEvents } from '../events'
 import type { PipelineManager } from '../manager'
 import { applyOps, markDone, newPlan, nextTask, planDetail, type PlanOp } from './planFile'
 import { PlanStore } from './planStore'
+import { rootSetup, type GitSetup } from '../gitConfig'
+import { journalCommitsText, skippedLabel } from '../../../shared/pipelineCommits'
 
 /**
  * Plans of the open projects: editing, the active plan, and the autopilot that
@@ -28,8 +30,10 @@ import { PlanStore } from './planStore'
 export interface PlanEnvironment {
   /** Per-user directory for the plans of this project. */
   userDir(projectPath: string): string
-  headSha(projectPath: string): Promise<string | null>
-  commitsSince(projectPath: string, since: string): Promise<string[]>
+  /** HEAD of the repo at `cwd` (a repo of the run's git setup). */
+  headSha(cwd: string): Promise<string | null>
+  /** Commits of the repo at `cwd` after `since`, as "<short sha> <subject>". */
+  commitsSince(cwd: string, since: string): Promise<string[]>
 }
 
 const DEFAULT_MAX_UNREVIEWED = 5
@@ -107,7 +111,7 @@ export function taskInstructions(task: PlanTask, handoff: string): string[] {
 }
 
 function emptyAutopilot(planId: string): AutopilotState {
-  return { planId, status: 'idle', task: null, runId: null, lastCommit: null, unreviewed: 0, attention: null, pending: null, decisions: 0, lastEventId: 0, updatedAt: new Date().toISOString() }
+  return { planId, status: 'idle', task: null, runId: null, lastCommits: {}, unreviewed: 0, attention: null, pending: null, decisions: 0, lastEventId: 0, updatedAt: new Date().toISOString() }
 }
 
 export class PlanService extends EventEmitter {
@@ -339,7 +343,8 @@ export class PlanService extends EventEmitter {
     const state = this.manager.runState(projectPath, runId)
     const link = state?.planTask
     if (!link) return
-    const report = data.report as { nonBlockingFindings?: string[]; commits?: Array<{ sha: string }>; costUsd?: number } | undefined
+    // The compact report of the end event: its commits carry `repo` only when the run has several repos.
+    const report = data.report as { nonBlockingFindings?: string[]; commits?: Array<{ sha: string; repo?: string }>; costUsd?: number; commitsSkipped?: string } | undefined
     const store = this.store(projectPath)
     try {
       if (ok) {
@@ -347,7 +352,12 @@ export class PlanService extends EventEmitter {
         // A machine without a commit, or whose last commit step did not run: the status stays in the working tree.
         if (plan.tasks.find((t) => t.id === link.task)?.status !== 'done') store.write(markDone(plan, link.task, report?.nonBlockingFindings ?? []))
       }
-      store.appendJournal(link.plan, { kind: 'run', at: new Date().toISOString(), task: link.task, runId, result: ok ? 'success' : 'failure', commits: (report?.commits ?? []).map((c) => c.sha), costUsd: report?.costUsd ?? 0 })
+      const commits = report?.commits ?? []
+      store.appendJournal(link.plan, {
+        kind: 'run', at: new Date().toISOString(), task: link.task, runId, result: ok ? 'success' : 'failure', commits: commits.map((c) => c.sha), costUsd: report?.costUsd ?? 0,
+        ...(commits.some((c) => c.repo) ? { repos: commits.map((c) => c.repo ?? '') } : {}),
+        ...(report?.commitsSkipped ? { commitsSkipped: report.commitsSkipped } : {})
+      })
     } catch { /* an unreadable plan file: the autopilot below reports it */ }
     this.emit('changed', projectPath)
     if (state?.planAuto) void this.afterStep(projectPath, link, runId, ok, typeof data.reason === 'string' ? data.reason : null)
@@ -443,8 +453,8 @@ export class PlanService extends EventEmitter {
     const store = this.store(projectPath)
     const id = link.plan
     let auto = store.readAutopilot(id) ?? emptyAutopilot(id)
-    const head = await this.env.headSha(projectPath).catch(() => null)
-    auto = this.saveAutopilot(store, { ...auto, runId, task: link.task, lastCommit: head ?? auto.lastCommit, unreviewed: auto.unreviewed + 1, status: 'deciding' })
+    const lastCommits = await this.lastCommits(projectPath, runId, auto.lastCommits)
+    auto = this.saveAutopilot(store, { ...auto, runId, task: link.task, lastCommits, unreviewed: auto.unreviewed + 1, status: 'deciding' })
     if (!ok) { this.hold(projectPath, id, 'run_failed', `The run of task "${link.task}" failed${reason ? `: ${reason}` : '.'}`, { task: link.task }); return }
 
     let plan: PlanFile
@@ -615,10 +625,47 @@ export class PlanService extends EventEmitter {
     return validateParams(params, { ...given, ...(next.params ?? {}) })
   }
 
+  /**
+   * The git setup a plan step's run worked with (the root repo for a run stored before `RunState.git`; the
+   * project's current setup when there is no run), or null when commits are not AIDE's business there: no git,
+   * `git.commits: false` or an invalid config (spec §6).
+   */
+  private async committingSetup(projectPath: string, runId: string | null): Promise<Extract<GitSetup, { mode: 'git' }> | null> {
+    const state = runId ? this.manager.runState(projectPath, runId) : null
+    const setup = state ? state.git ?? rootSetup(projectPath) : await this.manager.gitSetup(projectPath).catch(() => null)
+    return setup?.mode === 'git' && setup.commits ? setup : null
+  }
+
+  /** HEAD of each repo of the run when its step ended; a repo whose HEAD cannot be read keeps its last known commit. */
+  private async lastCommits(projectPath: string, runId: string, previous: Record<string, string>): Promise<Record<string, string>> {
+    const setup = await this.committingSetup(projectPath, runId)
+    const heads: Record<string, string> = {}
+    for (const repo of setup?.repos ?? []) {
+      const head = await this.env.headSha(repo.abs).catch(() => null) ?? previous[repo.id]
+      if (head) heads[repo.id] = head
+    }
+    return heads
+  }
+
+  /** "Commits made outside the plan": per repo since the last step, lines prefixed `web: ` when there are several repos. */
+  private async outsideCommits(projectPath: string, auto: AutopilotState): Promise<string[]> {
+    const setup = await this.committingSetup(projectPath, auto.runId)
+    if (!setup) return []
+    const several = setup.repos.length > 1
+    const lines: string[] = []
+    for (const repo of setup.repos) {
+      const since = auto.lastCommits[repo.id]
+      if (!since) continue
+      const commits = await this.env.commitsSince(repo.abs, since).catch(() => [])
+      lines.push(...commits.map((c) => several ? `${repo.id}: ${c}` : c))
+    }
+    return lines
+  }
+
   private async orchestratorPrompt(projectPath: string, plan: PlanFile, next: PlanTask, auto: AutopilotState, machineDescription: string): Promise<string> {
     const store = this.store(projectPath)
     const report = auto.runId ? this.manager.report(projectPath, auto.runId) : null
-    const outside = auto.lastCommit ? await this.env.commitsSince(projectPath, auto.lastCommit) : []
+    const outside = await this.outsideCommits(projectPath, auto)
     const journal = store.readJournal(plan.id).filter((e) => e.kind !== 'attention').slice(-JOURNAL_FOR_PROMPT).map(journalLine)
     const nextText = [`${next.id}: ${next.title}`, next.spec ? `Spec: ${next.spec}` : '', next.acceptance?.length ? `Acceptance: ${next.acceptance.join('; ')}` : '', `Machine: ${next.machine} — ${machineDescription}`, next.params ? `Params the plan fixes: ${JSON.stringify(next.params)}` : ''].filter(Boolean).join('\n')
     return [
@@ -798,7 +845,7 @@ function journalLine(entry: JournalEntry): string {
     case 'decision':
       if (entry.escalation) return `${entry.at} answer to the ${entry.escalation.kind} escalation at ${entry.escalation.node} in ${entry.task}: ${entry.verdict}${entry.escalation.action ? ` ${entry.escalation.action}` : ''}${entry.shadow ? ' (shadow)' : ''} — ${clip(entry.reason, 200)}`
       return `${entry.at} decision on ${entry.task}: ${entry.verdict} — ${clip(entry.reason, 200)}${entry.handoff ? ` Handoff: ${clip(entry.handoff, 200)}` : ''}`
-    case 'run': return `${entry.at} run of ${entry.task}: ${entry.result}${entry.commits.length ? ` (${entry.commits.map((c) => c.slice(0, 8)).join(', ')})` : ''}`
+    case 'run': return `${entry.at} run of ${entry.task}: ${entry.result}${entry.commits.length ? ` (${journalCommitsText(entry.commits, entry.repos)})` : entry.commitsSkipped ? ` (commits ${skippedLabel(entry.commitsSkipped)})` : ''}`
     case 'note': return `${entry.at} note: ${clip(entry.text, 400)}`
     case 'attention': return `${entry.at} attention: ${entry.attention.kind}`
   }

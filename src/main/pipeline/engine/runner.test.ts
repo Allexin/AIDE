@@ -2,7 +2,8 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { PipelineRun, UNAVAILABLE_RETRY_MS, type AgentRequest, type EngineDeps } from './runner'
+import { PipelineRun, UNAVAILABLE_RETRY_MS, type AgentRequest, type EngineDeps, type RunReport } from './runner'
+import { compactReport } from './reportView'
 import { rootSetup, type GitSetup } from '../gitConfig'
 import { RunStore } from './runStore'
 import { isSignificant } from '../events'
@@ -848,6 +849,8 @@ describe('the run git setup', () => {
     expect(h.run.pendingEscalation()).toBeNull()
     expect(h.state().result).toBe('success')
     expect(h.state().outputs.commit).toEqual({ skipped: 'no git', checkpoint: null, issues: [] })
+    expect(h.state().startCommits).toEqual({})
+    expect(h.store.readReport('run-1')).toMatchObject({ commitsSkipped: 'no git', commits: [] })
     expect(h.requests.find((r) => r.label.endsWith(':review'))?.prompt).toContain('(diff unavailable: shadow snapshots are not available; read the files the implementer reports)')
     expect(h.commits).toEqual([])
   })
@@ -926,6 +929,28 @@ describe('the repo of a commit step', () => {
     const report = h.store.readReport('run-1') as { commits: unknown[] }
     expect(report.commits).toEqual([{ sha: 'sha-1', files: ['frontend/src/a.ts'], message: 'Add feature X', repo: 'web' }])
     expect(h.state().outputs.commit).toMatchObject({ repo: 'web', files: ['frontend/src/a.ts'], issues: [] })
+  })
+
+  it('records the start commit of every repo; the report keeps them and names the repo of each commit', async () => {
+    const h = twoRepos()
+    engineDeps(h.run).git.headSha = async (cwd) => `head-${cwd}`
+    await h.run.run()
+    expect(h.state().startCommits).toEqual({ web: 'head-/p/frontend', api: 'head-/p/backend' })
+    expect(h.state().startCommit).toBe('head-/p/frontend')
+    const report = h.store.readReport('run-1') as RunReport
+    expect(report.startCommits).toEqual({ web: 'head-/p/frontend', api: 'head-/p/backend' })
+    expect(report.commitsSkipped).toBeUndefined()
+    expect(compactReport(report).commits).toEqual([{ repo: 'web', sha: 'sha-1', subject: 'Add feature X', files: 1 }])
+  })
+
+  it('with one repo the report and its compact view are as before', async () => {
+    const h = harness({ agent: happy })
+    await h.run.run()
+    expect(h.state().startCommits).toEqual({ root: 'base-sha' })
+    const report = h.store.readReport('run-1') as RunReport
+    expect(report.startCommit).toBe('base-sha')
+    expect('startCommits' in report).toBe(false)
+    expect(compactReport(report).commits).toEqual([{ sha: 'sha-1', subject: 'Add feature X', files: 1 }])
   })
 
   it('names the repo in commit_done when the setup has several', async () => {

@@ -381,11 +381,15 @@ ${HISTORY_STYLE}
       head.style.color = report.result === 'success' ? '#4ec9b0' : '#f48771'
       card.appendChild(head)
       var commits = report.commits || []
+      // With several repos (only then the report has startCommits) each commit names its repo: reportHasSeveralRepos and commitLine of src/shared/pipelineCommits.ts, kept in step by hand.
+      var withRepo = !!report.startCommits && Object.keys(report.startCommits).length > 1
       if (commits.length) {
         card.appendChild(el('div', '', 'Commits:'))
         var ul = el('ul')
-        commits.forEach(function(c) { ul.appendChild(el('li', '', String(c.sha).slice(0, 8) + ' ' + String(c.message).split(String.fromCharCode(10))[0])) })
+        commits.forEach(function(c) { ul.appendChild(el('li', '', (withRepo && c.repo ? c.repo + ' ' : '') + String(c.sha).slice(0, 8) + ' ' + String(c.message).split(String.fromCharCode(10))[0])) })
         card.appendChild(ul)
+      } else if (report.commitsSkipped) {
+        card.appendChild(el('div', '', 'Commits: skipped (' + report.commitsSkipped + ')'))
       }
       var checks = report.checks || []
       if (checks.length) {
@@ -596,7 +600,8 @@ ${HISTORY_STYLE}
       if (item.kind === 'run') {
         var meta = clock(item.at) + (item.costUsd ? ' · $' + item.costUsd.toFixed(2) : '')
         var box = runBlock(item.runId, 'Run: ' + item.result, item.result === 'success' ? '#4ec9b0' : '#f48771', meta)
-        if (item.commits.length) box.insertBefore(el('div', 'hist-text', 'Commits: ' + item.commits.map(function(c) { return String(c).slice(0, 8) }).join(', ')), box.children[1] || null)
+        if (item.commits.length) box.insertBefore(el('div', 'hist-text', 'Commits: ' + item.commits.map(function(c, i) { return (item.repos && item.repos[i] ? item.repos[i] + ' ' : '') + String(c).slice(0, 8) }).join(', ')), box.children[1] || null)
+        else if (item.commitsSkipped) box.insertBefore(el('div', 'hist-text', 'Commits: skipped (' + item.commitsSkipped + ')'), box.children[1] || null)
         return box
       }
       var openable = item.kind === 'decision' || !!item.decision

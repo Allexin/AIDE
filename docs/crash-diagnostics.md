@@ -119,6 +119,8 @@ Recorded by `src/main/diagnostics/index.ts`:
 | `project-opening` | A project is being opened, from any entry point |
 | `power-suspend` / `resume` / `shutdown` | Sleep and shutdown, which mimic crashes |
 | `pipeline-event-delivery` | One record per step of an event that needs the Strategist: id, type, run, the waits that covered it (`covering`) and those that did not (`other`), and `outcome`: `handed-to-waiter`, `queued` then `typed` (with the tab), `no-tab`, `setting-off`, `submit-failed`. Progress events are not recorded |
+| `pipeline-event-submit-failed` | Typing a pipeline event into the Strategist's terminal tab failed (`tabId`, `message`) |
+| `pipeline-server-response-error` | A response of the pipeline server could not be written (`path`: `/mcp` or `/wait`, `code`, `message`) |
 | `pipeline-wait-ended` | A wait or event stream ended because its call was cancelled or its connection closed (`reason`, and `via`: `mcp`, `wait`, `events`) |
 
 ### Memory sampling is adaptive

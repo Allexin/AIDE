@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { usePlanStore, type PlanDetail } from '../../store/usePlanStore'
 import { usePipelineStore } from '../../store/usePipelineStore'
 import { TranscriptView } from '../history/TranscriptView'
+import { journalCommitsText, skippedLabel } from '../../../../shared/pipelineCommits'
 import { planProgress, type AttentionKind, type AutopilotState, type JournalEntry, type PlanAttention, type PlanFile, type PlanTask } from '../../../../shared/plan'
 
 /**
@@ -165,7 +166,8 @@ function TaskRow({ task, live, entries, planId }: { task: PlanTask; live: boolea
         const target: PlanDetail = { kind: 'run', runId: entry.runId }
         return <div key={index} onClick={() => show(target)} style={rowStyle(isShown(target))}>
           <span style={{ color: entry.result === 'success' ? '#4ec9b0' : '#f48771', fontWeight: 600 }}>Run: {entry.result}</span> <span style={{ color: '#777' }}>{clock(entry.at)}{entry.costUsd ? ` · $${entry.costUsd.toFixed(2)}` : ''}</span>
-          {entry.commits.length > 0 && <div>{entry.commits.map((c) => c.slice(0, 8)).join(', ')}</div>}
+          {entry.commits.length > 0 && <div>{journalCommitsText(entry.commits, entry.repos)}</div>}
+          {entry.commits.length === 0 && entry.commitsSkipped && <div style={{ color: '#888' }}>Commits {skippedLabel(entry.commitsSkipped)}</div>}
         </div>
       })}
       {live && <div onClick={() => show(null)} style={rowStyle(detail === null)}><span style={{ color: '#4ec9b0', fontWeight: 600 }}>Run in progress</span></div>}

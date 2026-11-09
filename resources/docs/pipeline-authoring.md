@@ -224,7 +224,10 @@ AIDE composes the prompt; you only write the role file and the step fields.
     environments, `coverage/` and `*.log`; a project adds its own patterns in
     `git.shadowExclude`. A project with more than 50,000 files to snapshot, or a
     machine without git installed, gets a note instead of `run.diff`, and the
-    run goes on: its agents must then report the files they changed.
+    run goes on: its agents must then report the files they changed. In that
+    case `run.changedFiles` comes from `git status` of the real repositories
+    (with `"commits": false`; empty without git), so it may include files
+    changed before the run.
 - **Feedback** of the loops it is in, from the second iteration on (§2).
 - **Output contract**: the schema named by `output`. Built-ins:
   - `implementerReport`: `status` (`done` | `blocked` | `plan_wrong`), `summary`, `docsChanged`, `pipelineIssues[]`
@@ -298,6 +301,21 @@ On success AIDE commits and the run continues. On failure the problems go back t
 the prep agent as feedback, up to `maxAttempts` (default 3) attempts; then
 `onLimit` applies as for loops.
 
+**Git modes.** The `"git"` setting of the project's `aide/config.json` decides
+where `run.*` refs read and what commit steps do; the machine does not choose it.
+`pipeline_hello` and `pipeline_validate` (`project.git`) give the project's mode
+in one line, e.g. `git: repos web=frontend, api=services/api; commits on`.
+
+| Mode | Config | `run.diff`, `run.changedFiles` | Commit steps |
+|---|---|---|---|
+| root | none, the project root is in a git repository | that repository, vs HEAD | commit in it |
+| repos | `"git": {"repos": {"web": "frontend", …}}` | every listed repository, vs HEAD, project-relative paths | each commits in one repository (`repo`) |
+| no commits | `"git": {"commits": false}` (with root or repos) | private snapshot since the run start / last skipped commit block | skipped |
+| no git | `"git": false`, or no config and the root is not in a repository | private snapshot of the project | skipped |
+
+An invalid `"git"` setting refuses `pipeline_start`, and `pipeline_validate` lists
+its problems. The setting is read when a run starts; a run keeps it to its end.
+
 **Which repository** (`repo`, optional). A project with one repository needs
 nothing. A project that lists several in `git.repos` of `aide/config.json` must
 name one on every commit step: `"repo": "web"`, or a template of params,
@@ -312,7 +330,11 @@ staged diff and the commit. Paths are project-relative everywhere, also in the
 prep agent's `excluded` list (`frontend/src/a.ts`). The prep agent is told where to
 stage (`git -C frontend add …`). Changes left in other repositories do not fail the
 step: at the end of the run the report lists every path still changed, in any
-repository, as `uncommitted`, so work no commit step took is visible.
+repository, as `uncommitted`, so work no commit step took is visible. With
+several repositories the report's commits carry their `repo`, `startCommits` has
+the HEAD of every repository when the run started (`startCommit` stays the first
+one's), and the pipeline tab and the remote page show each commit as
+`web 1a2b3c4d …`.
 
 **Projects where AIDE does not commit** (no git, or `"commits": false` in
 `git` of `aide/config.json`). Every commit block is skipped as a whole: its prep
@@ -321,9 +343,13 @@ passed visit whose output is `{ "skipped": "commits disabled" | "no git",
 "checkpoint": <snapshot id or null>, "issues": [] }` (event `commit_skipped`).
 Every agent is told not to stage or commit and to leave its changes in the
 working tree. The prep step's outputs (`outputs.<prep id>.*`) are empty in these
-projects; `pipeline_validate` warns about inputs and conditions that use them.
+projects; `pipeline_validate` warns about inputs and conditions that use them in
+every project, also in one that commits, because a machine cannot know where it
+will run (a machine meant only for committing projects may ignore that warning).
 Build machines that work everywhere on `run.diff` and the implementer's report,
-not on the prep step's output.
+not on the prep step's output. The report says `commitsSkipped` with the reason,
+and the run views show the block as `skipped (commits disabled)` or
+`skipped (no git)`.
 
 **Plan bookkeeping.** A run linked to a task of an AIDE plan (`planTask`) needs none:
 AIDE marks the task done and records the findings in the plan file (it never stages it); do not have

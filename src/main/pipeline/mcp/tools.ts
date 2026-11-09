@@ -185,11 +185,14 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
       name: 'pipeline_hello',
       description: ['Start here for pipeline orchestration.', (env().workInstruction?.() ?? AIDE_WORK_INSTRUCTION).trim(), 'Confirms the connection to AIDE and returns the rules for the Strategist and how to receive pipeline events.'].filter(Boolean).join(' '),
       inputSchema: OBJECT({}),
-      handler: (_args, context) => {
-        const { aideVersion, launcherPath } = env()
+      handler: async (_args, context) => {
+        const { aideVersion, launcherPath, manager: pipelines } = env()
         orchestrators.hello({ projectPath: context.projectPath, connectionId: context.connectionId, tabId: context.tabId, client: context.clientInfo })
+        // The project's git mode in one line (docs/pipeline-git-modes-spec.md §7); pipeline_validate lists the problems of an invalid config.
+        const git = pipelines ? (await pipelines.projectCheck(context.projectPath)).git : null
         const text = [
           `Connected to AIDE ${aideVersion} for project ${context.projectPath}.`,
+          ...(git ? [`Project ${git}${git === 'git: invalid config' ? ' (pipeline_validate lists the problems)' : ''}.`] : []),
           '',
           ...ORCHESTRATOR_RULES,
           '',

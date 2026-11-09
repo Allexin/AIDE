@@ -1,5 +1,6 @@
 import { clip } from '../events'
 import type { RunReport } from './runner'
+import { reportHasSeveralRepos } from '../../../shared/pipelineCommits'
 
 /**
  * The orchestrator's view of a run report: what it needs to update the plan and
@@ -16,7 +17,10 @@ export interface CompactReport {
   costUsd: number
   /** Agent visits whose CLI reported no cost: costUsd leaves them out. */
   costUnknownVisits?: number
-  commits: Array<{ sha: string; subject: string; files: number }>
+  /** `repo` only when the run has several repos. */
+  commits: Array<{ repo?: string; sha: string; subject: string; files: number }>
+  /** Why commit blocks were skipped (the project does not let AIDE commit); absent when none was. */
+  commitsSkipped?: string
   /** Visits per step, e.g. `{ implement: 3, review: 3 }` — how hard the loops worked. */
   visits: Record<string, number>
   loops: Record<string, number>
@@ -40,6 +44,7 @@ const MAX_FINDINGS = 20
 export function compactReport(report: RunReport & { reason?: string | null; note?: string }): CompactReport {
   const visits: Record<string, number> = {}
   for (const v of report.visits) visits[v.node] = Math.max(visits[v.node] ?? 0, v.visit)
+  const several = reportHasSeveralRepos(report)
   const findings = [...new Set(report.nonBlockingFindings.map((f) => f.trim()).filter(Boolean))]
   return {
     runId: report.runId,
@@ -49,7 +54,8 @@ export function compactReport(report: RunReport & { reason?: string | null; note
     durationMin: Math.round((Date.parse(report.finishedAt) - Date.parse(report.startedAt)) / 6000) / 10,
     costUsd: Math.round(report.costUsd * 1000) / 1000,
     ...(report.uncostedVisits ? { costUnknownVisits: report.uncostedVisits } : {}),
-    commits: report.commits.map((c) => ({ sha: c.sha, subject: c.message.split('\n')[0], files: c.files.length })),
+    commits: report.commits.map((c) => ({ ...(several && c.repo ? { repo: c.repo } : {}), sha: c.sha, subject: c.message.split('\n')[0], files: c.files.length })),
+    ...(report.commitsSkipped ? { commitsSkipped: report.commitsSkipped } : {}),
     visits,
     loops: report.loops ?? {},
     summaries: report.summaries.map((s) => ({ step: s.node, ...(s.visit ? { visit: s.visit } : {}), summary: clip(s.summary, 400) })),

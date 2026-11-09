@@ -10,7 +10,7 @@ import { planProgress } from '../../shared/plan'
 
 export type RemoteTaskHistoryItem =
   | { kind: 'decision'; at: string; startedAt: string; decision: number; verdict: 'next' | 'wake' | 'answer' | 'escalate'; reason: string; proposal?: string; handoff?: string; costUsd: number | null; shadow?: boolean; escalation?: { kind: string; node: string; action?: string } }
-  | { kind: 'run'; at: string; runId: string; result: string; commits: string[]; costUsd: number }
+  | { kind: 'run'; at: string; runId: string; result: string; commits: string[]; costUsd: number; repos?: string[]; commitsSkipped?: string }
   | { kind: 'attention'; at: string; attentionKind: PlanAttention['kind']; reason: string; decision?: number }
 
 export interface RemotePlanTask extends Pick<PlanTask, 'id' | 'title' | 'status' | 'reason' | 'phase' | 'after' | 'machine' | 'spec' | 'acceptance' | 'checkpoint'> {
@@ -59,8 +59,8 @@ function historyItem(entry: JournalEntry): { task: string; item: RemoteTaskHisto
       return { task, item: { kind, at, startedAt, decision, verdict, reason, proposal, handoff, costUsd, shadow, ...(escalation ? { escalation: { kind: escalation.kind, node: escalation.node, ...(escalation.action ? { action: escalation.action } : {}) } } : {}) } }
     }
     case 'run': {
-      const { kind, task, at, runId, result, commits, costUsd } = entry
-      return { task, item: { kind, at, runId, result, commits, costUsd } }
+      const { kind, task, at, runId, result, commits, costUsd, repos, commitsSkipped } = entry
+      return { task, item: { kind, at, runId, result, commits, costUsd, ...(repos ? { repos } : {}), ...(commitsSkipped ? { commitsSkipped } : {}) } }
     }
     case 'attention':
       if (!entry.attention.task) return null

@@ -13,7 +13,7 @@ function snapshot(state: Partial<RunState>): RunSnapshot {
     runId: 'run-1', projectPath: '/p', machine: TINY_FEATURE,
     state: {
       runId: 'run-1', machineId: TINY_FEATURE.id, projectPath: '/p', status: 'running', current: null, visits: {}, iterations: {}, bonus: {},
-      feedback: {}, outputs: {}, history: [], escalations: [], sessions: {}, startCommit: null, result: null,
+      feedback: {}, outputs: {}, history: [], escalations: [], sessions: {}, startCommit: null, startCommits: {}, result: null,
       startedAt: '2026-10-26T10:00:00Z', updatedAt: '2026-10-26T10:00:00Z', finishedAt: null, ...state
     }
   }
@@ -54,5 +54,21 @@ describe('buildRemoteRunView', () => {
     expect(view.pending).toMatchObject({ id: 'e2', title: 'Decision needed' })
     expect(view.pending?.actions.map((a) => a.action)).toEqual(['continue', 'retry', 'stop'])
     expect(view.lastAnswer).toMatchObject({ action: 'retry', by: 'orchestrator', text: 'try again' })
+  })
+
+  it('names the repo of a commit block when the run has several, and shows a skipped block as skipped', () => {
+    const repos = { mode: 'git' as const, repos: [{ id: 'web', path: 'frontend', abs: '/p/frontend' }, { id: 'api', path: 'api', abs: '/p/api' }], commits: true }
+    const block = (view: ReturnType<typeof buildRemoteRunView>): unknown => view.rows?.find((row) => row.kind === 'block' && row.type === 'commit')
+    const leaf = (view: ReturnType<typeof buildRemoteRunView>): unknown => view.rows?.find((row) => row.kind === 'leaf' && row.id === 'commit')
+    expect(block(buildRemoteRunView(snapshot({ git: repos, commitRepos: { commit: 'web' } })))).toMatchObject({ label: 'commit commit · web' })
+    // One repo: the label is unchanged.
+    expect(block(buildRemoteRunView(snapshot({ commitRepos: { commit: 'root' } })))).toMatchObject({ label: 'commit commit', progress: 'max 2' })
+    const off = buildRemoteRunView(snapshot({ git: { ...repos, commits: false } }))
+    expect(leaf(off)).toMatchObject({ summary: 'skipped (commits disabled): the project does not let AIDE commit' })
+    const skipped = buildRemoteRunView(snapshot({
+      git: { mode: 'none' }, iterations: { commit: 1 }, history: [visit('commit', 1, 'ok')], outputs: { commit: { skipped: 'no git', checkpoint: null, issues: [] } }
+    }))
+    expect(block(skipped)).toMatchObject({ label: 'commit commit', progress: 'skipped (no git)' })
+    expect(leaf(skipped)).toMatchObject({ state: 'ok', summary: 'skipped (no git): the project does not let AIDE commit' })
   })
 })

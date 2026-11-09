@@ -156,7 +156,7 @@ export class RunStore {
     const dir = this.dir(runId)
     try {
       return {
-        state: currentActors(JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')) as RunState),
+        state: currentStartCommits(currentActors(JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')) as RunState)),
         stored: JSON.parse(readFileSync(join(dir, 'machine.json'), 'utf8')) as StoredMachine,
         params: JSON.parse(readFileSync(join(dir, 'params.json'), 'utf8')) as Record<string, unknown>
       }
@@ -191,5 +191,20 @@ export function currentActors(state: RunState): RunState {
   }
   for (const a of legacy.amendments ?? []) if (a.by === 'orchestrator') a.by = 'strategist'
   state.actors = 2
+  return state
+}
+
+/**
+ * A run stored before `startCommits` existed had only `startCommit`, the HEAD of
+ * its first repo: `{ root: startCommit }` (docs/pipeline-git-modes-spec.md §6),
+ * or keyed by the first repo of a stored setup; empty for a run without git.
+ */
+export function currentStartCommits(state: RunState): RunState {
+  if (state.startCommits && typeof state.startCommits === 'object') return state
+  const setup = state.git
+  state.startCommit ??= null
+  state.startCommits = !setup ? { root: state.startCommit }
+    : setup.mode === 'git' && setup.repos.length ? { [setup.repos[0].id]: state.startCommit }
+      : {}
   return state
 }

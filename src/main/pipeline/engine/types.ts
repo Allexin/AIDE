@@ -166,8 +166,13 @@ export interface RunState {
   shadow?: Record<string, string>
   /** Why the shadow is off for the rest of this run: `run.diff` is then a note. */
   shadowDisabled?: string
-  /** HEAD of the run's first repo when it started. */
+  /** HEAD of the run's first repo when it started (kept for old readers; `startCommits` has every repo). */
   startCommit: string | null
+  /**
+   * HEAD of each repo of the run when it started, by repo id (null when it could not be read); empty without git.
+   * Runs stored before it existed load with `{ root: startCommit }` (`{ <first repo>: startCommit }` with a stored setup).
+   */
+  startCommits: Record<string, string | null>
   result: 'success' | 'failure' | null
   startedAt: string
   updatedAt: string

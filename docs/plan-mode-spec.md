@@ -143,7 +143,8 @@ Orchestrator answer also wakes it. Escalations inside a run go to the Strategist
 A fresh session, read-only, no MCP, 15 minutes. The prompt starts with `orchestrator.prompt`, which
 says what to check and when to wake; generated facts follow: the plan's title, goal and `spec`,
 every task with its spec, acceptance and machine, the open follow-ups, the last report, commits
-made outside the plan, the journal (including its own earlier answers to escalations) and the
+made outside the plan (per repo, prefixed `web: ` with several; none where AIDE does not commit,
+see `pipeline-git-modes-spec.md` §6), the journal (including its own earlier answers to escalations) and the
 Strategist's note. It may read the project's files. The answer's schema is generated from the next
 machine's params that the plan leaves open:
 

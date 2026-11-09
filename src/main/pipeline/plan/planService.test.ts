@@ -12,7 +12,8 @@ import { ENGINE_VERSION } from '../engine/compat'
 import { parsePorcelain } from '../git'
 import { pipelineEvents } from '../events'
 import { buildRemotePlanView } from '../../remote/planView'
-import { decisionSchema, PlanService } from './planService'
+import { decisionSchema, PlanService, type PlanEnvironment } from './planService'
+import type { GitSetup } from '../gitConfig'
 import type { OrchestratorDecision, PlanFile } from '../../../shared/plan'
 
 const root = mkdtempSync(join(tmpdir(), 'aide-plan-'))
@@ -41,6 +42,13 @@ const GUARDED: MachineDefinition = {
   ]
 } as unknown as MachineDefinition
 
+/** Commits in the repo "web" of a project with several repos. */
+const WEB: MachineDefinition = {
+  ...MACHINE,
+  id: 'web',
+  steps: [MACHINE.steps[0], { ...(MACHINE.steps[1] as object), repo: 'web' }]
+} as unknown as MachineDefinition
+
 let counter = 0
 let lastFixture: Fixture | null = null
 
@@ -62,11 +70,19 @@ interface Fixture {
 
 const next = (extra: Partial<OrchestratorDecision> = {}): Partial<HeadlessResult> => ({ structured: { verdict: 'next', reason: 'fine', proposal: '', handoff: '', params: { taskSpec: 'do it', scope: null }, ...extra } })
 
-function fixture(): Fixture {
+interface FixtureOptions {
+  /** The project's git setup (default: the root repo). */
+  gitSetup?: (dir: string) => GitSetup
+  headSha?: PlanEnvironment['headSha']
+  commitsSince?: PlanEnvironment['commitsSince']
+}
+
+function fixture(options: FixtureOptions = {}): Fixture {
   const dir = join(root, `p${++counter}`)
   mkdirSync(join(dir, 'aide', 'pipelines', 'roles'), { recursive: true })
   writeFileSync(join(dir, 'aide', 'pipelines', 'feature.json'), JSON.stringify(MACHINE))
   writeFileSync(join(dir, 'aide', 'pipelines', 'guarded.json'), JSON.stringify(GUARDED))
+  writeFileSync(join(dir, 'aide', 'pipelines', 'web.json'), JSON.stringify(WEB))
   writeFileSync(join(dir, 'aide', 'pipelines', 'roles', 'implementer.md'), 'role')
   const fx: Fixture = {
     dir,
@@ -84,6 +100,7 @@ function fixture(): Fixture {
     runsRoot: (p) => join(p, '.aide', 'runs'),
     libraryDirs: (p) => [{ dir: join(p, 'aide', 'pipelines'), source: 'shared' }],
     headlessClis: () => ['claude-code'],
+    ...(options.gitSetup ? { gitSetup: async (p: string) => options.gitSetup!(p) } : {}),
     deps: () => ({
       startAgent: (request) => {
         const sessionId = request.resumeSessionId ?? `s-${++sessions}`
@@ -117,8 +134,8 @@ function fixture(): Fixture {
   fx.manager = new PipelineManager(env)
   fx.plans = new PlanService(fx.manager, {
     userDir: (p) => join(p, '.aide', 'plans'),
-    headSha: async () => `head${fx.committed.length}`,
-    commitsSince: async () => []
+    headSha: options.headSha ?? (async () => `head${fx.committed.length}`),
+    commitsSince: options.commitsSince ?? (async () => [])
   })
   fx.server = new McpServer({ name: 'aide', version: '1', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: '1', launcherPath: 'x', manager: fx.manager, plans: fx.plans, planGuide: () => 'guide' })))
   lastFixture = fx
@@ -609,5 +626,91 @@ describe('the Orchestrator on escalations inside a step', () => {
     // The first shadow attention was carried out; only the second one is handed out.
     expect(pipelineEvents.since(fx.dir, null, 0).filter((e) => e.type === 'plan_attention' && e.data.resolved !== true)).toHaveLength(1)
     expect(waited.text).toContain('two')
+  })
+})
+
+describe('commits made outside the plan', () => {
+  const twoTasks = (machine: string): Record<string, unknown> => ({ tasks: [
+    { id: 'one', title: 'First', machine },
+    { id: 'two', title: 'Second', machine, after: ['one'] }
+  ] })
+  const section = (prompt: string): string | null => /## Commits made outside the plan since the last step\n\n([\s\S]*?)(\n\n## |$)/.exec(prompt)?.[1] ?? null
+
+  it('with one repo lists them as before, without a repo prefix', async () => {
+    const since: string[] = []
+    const fx = fixture({ headSha: async (cwd) => `${cwd}@head`, commitsSince: async (cwd, from) => { since.push(`${cwd} ${from}`); return ['ccc3333 Hand fix'] } })
+    approvedPlan(fx)
+    await fx.plans.run(fx.dir)
+    await until(() => attentionOf(fx)?.kind === 'finished')
+    expect(section(fx.orchestratorPrompts[1].prompt)).toBe('ccc3333 Hand fix')
+    expect(since).toEqual([`${fx.dir} ${fx.dir}@head`])
+    expect(fx.plans.snapshot(fx.dir).autopilot?.lastCommits).toEqual({ root: `${fx.dir}@head` })
+  })
+
+  it('with several repos asks each repo since its own commit and prefixes the lines', async () => {
+    const fx = fixture({
+      gitSetup: (dir) => ({ mode: 'git', repos: [{ id: 'web', path: 'frontend', abs: join(dir, 'frontend') }, { id: 'api', path: 'api', abs: join(dir, 'api') }], commits: true }),
+      headSha: async (cwd) => `${cwd.endsWith('frontend') ? 'web' : 'api'}-head`,
+      commitsSince: async (cwd, from) => [`${from === 'web-head' && cwd.endsWith('frontend') ? 'aaa1111' : 'bbb2222'} Hand fix`]
+    })
+    approvedPlan(fx, twoTasks('web'))
+    await fx.plans.run(fx.dir)
+    await until(() => attentionOf(fx)?.kind === 'finished')
+    expect(section(fx.orchestratorPrompts[1].prompt)).toBe('web: aaa1111 Hand fix\napi: bbb2222 Hand fix')
+    expect(fx.plans.snapshot(fx.dir).autopilot?.lastCommits).toEqual({ web: 'web-head', api: 'api-head' })
+    // The journal keeps the repo of each commit: the Orchestrator's journal lines and the plan views label them.
+    const runs = fx.plans.snapshot(fx.dir).journal.filter((e) => e.kind === 'run')
+    expect(runs.map((e) => e.kind === 'run' ? { commits: e.commits, repos: e.repos } : null)).toEqual([{ commits: ['sha1'], repos: ['web'] }, { commits: ['sha2'], repos: ['web'] }])
+    expect(fx.orchestratorPrompts[1].prompt).toContain('run of one: success (web sha1)')
+    const view = buildRemotePlanView(fx.plans.snapshot(fx.dir)) as unknown as { active: { tasks: Array<{ id: string; history: Array<{ kind: string; repos?: string[] }> }> } }
+    expect(view.active.tasks.find((t) => t.id === 'one')?.history.find((h) => h.kind === 'run')).toMatchObject({ repos: ['web'] })
+  })
+
+  it('a single-repo run journals its commits without repos', async () => {
+    const fx = fixture()
+    approvedPlan(fx)
+    await fx.plans.run(fx.dir)
+    await until(() => attentionOf(fx)?.kind === 'finished')
+    const run = fx.plans.snapshot(fx.dir).journal.find((e) => e.kind === 'run')
+    expect(run).toMatchObject({ commits: ['sha1'] })
+    expect(run && 'repos' in run).toBe(false)
+    expect(fx.orchestratorPrompts[1].prompt).toContain('run of one: success (sha1)')
+  })
+
+  it('is left out when AIDE does not commit in the project', async () => {
+    const fx = fixture({
+      gitSetup: (dir) => ({ mode: 'git', repos: [{ id: 'root', path: '.', abs: dir }], commits: false }),
+      commitsSince: async () => ['ccc3333 Hand fix']
+    })
+    approvedPlan(fx)
+    await fx.plans.run(fx.dir)
+    await until(() => attentionOf(fx)?.kind === 'finished')
+    expect(fx.orchestratorPrompts[1].prompt).not.toContain('Commits made outside the plan')
+    expect(fx.plans.snapshot(fx.dir).autopilot?.lastCommits).toEqual({})
+  })
+
+  it('reads the old lastCommit of an autopilot state as the root repo', async () => {
+    const since: string[] = []
+    const fx = fixture({ commitsSince: async (cwd, from) => { since.push(`${cwd} ${from}`); return [] } })
+    approvedPlan(fx)
+    const file = join(fx.dir, '.aide', 'plans', 'p', 'autopilot.json')
+    mkdirSync(join(fx.dir, '.aide', 'plans', 'p'), { recursive: true })
+    writeFileSync(file, JSON.stringify({ planId: 'p', status: 'held', task: null, runId: null, lastCommit: 'old-sha', unreviewed: 0, attention: null, pending: null, decisions: 0, lastEventId: 0, updatedAt: new Date().toISOString() }))
+    const auto = fx.plans.snapshot(fx.dir).autopilot
+    expect(auto?.lastCommits).toEqual({ root: 'old-sha' })
+    expect(auto && 'lastCommit' in auto).toBe(false)
+    await fx.plans.run(fx.dir)
+    await until(() => attentionOf(fx)?.kind === 'finished')
+    // The first decision already reads the migrated commit.
+    expect(since[0]).toBe(`${fx.dir} old-sha`)
+  })
+})
+
+describe('pipeline_hello', () => {
+  it("reports the project's git mode in one line", async () => {
+    const fx = fixture()
+    expect((await call(fx, 'pipeline_hello')).text).toContain('\nProject git: root repo; commits on.\n')
+    const repos = fixture({ gitSetup: (dir) => ({ mode: 'git', repos: [{ id: 'web', path: 'frontend', abs: join(dir, 'frontend') }, { id: 'api', path: 'services/api', abs: join(dir, 'services/api') }], commits: false }) })
+    expect((await call(repos, 'pipeline_hello')).text).toContain('\nProject git: repos web=frontend, api=services/api; commits off.\n')
   })
 })
