@@ -25,6 +25,7 @@ failure, never treated as success.
 | `updater/selfUpdate` process list (`PROCESS_LIST_TIMEOUT_MS`) | 15 s | the PowerShell query for other AIDE instances | the gate sees none; the helper still waits for them |
 | `apply-update.ps1` app exit (`exitLimitSeconds`) | 120 s | every process from the install folder to exit | nothing is touched, AIDE starts again and reports |
 | `apply-update.ps1` new version (`startLimitSeconds`) | 60 s | the `started` marker, or the process exit (which rolls back) | the new version is kept |
+| `tasks/taskStore` write lease wait (`LEASE_MS`, `LEASE_WAIT_LIMIT_MS`) | the held lease's expiry (≤ 10 s), 30 s in total | the lease file `aide/tasks/.write-lock` changing or disappearing (fs watch; a share may never report it) | the expired lease is taken over; after 30 s the write fails naming the holder |
 
 ## Debounce
 

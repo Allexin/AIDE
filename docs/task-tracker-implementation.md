@@ -1,5 +1,7 @@
 # Task tracker — implementation of build steps 2 and 4
 
+Status: §1–§3 (shared types, file format, store) are implemented; §4–§8 are not.
+
 The concept is `docs/task-tracker-spec.md`; read it first, §The task, §Current task, §Context delivery,
 §Storage and §MCP tools in particular. This document turns build steps 2 (storage, schema, tools,
 views) and 4 (tab binding, snapshot, orientation) into code. Drift, close candidates and the
@@ -61,6 +63,11 @@ work computes them (drift is step 5). A migrated claim is written with `confirme
 - `serializeTask(task): string` is the inverse; `parseTask(serializeTask(t))` round-trips exactly.
 - `revisionOf(text): string` — the first 12 hex chars of SHA-256 of the file's bytes. Revision is never
   stored in the file (spec §Storage).
+- A hand-written file may leave out every key but `id`, `title`, `status` and `created`; the others
+  read as their empty value (`null`, `[]`, `false`). The description is stored without surrounding
+  blank lines and trailing whitespace; it is everything between the first `## Description` line and
+  the last `## Journal` line, so it may hold headings of its own. Non-blank text before
+  `## Description`, and a journal line not starting with `- `, are errors (they would be lost).
 - Unit tests: round trip, every validation error, CRLF input, a hand-edited file with extra blank lines.
 
 ## 3. Store — `src/main/tasks/taskStore.ts`
@@ -78,11 +85,15 @@ work computes them (drift is step 5). A migrated claim is written with `confirme
   2. Take the write lease (below), write each file atomically (temp file + rename), the last change of
      the array last, release the lease.
   3. Return the new revisions.
-- **Write lease** — `aide/tasks/.write-lock`, JSON `{ user, host, pid, expires }`. Taken by creating the
+- **Write lease** — `aide/tasks/.write-lock`, JSON `{ user, host, pid, expires, token }` (`token`
+  tells two writers of one process apart when a takeover is confirmed; a lease file that cannot be
+  read expires by its mtime). Taken by creating the
   file exclusively (`wx`); if it exists and `expires` is in the past, it is replaced (re-read after
   writing to confirm ownership). Expiry is 10 s ahead; a write never takes that long, so no renewal is
   needed in this step. If the lease is held and not expired, retry on the lease file's change (fs
-  watch) bounded by its expiry — no polling sleeps.
+  watch) bounded by its expiry — no polling sleeps. A writer that has waited 30 s in total (others keep taking the
+  lease) gives up with an error naming the holder. Revisions are checked before the lease and again
+  under it; a current file that is invalid is not overwritten.
 - **Load check** — `problems(): { kind: 'duplicate-id' | 'invalid' | 'dangling-history', ids, message }[]`:
   files whose front-matter `id` repeats, invalid files, a task in history whose `history.by` names a
   task that is not closed.

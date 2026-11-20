@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, rmSync, statSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
 import { PLANS_DIR, isPlanPath } from './plan/planStore'
+import { TASKS_DIR, isTrackerPath } from '../tasks/taskStore'
 import type { GitSetup } from './gitConfig'
 
 /**
@@ -11,8 +12,13 @@ import type { GitSetup } from './gitConfig'
  * stalls a run.
  */
 
-/** Pathspec of a diff that leaves plan files out. */
-const NOT_PLANS = ['--', '.', `:(exclude)${PLANS_DIR}`]
+/** Pathspec of a diff that leaves plan and tracker files out. */
+const NOT_PLANS = ['--', '.', `:(exclude)${PLANS_DIR}`, `:(exclude)${TASKS_DIR}`]
+
+/** Plan and tracker files: AIDE writes them while a run works, they are not part of its work and AIDE never stages them. */
+function isAideRecordPath(path: string): boolean {
+  return isPlanPath(path) || isTrackerPath(path)
+}
 
 const GIT_TIMEOUT_MS = 15_000
 /** Commit hooks (formatters, linters) can take minutes. */
@@ -123,7 +129,7 @@ export function prefixArgs(read: Pick<RepoRead, 'prefix'>): string[] {
   return read.prefix ? [`--src-prefix=a/${read.prefix}`, `--dst-prefix=b/${read.prefix}`] : []
 }
 
-/** Pathspec of a diff: plan files left out at the root (they live in the project root's aide/plans), nested repos left out. */
+/** Pathspec of a diff: plan and tracker files left out at the root (they live in the project root's aide/plans and aide/tasks), nested repos left out. */
 function diffPathspec(read: RepoRead): string[] {
   return [...(read.prefix ? ['--', '.'] : NOT_PLANS), ...read.nested.map((path) => `:(exclude)${path}`)]
 }
@@ -136,8 +142,8 @@ function nestedPathspec(read: RepoRead): string[] {
 /**
  * Changed files. A modified file whose only difference is line endings (CRLF in
  * the working tree, LF in the index) is left out: it is noise to reviewers and
- * to the commit coverage check. So are plan files: AIDE edits them while a run
- * works, and they are not part of its work.
+ * to the commit coverage check. So are plan and tracker files: AIDE edits them
+ * while a run works, and they are not part of its work.
  *
  * With a run's setup, every repo (or only `repoId`) is read in config order and
  * paths are project-relative (`frontend/src/a.ts`); no-git mode has no changes.
@@ -153,7 +159,7 @@ async function statusIn(read: RepoRead): Promise<FileChange[]> {
   const { cwd, prefix } = read
   const changes = parsePorcelain(await gitOk(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all', ...nestedPathspec(read)]))
     .map((c) => prefix ? { ...c, path: prefix + c.path } : c)
-    .filter((c) => !isPlanPath(c.path))
+    .filter((c) => !isAideRecordPath(c.path))
   if (!changes.some((c) => c.kind === 'modified')) return changes
   const real = new Set<string>()
   for (const args of [['diff', '--numstat', '-z', '--ignore-cr-at-eol'], ['diff', '--cached', '--numstat', '-z', '--ignore-cr-at-eol']]) {
@@ -200,7 +206,7 @@ export async function workingDiff(target: string | GitSetup): Promise<string> {
 async function workingDiffIn(read: RepoRead): Promise<string> {
   const { cwd, prefix } = read
   const hasHead = (await headSha(cwd)) !== null
-  const untracked = (await gitOk(cwd, ['ls-files', '--others', '--exclude-standard', '-z', ...nestedPathspec(read)])).split('\0').filter((path) => path && !isPlanPath(prefix + path))
+  const untracked = (await gitOk(cwd, ['ls-files', '--others', '--exclude-standard', '-z', ...nestedPathspec(read)])).split('\0').filter((path) => path && !isAideRecordPath(prefix + path))
   if (hasHead && untracked.length) {
     // A file moved without `git mv` is a deleted tracked file plus an untracked one.
     const deleted = (await gitOk(cwd, ['ls-files', '--deleted', '-z'])).split('\0').filter(Boolean)

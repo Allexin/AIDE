@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { commitIndex, commitsSince, git, headSha, stagedDiff, status, workingDiff } from '../git'
 import { withPlanTrailer } from '../engine/runner'
 
-/** Plan files on a real repository: not part of a run's work, and they go in with the task's commit. */
+/** Plan and tracker files on a real repository: not part of a run's work, and they go in with the task's commit when the project stages them. */
 describe('plan files in git', () => {
   let repo = ''
   const write = (path: string, text: string): void => writeFileSync(join(repo, path), text, 'utf8')
@@ -16,21 +16,26 @@ describe('plan files in git', () => {
     await git(repo, ['config', 'user.email', 'test@example.com'])
     await git(repo, ['config', 'user.name', 'Test'])
     mkdirSync(join(repo, 'aide', 'plans'), { recursive: true })
+    mkdirSync(join(repo, 'aide', 'tasks'), { recursive: true })
     write('src.txt', 'one\n')
     write('aide/plans/p.json', '{"v":1}\n')
+    write('aide/tasks/t.md', 'one\n')
     await git(repo, ['add', '-A'])
     await git(repo, ['commit', '-q', '-m', 'start'])
   })
   afterAll(() => rmSync(repo, { recursive: true, force: true }))
 
-  it('leaves plan files out of the status and the diffs, tracked or new', async () => {
+  it('leaves plan and tracker files out of the status and the diffs, tracked or new', async () => {
     write('aide/plans/p.json', '{"v":2}\n')
     write('aide/plans/new.json', '{"new":true}\n')
+    write('aide/tasks/t.md', 'two\n')
+    write('aide/tasks/new.md', 'new\n')
     write('src.txt', 'two\n')
     expect((await status(repo)).map((c) => c.path)).toEqual(['src.txt'])
     const diff = await workingDiff(repo)
     expect(diff).toContain('src.txt')
     expect(diff).not.toContain('aide/plans')
+    expect(diff).not.toContain('aide/tasks')
   })
 
   it('also with a moved file, when the diff detects renames', async () => {
@@ -39,16 +44,18 @@ describe('plan files in git', () => {
     const diff = await workingDiff(repo)
     expect(diff).toContain('moved.txt')
     expect(diff).not.toContain('aide/plans')
+    expect(diff).not.toContain('aide/tasks')
     rmSync(join(repo, 'moved.txt'))
     write('src.txt', 'two\n')
   })
 
   it('a plan file the project stages goes into the commit but not into what a commit reviewer reads', async () => {
-    await git(repo, ['add', 'src.txt', 'aide/plans/p.json'])
+    await git(repo, ['add', 'src.txt', 'aide/plans/p.json', 'aide/tasks/t.md'])
     expect(await stagedDiff(repo)).not.toContain('aide/plans')
+    expect(await stagedDiff(repo)).not.toContain('aide/tasks')
     const before = (await headSha(repo))!
     const commit = await commitIndex(repo, withPlanTrailer('Do it\n\nBody.', { plan: 'p', task: 'one' }))
-    expect(commit.files.sort()).toEqual(['aide/plans/p.json', 'src.txt'])
+    expect(commit.files.sort()).toEqual(['aide/plans/p.json', 'aide/tasks/t.md', 'src.txt'])
     const log = await git(repo, ['log', '-1', '--format=%(trailers:key=Plan-Task,valueonly)'])
     expect(log.stdout.trim()).toBe('p/one')
     expect(await commitsSince(repo, before)).toEqual([expect.stringMatching(/ Do it$/)])

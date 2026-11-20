@@ -251,7 +251,7 @@ touching it or its real repository.
   embedded repos are skipped by excluding the paths of the setup's other repos;
   in no-git mode also a default list: `node_modules/ dist/ build/ out/ target/
   .venv/ venv/ __pycache__/ .next/ .nuxt/ coverage/ *.log`, plus
-  `git.shadowExclude`. Plan files are excluded as in today's diff.
+  `git.shadowExclude`. Plan and tracker files (`aide/plans/`, `aide/tasks/`) are excluded as in today's diff.
 - Snapshot: list candidate files (`ls-files --others --modified --exclude-standard -z`
   against the shadow index), leave out files over 256 KB (they appear in the diff
   as the usual "content omitted" stub, by size comparison with the checkpoint),

@@ -60,11 +60,11 @@ describe('ShadowStore', () => {
     expect(second).toContain('deleted file mode')
   })
 
-  it('leaves out .aide, the plan files, the default list and git.shadowExclude', async () => {
+  it('leaves out .aide, the plan and tracker files, the default list and git.shadowExclude', async () => {
     const { dir, store } = project({ 'src/a.ts': 'a\n' })
     const target = noGit(dir, 'run-1', ['assets/raw/'])
     const base = await store.snapshot(target, 'baseline')
-    for (const path of ['.aide/x.json', 'aide/plans/p.json', 'node_modules/m/index.js', 'build/out.js', 'debug.log', 'assets/raw/big.psd', 'aide/config.json', 'src/b.ts']) {
+    for (const path of ['.aide/x.json', 'aide/plans/p.json', 'aide/tasks/t.md', 'aide/tasks/.write-lock', 'node_modules/m/index.js', 'build/out.js', 'debug.log', 'assets/raw/big.psd', 'aide/config.json', 'src/b.ts']) {
       mkdirSync(join(dir, path, '..'), { recursive: true })
       writeFileSync(join(dir, path), 'x\n')
     }

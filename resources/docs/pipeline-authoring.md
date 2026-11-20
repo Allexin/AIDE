@@ -207,6 +207,10 @@ AIDE composes the prompt; you only write the role file and the step fields.
     run directory).
   - An agent with a shell still sees every file through `git status`; filter
     the inputs and say in the role which files are generated.
+  - AIDE's own records, `aide/plans/` (plans) and `aide/tasks/` (the task
+    tracker), are never in `run.diff`, `run.stagedDiff`, `run.changedFiles`, the
+    shadow snapshot or the commit coverage check: AIDE writes them while a run
+    works and never stages them. Do not have agents edit them.
   - Which repositories the `run.*` file refs read is the project's choice
     (`"git"` in `aide/config.json`), not the machine's. By default it is the
     repository the project root is in. A project whose repositories live in

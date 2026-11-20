@@ -5,6 +5,7 @@ import { join } from 'path'
 import { MAX_UNTRACKED_DIFF_BYTES, git, kindOf, prefixArgs, prefixRenameLines, type FileChange } from './git'
 import type { GitSetup } from './gitConfig'
 import { PLANS_DIR } from './plan/planStore'
+import { TASKS_DIR } from '../tasks/taskStore'
 
 /**
  * Shadow snapshots (docs/pipeline-git-modes-spec.md §5): a private git dir per
@@ -50,24 +51,25 @@ function anchored(path: string): string {
   return `/${path.replace(/[\\[\]*?!#]/g, '\\$&')}/`
 }
 
-/** Where the plan files are inside a scope, or null when they are outside it. */
-function plansWithin(prefix: string): string | null {
-  if (!prefix) return PLANS_DIR
-  return `${PLANS_DIR}/`.startsWith(prefix) ? PLANS_DIR.slice(prefix.length) : null
+/** Where a project-root folder of AIDE's records is inside a scope, or null when it is outside it. */
+function dirWithin(dir: string, prefix: string): string | null {
+  if (!prefix) return dir
+  return `${dir}/`.startsWith(prefix) ? dir.slice(prefix.length) : null
 }
 
 /** The scopes of a run: no git, the project; commits off, one per repo and the project's non-repo files if its root is not a repo. */
 export function shadowScopes(setup: GitSetup, projectPath: string): ShadowScope[] {
   const extra = setup.shadowExclude ?? []
-  const plans = (prefix: string): string[] => { const dir = plansWithin(prefix); return dir ? [anchored(dir)] : [] }
-  const project = (id: string, inside: string[]): ShadowScope => ({ id, abs: projectPath, prefix: '', excludes: ['.aide/', ...plans(''), ...DEFAULT_EXCLUDES, ...inside.map(anchored), ...extra] })
+  // Plan and tracker files are AIDE's records, not a run's work.
+  const records = (prefix: string): string[] => [PLANS_DIR, TASKS_DIR].flatMap((folder) => { const dir = dirWithin(folder, prefix); return dir ? [anchored(dir)] : [] })
+  const project = (id: string, inside: string[]): ShadowScope => ({ id, abs: projectPath, prefix: '', excludes: ['.aide/', ...records(''), ...DEFAULT_EXCLUDES, ...inside.map(anchored), ...extra] })
   if (setup.mode === 'none') return [project('project', [])]
 
   const scopes = setup.repos.map((repo): ShadowScope => {
     const prefix = repo.path === '.' ? '' : `${repo.path}/`
     // Files of a repo inside this one are reported by that repo's own scope.
     const nested = setup.repos.filter((other) => other !== repo && (repo.path === '.' ? other.path !== '.' : other.path.startsWith(prefix))).map((other) => other.path.slice(prefix.length))
-    return { id: repo.id, abs: repo.abs, prefix, excludes: ['.aide/', ...plans(prefix), ...nested.map(anchored), ...extra] }
+    return { id: repo.id, abs: repo.abs, prefix, excludes: ['.aide/', ...records(prefix), ...nested.map(anchored), ...extra] }
   })
   if (setup.repos.some((repo) => repo.path === '.')) return scopes
   // `~` is not allowed in repo ids, so this scope cannot take the place of a repo called "project".
