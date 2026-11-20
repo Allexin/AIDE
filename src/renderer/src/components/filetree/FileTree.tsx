@@ -699,11 +699,13 @@ function NodeItem({
           color: '#cccccc',
           overflow: 'hidden'
         }}
-        draggable={!isDir}
-        onDragStart={!isDir ? (e: React.DragEvent<HTMLDivElement>) => {
-          e.dataTransfer.setData('aide/absolute-path', node.path)
-          e.dataTransfer.effectAllowed = 'copy'
-        } : undefined}
+        draggable
+        onDragStart={(e: React.DragEvent<HTMLDivElement>) => {
+          // Hand the drag to the OS: Explorer and other apps accept it, and
+          // AIDE's own drop targets read it from dataTransfer.files.
+          e.preventDefault()
+          window.editorApi.startFileDrag(node.path)
+        }}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}

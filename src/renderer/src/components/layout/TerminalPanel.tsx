@@ -388,18 +388,9 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
     e.preventDefault()
     if (!activeTabId) return
 
-    let absPath: string | null = null
-
-    // C2: internal drag from file tree (check first)
-    const internal = e.dataTransfer.getData('aide/absolute-path')
-    if (internal) {
-      absPath = internal
-    } else if (e.dataTransfer.files.length > 0) {
-      // C1: external drag from Windows Explorer
-      const p = window.editorApi.getPathForFile(e.dataTransfer.files[0])
-      absPath = p || null
-    }
-
+    // Files and folders, from Explorer or from AIDE's own file tree (an OS-level drag)
+    if (e.dataTransfer.files.length === 0) return
+    const absPath = window.editorApi.getPathForFile(e.dataTransfer.files[0])
     if (!absPath) return
 
     let text: string

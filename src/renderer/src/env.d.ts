@@ -273,6 +273,8 @@ interface EditorAPI {
 
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
   getPathForFile: (file: File) => string
+  // OS-level drag of a file or folder (call from dragstart after preventDefault)
+  startFileDrag: (path: string) => void
 
   // Shell / FS operations
   shellShowItemInFolder: (filePath: string) => Promise<void>

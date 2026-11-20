@@ -27,6 +27,7 @@ import { orchestrators } from '../pipeline/orchestrators'
 import { osDisplayName } from '../platform'
 import { runGitStatus } from '../filetree/gitStatus'
 import { searchProjectFileIndex } from '../filetree/fileIndex'
+import { startNativeDrag } from '../filetree/nativeDrag'
 import { ptyRegistry, pickerEditorMap, offerRestartAfterAccountChange } from '../pty/registry'
 import { getRegisteredTools, getToolById, getDefaultTool } from '../pty/cliTools/registry'
 import {
@@ -185,6 +186,11 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   ipcMain.handle('editor:save-log-panel-height', (_event, height: number) => {
     const cfg = getAppConfig()
     updateAppConfig({ ui: { ...cfg.ui, logPanelExpandedHeightPx: height } })
+  })
+
+  // ── File tree: OS-level drag of a file or folder out of the tree ────────────
+  ipcMain.on('filetree:start-drag', (event, path: string) => {
+    void startNativeDrag(event.sender, path)
   })
 
   // ── File tree: read a single directory level ─────────────────────────────────

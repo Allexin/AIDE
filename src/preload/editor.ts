@@ -180,6 +180,8 @@ export interface EditorAPI {
 
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
   getPathForFile: (file: File) => string
+  // OS-level drag of a file or folder (call from dragstart after preventDefault)
+  startFileDrag: (path: string) => void
 
   // Shell / FS operations
   shellShowItemInFolder: (filePath: string) => Promise<void>
@@ -486,6 +488,7 @@ const editorApi: EditorAPI = {
   },
 
   getPathForFile: (file) => webUtils.getPathForFile(file),
+  startFileDrag: (path) => ipcRenderer.send('filetree:start-drag', path),
 
   // Shell / FS operations
   shellShowItemInFolder: (filePath) => ipcRenderer.invoke('shell:show-item-in-folder', filePath),
