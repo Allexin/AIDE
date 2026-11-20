@@ -5,6 +5,10 @@
 - `img/` — published images: icon, download QR, showcase screenshots.
 - `deploy.sh`, `publish.sh`, `server/` — deployment scripts. They name the server account, so they are git-ignored and kept locally only.
 - `public/` on the server holds demo files; anything copied there is served at `https://get-aide.org/public/<name>`.
+  Everything under it may be embedded in an `<iframe>` on any site, and folders without an `index.html` show a file
+  listing (`server/setup-public.sh`). `public/index.html` here is the catalog page served at `/public/`: it reads the
+  folder's JSON listing (`/public/_list/`) and the head of each page (`<title>`, meta description, `og:image`), so a
+  new project appears there without editing it. Every page published there carries the standard "made with AIDE" badge.
 
 ## Screenshot list
 

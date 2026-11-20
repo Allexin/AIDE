@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Made with AIDE — проекты</title>
+<meta name="description" content="Игры, демо и инструменты, созданные в AIDE — OpenSource AI IDE.">
+<link rel="icon" href="/img/icon.png">
+<style>
+  :root {
+    --bg: #0f1116; --panel: #171a22; --card: #1c2029; --line: #2a2f3b; --text: #e8eaf0;
+    --muted: #9aa1b2; --accent: #7cc4ff;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f6f8; --panel: #ffffff; --card: #ffffff; --line: #dde1e8; --text: #1b1e25; --muted: #5d6475; --accent: #1f6fd1; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); padding-bottom: 48px;
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { max-width: 1120px; margin: 0 auto; padding: 40px 16px 8px; }
+  h1 { margin: 0 0 6px; font-size: 30px; }
+  header p { margin: 0; color: var(--muted); }
+  header a, footer a { color: var(--accent); }
+  main { max-width: 1120px; margin: 0 auto; padding: 20px 16px; display: grid; gap: 18px;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .card { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; overflow: hidden; color: inherit; text-decoration: none; transition: transform .15s, border-color .15s; }
+  .card:hover, .card:focus-visible { transform: translateY(-2px); border-color: var(--accent); outline: none; }
+  .thumb { aspect-ratio: 16 / 9; background: var(--panel); display: flex; align-items: center; justify-content: center;
+    font-size: 44px; font-weight: 700; color: var(--muted); overflow: hidden; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .title { font-weight: 600; font-size: 16px; }
+  .desc { color: var(--muted); font-size: 14px; flex: 1; }
+  .meta { color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
+  .empty { grid-column: 1 / -1; color: var(--muted); text-align: center; padding: 40px; }
+  footer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--panel);
+    border-top: 1px solid var(--line); padding: 6px 16px; text-align: center; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Made with AIDE</h1>
+  <p>Игры, демо и инструменты, созданные в <a href="https://get-aide.org">AIDE</a>. Любую страницу отсюда можно встроить на свой сайт или форум через <code>&lt;iframe&gt;</code>.</p>
+</header>
+<main id="list"><div class="empty">Загрузка…</div></main>
+<footer>made with <a href="https://get-aide.org" target="_blank" rel="noopener">AIDE</a> (OpenSource AI IDE)</footer>
+<script type="module">
+// No list to maintain: nginx serves this folder's listing as JSON at /public/_list/
+// (site/server/setup-public.sh), so a project shows up as soon as it is copied into /public/.
+// Title, description and preview come from each page's <title>, meta description and og:image.
+const list = document.getElementById('list');
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+async function describe(entry) {
+  const isDir = entry.type === 'directory';
+  const href = isDir ? `${encodeURIComponent(entry.name)}/` : encodeURIComponent(entry.name);
+  const info = { href, title: entry.name, desc: '', image: '', date: new Date(entry.mtime) };
+  try {
+    // Only the head is needed: the first 16 KB (some pages here are megabytes).
+    const html = await (await fetch(href, { headers: { Range: 'bytes=0-16383' } })).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const t = doc.querySelector('title')?.textContent.trim();
+    if (t && !/^Index of /.test(t)) info.title = t;
+    else if (isDir) info.desc = 'Папка с материалами';
+    const d = doc.querySelector('meta[name="description"]')?.content;
+    if (d) info.desc = d;
+    const img = doc.querySelector('meta[property="og:image"]')?.content;
+    if (img) info.image = new URL(img, new URL(href, location.href)).href;
+  } catch (e) { /* keep the folder name */ }
+  return info;
+}
+
+function card(c) {
+  const letter = esc((c.title.match(/[\p{L}\p{N}]/u) || ['?'])[0].toUpperCase());
+  return `<a class="card" href="${c.href}">
+    <div class="thumb">${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : letter}</div>
+    <div class="body">
+      <div class="title">${esc(c.title)}</div>
+      <div class="desc">${esc(c.desc)}</div>
+      <div class="meta"><span>${esc(decodeURIComponent(c.href).replace(/\/$/, ''))}</span>
+        <span>${c.date.toLocaleDateString('ru-RU')}</span></div>
+    </div></a>`;
+}
+
+try {
+  const entries = await (await fetch('_list/')).json();
+  const shown = entries.filter(e => !/^[._]/.test(e.name) && e.name !== 'index.html'
+    && (e.type === 'directory' || /\.html?$/i.test(e.name)));
+  shown.sort((a, b) => new Date(b.mtime) - new Date(a.mtime));
+  const cards = await Promise.all(shown.map(describe));
+  list.innerHTML = cards.length ? cards.map(card).join('') : '<div class="empty">Пока пусто.</div>';
+} catch (e) {
+  list.innerHTML = '<div class="empty">Не удалось загрузить список проектов.</div>';
+}
+</script>
+</body>
+</html>
