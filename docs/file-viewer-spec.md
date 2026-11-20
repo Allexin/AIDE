@@ -344,11 +344,17 @@ data and send back.
 
 ```ts
 type Mark =
-  | { id, by, type: 'text', x, y, text }
+  | { id, by, type: 'text', x, y, text, size? }
   | { id, by, type: 'arrow' | 'line', x1, y1, x2, y2, note? }
   | { id, by, type: 'rect' | 'ellipse', x, y, w, h, note? }
 // by: 'agent' | 'user'
 ```
+
+A text mark is content of the image ("this is the label I want here"), not a remark about
+it: its `size` is in image units and it scales with the image when zooming. A new text mark
+gets the size that looks 16 px at the current zoom; an agent mark without `size` looks 16 px
+at "fit". `[` and `]` resize the selected text mark by 10%. Labels of the other marks are
+remarks and keep their screen size.
 
 Coordinates are in image units: pixels of the natural size for raster images, viewBox units
 for SVG, so the agent reads them in the coordinate system it drew in. Agent marks get ids

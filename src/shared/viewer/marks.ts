@@ -3,7 +3,8 @@
 export type MarkAuthor = 'agent' | 'user'
 
 export type Mark =
-  | { id: string; by: MarkAuthor; type: 'text'; x: number; y: number; text: string; moved?: boolean }
+  /** A text mark is content of the image: its size is in image units and scales with it. */
+  | { id: string; by: MarkAuthor; type: 'text'; x: number; y: number; text: string; size?: number; moved?: boolean }
   | { id: string; by: MarkAuthor; type: 'arrow' | 'line'; x1: number; y1: number; x2: number; y2: number; note?: string; moved?: boolean }
   | { id: string; by: MarkAuthor; type: 'rect' | 'ellipse'; x: number; y: number; w: number; h: number; note?: string; moved?: boolean }
 
@@ -37,7 +38,12 @@ export function parseAgentMarks(input: unknown): Mark[] {
       case 'text': {
         const text = optText(m.text, 'text', i)
         if (!text) throw new Error(`marks[${i}].text is required for a text mark.`)
-        return { id, by: 'agent', type: 'text', x: num(m.x, 'x', i), y: num(m.y, 'y', i), text }
+        let size: number | undefined
+        if (m.size !== undefined && m.size !== null) {
+          size = num(m.size, 'size', i)
+          if (size <= 0) throw new Error(`marks[${i}].size must be positive.`)
+        }
+        return { id, by: 'agent', type: 'text', x: num(m.x, 'x', i), y: num(m.y, 'y', i), text, ...(size !== undefined ? { size } : {}) }
       }
       case 'arrow':
       case 'line':
@@ -81,7 +87,7 @@ const fmt = (v: number): string => String(Math.round(v))
 
 function geometry(m: Mark): string {
   switch (m.type) {
-    case 'text': return `at (${fmt(m.x)},${fmt(m.y)})`
+    case 'text': return `at (${fmt(m.x)},${fmt(m.y)})${m.size ? `, size ${fmt(m.size)}` : ''}`
     case 'arrow':
     case 'line': return `(${fmt(m.x1)},${fmt(m.y1)})→(${fmt(m.x2)},${fmt(m.y2)})`
     default: return `(${fmt(m.x)},${fmt(m.y)} ${fmt(m.w)}×${fmt(m.h)})`

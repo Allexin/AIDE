@@ -279,7 +279,7 @@ export default function FileViewerApp(): React.ReactElement {
             {MARK_TOOLS.map((t) => (
               <button key={t.tool} className={tool === t.tool ? 'on' : ''} onClick={() => setTool(t.tool)} title={`${t.label} (${t.key.toUpperCase()})`}>{t.label}</button>
             ))}
-            <span className="vm-hint">{tool === 'select' ? 'Click a mark to select, drag to move, Delete to remove' : tool === 'text' ? 'Click where the text goes' : 'Drag on the image'}</span>
+            <span className="vm-hint">{tool === 'select' ? 'Click a mark to select, drag to move, Delete to remove, [ ] to resize text' : tool === 'text' ? 'Click where the text goes' : 'Drag on the image'}</span>
           </div>
         )}
         {spec && marks !== null

@@ -43,7 +43,10 @@ function svgBox(text: string): Box | null {
   return w > 0 && h > 0 ? { x: 0, y: 0, w, h } : null
 }
 
-function MarkShape({ m, unit, selected }: { m: Mark; unit: number; selected: boolean }): React.ReactElement {
+/** Text marks without a size of their own look 16 px at "fit". */
+export const TEXT_FIT_PX = 16
+
+function MarkShape({ m, unit, selected, textSize }: { m: Mark; unit: number; selected: boolean; textSize: number }): React.ReactElement {
   const color = COLORS[m.by]
   const sw = (selected ? 3.5 : 2.5) * unit
   const hit = { stroke: 'transparent', strokeWidth: 12 * unit, fill: 'none', pointerEvents: 'stroke' as const }
@@ -57,12 +60,13 @@ function MarkShape({ m, unit, selected }: { m: Mark; unit: number; selected: boo
     case 'text':
       return (
         <g {...common}>
-          <text x={m.x} y={m.y} fill={color} fontSize={16 * unit} fontFamily="Segoe UI, sans-serif" fontWeight={600}
-            stroke="#000" strokeWidth={3 * unit} paintOrder="stroke" dominantBaseline="hanging"
+          {/* Size in image units: the text scales with the image, unlike the labels of other marks. */}
+          <text x={m.x} y={m.y} fill={color} fontSize={m.size ?? textSize} fontFamily="Segoe UI, sans-serif" fontWeight={600}
+            stroke="#000" strokeWidth={(m.size ?? textSize) * 0.18} paintOrder="stroke" dominantBaseline="hanging"
             textDecoration={selected ? 'underline' : undefined}>
             {/* SVG text does not wrap: one tspan per line. */}
             {(m.text || 'Text…').split('\n').map((line, i) => (
-              <tspan key={i} x={m.x} dy={i === 0 ? 0 : 20 * unit}>{line || ' '}</tspan>
+              <tspan key={i} x={m.x} dy={i === 0 ? 0 : (m.size ?? textSize) * 1.25}>{line || ' '}</tspan>
             ))}
           </text>
         </g>
@@ -218,6 +222,8 @@ export const MarkView = forwardRef<MarkViewHandle, Props>(function MarkView({ sr
   const oy = (frame.h - dh) / 2 + view.panY
   /** Image units per screen pixel: strokes and fonts keep their screen size. */
   const unit = scale > 0 ? 1 / scale : 1
+  /** Size of text marks that have none: 16 px at "fit". */
+  const textSize = fit > 0 ? r2(TEXT_FIT_PX / fit) : 16
 
   const setZoomAround = (zoom: number, cx: number, cy: number): void => {
     if (!box || fit <= 0) return
@@ -253,6 +259,11 @@ export const MarkView = forwardRef<MarkViewHandle, Props>(function MarkView({ sr
     const down = (e: KeyboardEvent): void => {
       if (typing(e) || e.ctrlKey || e.altKey || e.metaKey) return
       if (e.code === 'Space') { spaceDown.current = true; e.preventDefault() }
+      if ((e.key === '[' || e.key === ']') && selectedId) {
+        // Resize the selected text mark by 10%.
+        const k = e.key === ']' ? 1.1 : 1 / 1.1
+        update(selectedId, (m) => (m.type === 'text' ? { ...m, size: r2((m.size ?? textSize) * k), ...(m.by === 'agent' ? { moved: true } : {}) } : m))
+      }
       if (e.key === '0') fitView()
       if (e.key === '1') actualSize()
     }
@@ -302,7 +313,8 @@ export const MarkView = forwardRef<MarkViewHandle, Props>(function MarkView({ sr
     const id = nextUserId(marksRef.current)
     const q = placed(p, e, id)
     let mark: Mark
-    if (tool === 'text') mark = { id, by: 'user', type: 'text', x: q.x, y: q.y, text: '' }
+    // A new text looks 16 px at the current zoom and keeps its size in the image from then on.
+    if (tool === 'text') mark = { id, by: 'user', type: 'text', x: q.x, y: q.y, text: '', size: r2(TEXT_FIT_PX * unit) }
     else if (tool === 'arrow' || tool === 'line') mark = { id, by: 'user', type: tool, x1: q.x, y1: q.y, x2: q.x, y2: q.y }
     else mark = { id, by: 'user', type: tool, x: q.x, y: q.y, w: 0, h: 0 }
     onChange([...marksRef.current, mark])
@@ -434,7 +446,7 @@ export const MarkView = forwardRef<MarkViewHandle, Props>(function MarkView({ sr
           {/* Transparent ground over the whole frame: marks may go beyond the image. */}
           <rect className="vm-ground" x={box.x - ox * unit} y={box.y - oy * unit} width={frame.w * unit} height={frame.h * unit} fill="transparent" />
           <g ref={marksLayerRef}>
-            {marks.map((m) => <MarkShape key={m.id} m={m} unit={unit} selected={m.id === selectedId} />)}
+            {marks.map((m) => <MarkShape key={m.id} m={m} unit={unit} selected={m.id === selectedId} textSize={textSize} />)}
           </g>
           {snapMark && (
             <circle className="vm-snap" cx={snapMark.x} cy={snapMark.y} r={5 * unit} fill="none" stroke="#fff" strokeWidth={1.5 * unit} style={{ pointerEvents: 'none' }} />

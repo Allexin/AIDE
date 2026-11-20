@@ -75,7 +75,7 @@ export function buildViewTools(env: () => ViewToolEnvironment): ToolDefinition[]
           anchor: { ...BOUND, description: 'A heading text or a line number to scroll to; default: the first change.' },
           marks: {
             description: 'Images only. true: the user may mark the image up and send the marks back. A list: your marks, drawn first; the user can move or delete them. ' +
-              'Mark: {type:"text",x,y,text} | {type:"arrow"|"line",x1,y1,x2,y2,note?} | {type:"rect"|"ellipse",x,y,w,h,note?}, optional id.',
+              'Mark: {type:"text",x,y,text,size?} | {type:"arrow"|"line",x1,y1,x2,y2,note?} | {type:"rect"|"ellipse",x,y,w,h,note?}, optional id.',
             oneOf: [
               { type: 'boolean' },
               { type: 'array', items: { type: 'object' } }

@@ -103,4 +103,13 @@ describe('marks', () => {
       'Marks JSON: [{"id":"u1","by":"user","type":"arrow","x1":120,"y1":40,"x2":300,"y2":200,"note":"bigger"},{"id":"a1","by":"agent","type":"rect","x":40,"y":300,"w":120,"h":40}]'
     )
   })
+
+  it('keeps the size of text marks', async () => {
+    const { parseAgentMarks, formatMarks } = await import('./marks')
+    const [m] = parseAgentMarks([{ type: 'text', x: 10, y: 20, text: 'Title', size: 32 }])
+    expect(m).toMatchObject({ type: 'text', size: 32 })
+    expect(() => parseAgentMarks([{ type: 'text', x: 1, y: 1, text: 'a', size: 0 }])).toThrow(/size/)
+    expect(formatMarks({ path: 'a.png', shownAt: 0, units: 'image pixels', marks: [m], removedAgent: [] }))
+      .toContain("text a1 (agent's) at (10,20), size 32: \"Title\"")
+  })
 })
