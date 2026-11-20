@@ -67,6 +67,7 @@ if (hasCommandLineHelpArg(userArgs)) {
   remoteServer.start()
   logEvent('remote-server-started')
   setRemoteServer(remoteServer)
+  viewerService.setRemoteLockCheck((tabId) => remoteServer.isTabLocked(tabId))
 
   setupIpcHandlers(openProjects, remoteServer)
   viewerService.install()

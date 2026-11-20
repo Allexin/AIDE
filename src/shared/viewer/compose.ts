@@ -26,9 +26,10 @@ function where(lines: [number, number] | null): string {
   return lines[0] === lines[1] ? `Line ${lines[0]}` : `Lines ${lines[0]}-${lines[1]}`
 }
 
-/** One message: the comments grouped by file in the order they were made, then the free text. */
-export function composeMessage(comments: ViewerComment[], freeText: string): string {
+/** One message: the marks section (formatMarks), the comments grouped by file in the order they were made, then the free text. */
+export function composeMessage(comments: ViewerComment[], freeText: string, marksSection = ''): string {
   const parts: string[] = []
+  if (marksSection.trim()) parts.push(marksSection.trim())
   const files: string[] = []
   for (const c of comments) if (!files.includes(c.path)) files.push(c.path)
   for (const path of files) {

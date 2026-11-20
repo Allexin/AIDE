@@ -420,6 +420,7 @@ interface FileViewerAPI {
   send: (text: string) => Promise<import('../../shared/viewer/types').ViewerSendResult>
   setPending: (count: number) => void
   openInEditor: (relPath: string) => void
+  saveMarksImage: (dataUrl: string) => Promise<string | null>
 }
 
 interface HistoryViewerAPI {

@@ -43,6 +43,12 @@ describe('parseShowArgs', () => {
       .toEqual({ path: 'docs/x.md', base: 'head', range: { from: '## A', to: 40 }, anchor: 12 })
   })
 
+  it('reads marks sent as JSON strings by clients with a stale schema', () => {
+    expect(parseShowArgs({ path: 'a.png', marks: 'true' }).marks).toBe(true)
+    expect(parseShowArgs({ path: 'a.png', marks: '[{"type":"text","x":1,"y":2,"text":"Hi"}]' }).marks)
+      .toEqual([{ id: 'a1', by: 'agent', type: 'text', x: 1, y: 2, text: 'Hi' }])
+  })
+
   it('refuses bad arguments with readable text', () => {
     expect(() => parseShowArgs({})).toThrow(/path/)
     expect(() => parseShowArgs({ path: 'a', base: 'last' })).toThrow(/base/)

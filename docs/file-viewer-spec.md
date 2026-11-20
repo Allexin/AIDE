@@ -33,6 +33,8 @@ what changed. To point at a place, the user describes it in words in the termina
   sent or deleted.
 - A rendered view of HTML pages. HTML files are shown as source text (see File kinds).
 - Image diff beyond a before/after toggle.
+- Editing images. Marks on images (see Marks on images) are an annotation layer that goes
+  back to the agent; the image file is never changed by the viewer.
 - Handling an agent that edits the file while it waits for the user's answer. Agents do not
   do this; if one starts, the system prompt will forbid it. No logic for this case.
 
@@ -171,6 +173,9 @@ view_show({
 - `'none'`: no marks; the content still becomes the next base.
 - Scroll: to `anchor` if given, else to the first change, else to the top.
 - Paths outside the project root are refused (same containment check as `aide-preview://`).
+- A tab taken by a remote client (`remoteServer.isTabLocked`) gets an error: `view_show is not
+  available in a remote session`, so the agent tells the user in text instead. Temporary,
+  until the remote page can show files.
 - The calling tab (`context.tabId`) becomes the window's **reply tab**: the tab that Send
   writes to. A call from outside an AIDE terminal tab shows the file, and Send is disabled
   with `No agent tab to reply to`.
@@ -321,6 +326,87 @@ closed, Send stays disabled with `Agent tab closed`, and the comments are kept.
 
 Unsent comments survive hiding the window and new shows. They are lost when the AIDE window
 closes; closing AIDE with unsent comments asks for confirmation.
+
+---
+
+## Marks on images
+
+An agent that wants the user to mark up an image says so: `view_show({ path, marks: true })`
+("I show it and wait for marks"), or `marks: [...]` with marks of its own ("here is what I
+mean"). Without `marks` an image is view-only. Marks work on images only; on other kinds the
+tool refuses the argument.
+
+### Marks
+
+Five kinds, all with an optional note: **text** (a label at a point), **arrow**, **line**,
+**rectangle**, **ellipse**. No freehand drawing: a mark is a primitive the agent can read as
+data and send back.
+
+```ts
+type Mark =
+  | { id, by, type: 'text', x, y, text }
+  | { id, by, type: 'arrow' | 'line', x1, y1, x2, y2, note? }
+  | { id, by, type: 'rect' | 'ellipse', x, y, w, h, note? }
+// by: 'agent' | 'user'
+```
+
+Coordinates are in image units: pixels of the natural size for raster images, viewBox units
+for SVG, so the agent reads them in the coordinate system it drew in. Agent marks get ids
+`a1, a2…` when the agent gives none; user marks `u1, u2…`.
+
+### Editing
+
+A tool bar above the image: Select, Text, Arrow, Line, Rectangle, Ellipse. Drawing: press and
+drag (a click for Text). Select: click a mark to select it, drag to move it, `Delete` removes
+it. Both authors' marks can be moved and deleted; agent and user marks have different colors.
+Every mark is a card in the right panel above the comments, with its note (the text of a
+text mark) editable; hovering a card selects its mark.
+
+The marks layer covers the whole window, not only the image: marks and their labels may go
+beyond its edges (coordinates are then negative or past its size). Zoom: the wheel, around
+the pointer; the corner control (−, the zoom in % of actual size, +, Fit); keys 0 (fit) and
+1 (actual size). Pan: the middle button, Space + drag, or dragging empty space with Select.
+Snap: while drawing or moving, a point within 8 screen pixels of a snap point lands on it
+(corners, edge middles and centers of other marks, ends of lines, the image's corners, edge
+middles and center), shown by a white ring; Alt draws freely; Shift keeps lines to 45° steps
+and makes a rectangle a square, an ellipse a circle. No Before/After while marks are on:
+marks belong to the current image. Tool keys: V, T, A, L, R, E; Escape
+deselects. After a Send the sent marks become the base, so Send is enabled again only when
+the user changes them.
+
+### What the agent gets
+
+Send adds a marks section to the message:
+
+```
+Marks on assets/login.svg (shown 14:02), coordinates in viewBox units:
+1. arrow u1 (120,40)→(300,200): "bigger"
+2. rect u2 (10,10 200×80): "remove"
+3. text u3 at (50,60): "Title here"
+4. rect a1 (agent's, moved) (40,300 120×40)
+Removed agent marks: a2.
+Marks JSON: [{"id":"u1","by":"user","type":"arrow",...}, ...]
+Image with the marks: .aide/users/<user>/viewer/marks-<time>.png
+```
+
+- **No interpretation.** The viewer reports coordinates and the user's text, nothing about
+  what lies under a mark. The agent works that out itself: for an SVG from its own source,
+  in its own units; for a raster image from the picture below. Guessing elements under marks
+  was tried and dropped: its misses (a group instead of the button beside it, a backdrop)
+  mislead a weak model more than they help a strong one, which can look or ask.
+- **Raster images**: coordinates alone say little without the picture, so the viewer also
+  writes a PNG of the image with the marks drawn on it (widened to hold marks beyond the
+  image, on a dark field) under
+  `.aide/users/<user>/viewer/` and gives its path; the agent opens it with vision and takes
+  exact positions from the JSON.
+- **Marks JSON** carries all marks in their final state, so the agent can pass them back in
+  `view_show({ marks })`, changed or not.
+
+### Lifetime
+
+Marks belong to one show. A new `view_show` drops all marks: what the agent kept became part
+of the image or is passed again in `marks`, the rest is gone. Unsent marks count as unsent
+work for the close confirmation.
 
 ---
 

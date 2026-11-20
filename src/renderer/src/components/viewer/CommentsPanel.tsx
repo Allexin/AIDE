@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import type { ViewerComment } from '../../../../shared/viewer/compose'
 import type { ViewerReplyTab } from '../../../../shared/viewer/types'
+import type { Mark } from '../../../../shared/viewer/marks'
 
 /** The comments panel on the right of the file viewer (docs/file-viewer-spec.md, "Comments"). */
 
@@ -19,6 +20,52 @@ interface Props {
   onHover: (comment: ViewerComment | null) => void
   onFreeText: (text: string) => void
   onSend: () => void
+  /** Marks mode: the marks as cards above the comments; null when the image is view-only. */
+  marks: Mark[] | null
+  selectedMarkId: string | null
+  marksChanged: boolean
+  onMarkText: (id: string, text: string) => void
+  onMarkDelete: (id: string) => void
+  onMarkSelect: (id: string | null) => void
+}
+
+const MARK_LABEL: Record<Mark['type'], string> = { text: 'Text', arrow: 'Arrow', line: 'Line', rect: 'Rectangle', ellipse: 'Ellipse' }
+
+function MarkCard({ mark, selected, onText, onDelete, onSelect }: {
+  mark: Mark
+  selected: boolean
+  onText: (id: string, text: string) => void
+  onDelete: (id: string) => void
+  onSelect: (id: string | null) => void
+}): React.ReactElement {
+  const ref = useRef<HTMLTextAreaElement>(null)
+  const value = mark.type === 'text' ? mark.text : (mark.note ?? '')
+  useEffect(() => {
+    // A new text mark is typed into right away.
+    if (selected && mark.type === 'text' && !mark.text) ref.current?.focus()
+  }, [selected]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (selected) ref.current?.scrollIntoView({ block: 'nearest' })
+  }, [selected])
+  return (
+    <div className={`vc-card vc-mark by-${mark.by}${selected ? ' selected' : ''}`} onMouseEnter={() => onSelect(mark.id)}>
+      <div className="vc-card-head">
+        <span className="vc-lines">{MARK_LABEL[mark.type]} {mark.id}{mark.by === 'agent' ? ` · agent${mark.moved ? ', moved' : ''}` : ''}</span>
+        <button className="vc-delete" title="Delete mark" onClick={() => onDelete(mark.id)}>×</button>
+      </div>
+      <textarea
+        ref={ref}
+        className="vc-text"
+        value={value}
+        placeholder={mark.type === 'text' ? 'Text on the image…' : 'Note…'}
+        rows={Math.min(6, Math.max(1, value.split(/\n/).length))}
+        onChange={(e) => onText(mark.id, e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); (e.target as HTMLTextAreaElement).blur() }
+        }}
+      />
+    </div>
+  )
 }
 
 function linesLabel(c: ViewerComment): string {
@@ -74,7 +121,7 @@ export function CommentsPanel(props: Props): React.ReactElement {
     )
   }
   const files = [...new Set(comments.map((c) => c.path))]
-  const canSend = reply.available && !sending && (comments.length > 0 || freeText.trim() !== '')
+  const canSend = reply.available && !sending && (comments.length > 0 || freeText.trim() !== '' || props.marksChanged)
   return (
     <div className="vc-panel">
       <div className="vc-header">
@@ -82,7 +129,17 @@ export function CommentsPanel(props: Props): React.ReactElement {
         <button className="vc-collapse" title="Hide comments" onClick={props.onToggle}>›</button>
       </div>
       <div className="vc-list">
-        {comments.length === 0 && <div className="vc-empty">Select text in the document and press Comment.</div>}
+        {props.marks !== null && (
+          <div className="vc-file">
+            <div className="vc-file-name">Marks ({props.marks.length})</div>
+            {props.marks.length === 0 && <div className="vc-empty">Pick a tool above the image and draw on it.</div>}
+            {props.marks.map((m) => (
+              <MarkCard key={m.id} mark={m} selected={props.selectedMarkId === m.id}
+                onText={props.onMarkText} onDelete={props.onMarkDelete} onSelect={props.onMarkSelect} />
+            ))}
+          </div>
+        )}
+        {comments.length === 0 && props.marks === null && <div className="vc-empty">Select text in the document and press Comment.</div>}
         {files.map((path) => (
           <div key={path} className="vc-file">
             {files.length > 1 && <div className="vc-file-name">{path}</div>}

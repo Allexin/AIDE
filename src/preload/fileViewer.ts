@@ -10,6 +10,7 @@ interface FileViewerAPI {
   send: (text: string) => Promise<ViewerSendResult>
   setPending: (count: number) => void
   openInEditor: (relPath: string) => void
+  saveMarksImage: (dataUrl: string) => Promise<string | null>
 }
 
 function listen<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -25,7 +26,8 @@ const fileViewerApi: FileViewerAPI = {
   onReply: (cb) => listen('viewer:reply', cb),
   send: (text) => ipcRenderer.invoke('viewer:send', text),
   setPending: (count) => ipcRenderer.send('viewer:pending', count),
-  openInEditor: (relPath) => ipcRenderer.send('viewer:open-in-editor', relPath)
+  openInEditor: (relPath) => ipcRenderer.send('viewer:open-in-editor', relPath),
+  saveMarksImage: (dataUrl) => ipcRenderer.invoke('viewer:save-marks-image', dataUrl)
 }
 
 contextBridge.exposeInMainWorld('fileViewerApi', fileViewerApi)

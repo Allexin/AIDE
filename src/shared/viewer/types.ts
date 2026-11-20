@@ -1,4 +1,5 @@
 import type { ViewRange } from './range'
+import type { Mark } from './marks'
 
 /** What crosses between main and the viewer window (docs/file-viewer-spec.md). */
 
@@ -25,6 +26,8 @@ export interface ViewerShowPayload {
   shownAt: number
   anchor: string | number | null
   reply: ViewerReplyTab
+  /** Marks mode (images only): null — view only; a list — the user may mark, starting from the agent's marks. */
+  marks: Mark[] | null
 }
 
 /** The displayed file changed on disk: live diff is shown → content. */

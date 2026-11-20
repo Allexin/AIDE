@@ -1,5 +1,6 @@
 import type { ToolContext, ToolDefinition } from './protocol'
 import type { RangeBound, ViewRange } from '../../../shared/viewer/range'
+import { parseAgentMarks, type Mark } from '../../../shared/viewer/marks'
 
 /** `view_show`: the agent shows the user a file in the viewer window (docs/file-viewer-spec.md). */
 
@@ -9,6 +10,7 @@ export interface ViewToolEnvironment {
     base?: 'shown' | 'head' | 'none'
     range?: ViewRange | null
     anchor?: string | number | null
+    marks?: true | Mark[]
   }) => Promise<string>
 }
 
@@ -35,7 +37,15 @@ export function parseShowArgs(args: Record<string, unknown>): Parameters<NonNull
   }
   const anchor = args.anchor
   if (anchor !== undefined && anchor !== null && typeof anchor !== 'string' && typeof anchor !== 'number') throw new Error('"anchor" is a heading text or a line number.')
-  return { path: args.path, base, range, anchor: (anchor as string | number | undefined) ?? null }
+  let marks: true | Mark[] | undefined
+  // Clients with a stale tool schema send JSON values as strings ("true", "[...]").
+  let rawMarks = args.marks
+  if (typeof rawMarks === 'string') {
+    try { rawMarks = JSON.parse(rawMarks) } catch { /* reported below */ }
+  }
+  if (rawMarks === true) marks = true
+  else if (rawMarks !== undefined && rawMarks !== null && rawMarks !== false) marks = parseAgentMarks(rawMarks)
+  return { path: args.path, base, range, anchor: (anchor as string | number | undefined) ?? null, ...(marks !== undefined ? { marks } : {}) }
 }
 
 export function buildViewTools(env: () => ViewToolEnvironment): ToolDefinition[] {
@@ -47,7 +57,10 @@ export function buildViewTools(env: () => ViewToolEnvironment): ToolDefinition[]
         'Call it when the user should read or review something you wrote, once you have finished a set of edits — not after each edit: each call is the base of the next diff. ' +
         'range shows only a part of a large file, for example one chapter: from is a line number or the text of the first line shown (a heading, a marker comment); ' +
         'to is the last line number, or the text of the line where the part ends (that line is not shown). Text bounds follow your edits. ' +
-        'The user comments on fragments in the viewer; the comments arrive in this session as one message, with file line numbers. Returns at once.',
+        'The user comments on fragments in the viewer; the comments arrive in this session as one message, with file line numbers. ' +
+        'Images: marks: true asks the user to mark the image up (text, arrow, line, rectangle, ellipse); marks: [...] also draws your own marks. ' +
+        'Marks come back with coordinates in image pixels (viewBox units for SVG), the notes of the user, the marks as JSON you can pass back, and for raster images a PNG with the marks drawn. ' +
+        'A new show drops all marks. Returns at once.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -59,7 +72,15 @@ export function buildViewTools(env: () => ViewToolEnvironment): ToolDefinition[]
             additionalProperties: false,
             description: 'Only this part of the file.'
           },
-          anchor: { ...BOUND, description: 'A heading text or a line number to scroll to; default: the first change.' }
+          anchor: { ...BOUND, description: 'A heading text or a line number to scroll to; default: the first change.' },
+          marks: {
+            description: 'Images only. true: the user may mark the image up and send the marks back. A list: your marks, drawn first; the user can move or delete them. ' +
+              'Mark: {type:"text",x,y,text} | {type:"arrow"|"line",x1,y1,x2,y2,note?} | {type:"rect"|"ellipse",x,y,w,h,note?}, optional id.',
+            oneOf: [
+              { type: 'boolean' },
+              { type: 'array', items: { type: 'object' } }
+            ]
+          }
         },
         required: ['path'],
         additionalProperties: false

@@ -4,6 +4,8 @@ import { composeMessage, type ViewerComment } from '../../../shared/viewer/compo
 import { DocumentView, type DisplaySpec } from '../components/viewer/DocumentView'
 import { CommentsPanel } from '../components/viewer/CommentsPanel'
 import { anchorElement, elementsFor, readSelection, type SelectionInfo } from '../components/viewer/selection'
+import { MARK_TOOLS, MarkView, type MarkTool, type MarkViewHandle } from '../components/viewer/MarkView'
+import { formatMarks, type Mark } from '../../../shared/viewer/marks'
 import '../components/history/transcript.css'
 import '../components/viewer/viewer.css'
 
@@ -37,6 +39,12 @@ export default function FileViewerApp(): React.ReactElement {
   const [selection, setSelection] = useState<SelectionInfo | null>(null)
   const [stops, setStops] = useState(0)
   const [stop, setStop] = useState(0)
+  /** Marks mode (images the agent asked to mark up): the marks and the agent's originals. */
+  const [marks, setMarks] = useState<Mark[] | null>(null)
+  const [agentMarks, setAgentMarks] = useState<Mark[]>([])
+  const [tool, setTool] = useState<MarkTool>('rect')
+  const [selectedMark, setSelectedMark] = useState<string | null>(null)
+  const markViewRef = useRef<MarkViewHandle>(null)
   const docRef = useRef<HTMLDivElement>(null)
   const liveOnRef = useRef(liveOn)
   liveOnRef.current = liveOn
@@ -51,6 +59,11 @@ export default function FileViewerApp(): React.ReactElement {
     setLatestLive(null)
     setAppliedLive(null)
     setSeen(null)
+    // A new show drops all marks: the kept ones are part of the image or passed again.
+    setMarks(payload.marks ? payload.marks.map((m) => ({ ...m })) : null)
+    setAgentMarks(payload.marks ?? [])
+    setSelectedMark(null)
+    setTool(payload.marks && payload.marks.length ? 'select' : 'rect')
     setReply(payload.reply)
     setNotice(null)
     pendingScroll.current = { anchor: payload.anchor }
@@ -72,10 +85,33 @@ export default function FileViewerApp(): React.ReactElement {
     document.title = show ? `${show.relPath} — Viewer` : 'Viewer'
   }, [show])
 
+  /** Whether the marks differ from what the agent drew: something to send. */
+  const marksChanged = marks !== null && JSON.stringify(marks.map(({ moved: _m, ...rest }) => rest)) !== JSON.stringify(agentMarks)
+
   // Unsent work is reported, so closing the project asks first.
   useEffect(() => {
-    api.setPending(comments.length + (freeText.trim() ? 1 : 0))
-  }, [comments.length, freeText])
+    api.setPending(comments.length + (freeText.trim() ? 1 : 0) + (marksChanged ? 1 : 0))
+  }, [comments.length, freeText, marksChanged])
+
+  // Mark tools by key (V, T, A, L, R, E); Delete removes the selected mark.
+  useEffect(() => {
+    if (marks === null) return
+    const onKey = (e: KeyboardEvent): void => {
+      const target = e.target as HTMLElement
+      if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || e.ctrlKey || e.altKey || e.metaKey) return
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedMark) {
+        e.preventDefault()
+        setMarks((list) => (list ? list.filter((m) => m.id !== selectedMark) : list))
+        setSelectedMark(null)
+        return
+      }
+      if (e.key === 'Escape') { setSelectedMark(null); return }
+      const t = MARK_TOOLS.find((x) => x.key === e.key.toLowerCase())
+      if (t) setTool(t.tool)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [marks, selectedMark])
 
   const toggleLive = (on: boolean): void => {
     setLiveOn(on)
@@ -158,8 +194,27 @@ export default function FileViewerApp(): React.ReactElement {
     highlighted.current = els
     els[0]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }
+  const marksSection = async (): Promise<string> => {
+    if (!show || marks === null || !marksChanged) return ''
+    const handle = markViewRef.current
+    const final = marks.filter((m) => m.type !== 'text' || m.text.trim())
+    let snapshotPath: string | null = null
+    try {
+      const png = handle ? await handle.snapshot() : null
+      if (png) snapshotPath = await api.saveMarksImage(png)
+    } catch { /* the picture is a help; the marks go without it */ }
+    return formatMarks({
+      path: show.relPath,
+      shownAt: show.shownAt,
+      units: handle?.units() ?? 'image pixels',
+      marks: final,
+      removedAgent: agentMarks.filter((a) => !marks.some((m) => m.id === a.id)).map((a) => a.id),
+      snapshotPath
+    })
+  }
+
   const send = async (): Promise<void> => {
-    const text = composeMessage(comments, freeText)
+    const text = composeMessage(comments, freeText, await marksSection())
     if (!text.trim()) return
     setSending(true)
     setNotice(null)
@@ -168,6 +223,8 @@ export default function FileViewerApp(): React.ReactElement {
       if (result.ok) {
         setComments([])
         setFreeText('')
+        // Sent marks are now the base: nothing new until the user changes them.
+        if (marks) setAgentMarks(marks.map(({ moved: _m, ...rest }) => rest))
         setNotice({ text: 'Sent', error: false })
       } else {
         setNotice({ text: result.error ?? 'Not sent', error: true })
@@ -217,9 +274,20 @@ export default function FileViewerApp(): React.ReactElement {
           )}
           {show && <button className="vw-open" onClick={() => api.openInEditor(show.relPath)}>Open in editor</button>}
         </div>
-        {spec
-          ? <DocumentView ref={docRef} spec={spec} onMouseUp={onDocMouseUp} onMouseDown={() => setSelection(null)} />
-          : <div className="vw-empty">The agent has not shown a file yet.</div>}
+        {spec && marks !== null && (
+          <div className="vm-tools">
+            {MARK_TOOLS.map((t) => (
+              <button key={t.tool} className={tool === t.tool ? 'on' : ''} onClick={() => setTool(t.tool)} title={`${t.label} (${t.key.toUpperCase()})`}>{t.label}</button>
+            ))}
+            <span className="vm-hint">{tool === 'select' ? 'Click a mark to select, drag to move, Delete to remove' : tool === 'text' ? 'Click where the text goes' : 'Drag on the image'}</span>
+          </div>
+        )}
+        {spec && marks !== null
+          ? <MarkView ref={markViewRef} src={spec.current} alt={spec.relPath} marks={marks} tool={tool} selectedId={selectedMark}
+              onChange={setMarks} onSelect={setSelectedMark} />
+          : spec
+            ? <DocumentView ref={docRef} spec={spec} onMouseUp={onDocMouseUp} onMouseDown={() => setSelection(null)} />
+            : <div className="vw-empty">The agent has not shown a file yet.</div>}
         {selection && show && (
           <button
             className="vw-comment-btn"
@@ -246,6 +314,12 @@ export default function FileViewerApp(): React.ReactElement {
         onHover={onHover}
         onFreeText={setFreeText}
         onSend={() => void send()}
+        marks={marks}
+        selectedMarkId={selectedMark}
+        marksChanged={marksChanged}
+        onMarkText={(id, text) => setMarks((list) => list && list.map((m) => (m.id !== id ? m : m.type === 'text' ? { ...m, text } : { ...m, note: text || undefined })))}
+        onMarkDelete={(id) => { setMarks((list) => list && list.filter((m) => m.id !== id)); setSelectedMark((s) => (s === id ? null : s)) }}
+        onMarkSelect={setSelectedMark}
       />
     </div>
   )

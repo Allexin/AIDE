@@ -7,6 +7,10 @@ import { describeRange, sliceRange, type ViewRange } from '../../shared/viewer/r
 import { countChanges, prepareShow } from './showPrep'
 import type { ViewerKind, ViewerLivePayload, ViewerReplyTab, ViewerSendResult, ViewerShowPayload } from '../../shared/viewer/types'
 import { gitShowHead, readForView, resolveProjectFile, viewerKind } from './viewerFiles'
+import type { Mark } from '../../shared/viewer/marks'
+import { getProjectUserPath } from '../config/projectUserData'
+import { mkdirSync, writeFileSync } from 'fs'
+import { dirname, relative, sep } from 'path'
 
 /**
  * The file viewer (docs/file-viewer-spec.md): snapshots per shown file, the window of each
@@ -20,6 +24,8 @@ export interface ShowArgs {
   base?: BaseMode
   range?: ViewRange | null
   anchor?: string | number | null
+  /** true or the agent's marks: the user may mark up the image (images only). */
+  marks?: true | Mark[]
 }
 
 interface Displayed {
@@ -48,6 +54,13 @@ class ViewerService {
   private readonly projects = new Map<string, ProjectViewer>()
   private seq = 0
   private installed = false
+  /** Whether a remote client has taken a tab (src/main/remote); none until the remote server is up. */
+  private remoteLocked: (tabId: string) => boolean = () => false
+
+  /** A tab taken by a remote client gets no viewer: the user there cannot see the window. Temporary, until the remote page shows files. */
+  setRemoteLockCheck(check: (tabId: string) => boolean): void {
+    this.remoteLocked = check
+  }
 
   /** IPC handlers and the FS observer; once, at startup. */
   install(): void {
@@ -72,6 +85,23 @@ class ViewerService {
       if (!tabId || !p.pty.getTabs().some((t) => t.tabId === tabId)) return { ok: false, error: 'Agent tab closed' }
       const sent = await p.pty.submitText(tabId, text)
       return sent ? { ok: true } : { ok: false, error: 'Agent tab closed' }
+    })
+    // The image with the marks drawn on it, for an agent with vision (raster images).
+    ipcMain.handle('viewer:save-marks-image', (event, dataUrl: unknown): string | null => {
+      const p = byWindow(event)
+      if (!p || typeof dataUrl !== 'string') return null
+      const m = /^data:image\/png;base64,(.+)$/.exec(dataUrl)
+      if (!m) return null
+      try {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+        const file = getProjectUserPath(p.projectPath, 'viewer', `marks-${stamp}.png`)
+        mkdirSync(dirname(file), { recursive: true })
+        writeFileSync(file, Buffer.from(m[1], 'base64'))
+        return relative(p.projectPath, file).split(sep).join('/')
+      } catch (err) {
+        logEvent('viewer-marks-image-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn')
+        return null
+      }
     })
     ipcMain.on('viewer:pending', (event, count: unknown) => {
       const p = byWindow(event)
@@ -115,8 +145,12 @@ class ViewerService {
   async show(projectPath: string, tabId: string | null, args: ShowArgs): Promise<string> {
     const p = this.projects.get(fold(projectPath))
     if (!p) throw new Error('The project is not open in this AIDE.')
+    if (tabId && this.remoteLocked(tabId)) {
+      throw new Error('view_show is not available in a remote session: the user works with this tab from the remote page and cannot see the viewer window. Show nothing; describe the file or its changes in your answer instead.')
+    }
     const { absolute, relPath } = resolveProjectFile(p.projectPath, args.path)
     const kind = viewerKind(relPath)
+    if (args.marks !== undefined && kind !== 'image') throw new Error('"marks" works on images only.')
     const current = readForView(absolute, kind)
     const mode: BaseMode = args.base ?? 'shown'
     let baseFull: string | null = null
@@ -142,7 +176,8 @@ class ViewerService {
       rangeLabel: describeRange(range),
       shownAt,
       anchor: args.anchor ?? null,
-      reply: this.replyState(p)
+      reply: this.replyState(p),
+      marks: args.marks === undefined ? null : args.marks === true ? [] : args.marks
     }
     delete (payload as { note?: string }).note
     p.lastShow = payload
@@ -153,7 +188,8 @@ class ViewerService {
       ? (prepared.note ?? (mode === 'none' ? 'Shown without marks.' : 'First show, no base.'))
       : `${changes} change${changes === 1 ? '' : 's'} since ${mode === 'head' ? 'HEAD' : 'the previous show'}.`
     const where = payload.rangeLabel ? ` (${payload.rangeLabel})` : ''
-    const reply = p.replyTabId ? " The user's comments will arrive as a message." : ' This session is not an AIDE terminal tab: the user cannot send comments back.'
+    const marked = payload.marks ? ` Marks mode is on${payload.marks.length ? ` with your ${payload.marks.length} mark${payload.marks.length === 1 ? '' : 's'}` : ''}.` : ''
+    const reply = p.replyTabId ? `${marked} The user's comments will arrive as a message.` : `${marked} This session is not an AIDE terminal tab: the user cannot send comments back.`
     return `Shown ${relPath}${where}: ${what}${reply}`
   }
 
