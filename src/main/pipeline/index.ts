@@ -77,13 +77,27 @@ export const planService = new PlanService(pipelineManager, {
 
 /** The task trackers of the open projects; the MCP tools and the tasks tab work through this. */
 export const taskService = new TaskService({
-  userDir: (projectPath) => getProjectUserPath(projectPath, 'tasks')
+  userDir: (projectPath) => getProjectUserPath(projectPath, 'tasks'),
+  liveTab,
+  runActive: (projectPath) => pipelineManager.activeRun(projectPath) !== null
 })
 
 /** Whether a tab id names a terminal tab open in this AIDE. */
 function liveTab(tabId: string): boolean {
   for (const mgr of ptyRegistry.values()) if (mgr.getTabs().some((tab) => tab.tabId === tabId)) return true
   return false
+}
+
+/** The tracker part of the server instructions for a session that starts; its tracker tail counts from now. */
+function trackerOrientation(projectPath: string, connectionId: string): string {
+  try {
+    const text = taskService.orientation(projectPath)
+    taskService.beginConnection(projectPath, connectionId)
+    return text
+  } catch (err) {
+    logEvent('task-orientation-failed', { projectPath, message: err instanceof Error ? err.message : String(err) }, 'warn')
+    return ''
+  }
 }
 
 function taskGuide(): string {
@@ -125,7 +139,7 @@ export async function startPipelineServer(): Promise<void> {
       runtimeDir: runtimeDir(),
       serverName: 'aide',
       serverVersion: app.getVersion(),
-      instructions: () => serverInstructions(workInstruction()),
+      instructions: (context) => serverInstructions(workInstruction(), trackerOrientation(context.projectPath, context.connectionId)),
       tools: () => buildPipelineTools(() => ({
         aideVersion: app.getVersion(),
         launcherPath,
@@ -195,6 +209,7 @@ export function attachPipelineProject(projectPath: string, win: BrowserWindow): 
     planService.off('decision-entry', onDecisionEntry)
     taskService.off('changed', onTasksChanged)
     stopTaskWatch()
+    taskService.forget(projectPath)
     planService.forget(projectPath)
     pipelineManager.forget(projectPath)
     orchestrators.forgetProject(projectPath)

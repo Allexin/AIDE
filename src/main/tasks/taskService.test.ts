@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { TaskService, slugFromTitle } from './taskService'
@@ -223,5 +223,80 @@ describe('notifications', () => {
     service.notifyDiskChange(dir)
     await Promise.resolve()
     expect(seen).toEqual([dir, dir])
+  })
+})
+
+describe('tab bindings (§6)', () => {
+  const others = (user: string): string => join(dir, '.aide', 'users', user, 'tasks')
+  const writeBindingsOf = (user: string, bindings: Record<string, unknown>): void => {
+    mkdirSync(others(user), { recursive: true })
+    writeFileSync(join(others(user), 'bindings.json'), JSON.stringify(bindings))
+  }
+
+  it('start records who bound the tab, writes a journal line and notifies once', async () => {
+    const { id } = await service.create(dir, { title: 'T', status: 'planned' }, BY)
+    const seen: string[] = []
+    service.on('changed', (path: string) => seen.push(path))
+    await service.start(dir, id, 'tab-2', 'alice')
+    expect(seen).toEqual([dir])
+    expect(readBindings(userDir())['tab-2']).toMatchObject({ task: id, user: 'alice', host: 'pc1', pid: process.pid })
+    expect(read(id).task.journal.at(-1)).toBe('2026-11-20 alice/tab 2: started (planned → active)')
+    // The same start again changes nothing and says nothing.
+    await service.start(dir, id, 'tab-2', 'alice')
+    expect(seen).toEqual([dir])
+    // Another tab of the same user: only the binding changes.
+    await service.start(dir, id, 'tab-3', 'alice')
+    expect(seen).toEqual([dir, dir])
+    expect(read(id).tabs.sort()).toEqual(['tab-2', 'tab-3'])
+  })
+
+  it('closing a tab removes its binding and notifies; other tabs keep theirs', async () => {
+    const { id } = await service.create(dir, { title: 'T' }, BY)
+    await service.start(dir, id, 'tab-1', 'alice')
+    await service.start(dir, id, 'tab-2', 'alice')
+    const seen: string[] = []
+    service.on('changed', (path: string) => seen.push(path))
+    service.unbindTabs(dir, ['tab-1'])
+    expect(Object.keys(readBindings(userDir()))).toEqual(['tab-2'])
+    expect(seen).toEqual([dir])
+    service.unbindTabs(dir, ['tab-1'])
+    expect(seen).toEqual([dir])
+  })
+
+  it('a paused or closed task loses its bindings, also those of other users', async () => {
+    const a = (await service.create(dir, { title: 'A' }, BY)).id
+    const b = (await service.create(dir, { title: 'B' }, BY)).id
+    await service.start(dir, a, 'tab-1', 'alice')
+    await service.start(dir, b, 'tab-2', 'alice')
+    writeBindingsOf('bob', { 'tab-1': { task: a, since: '2026-11-20T09:00:00Z', user: 'bob', host: 'pc2', pid: 7 } })
+    expect(service.bindings(dir).map((x) => `${x.who}:${x.task}`).sort()).toEqual(['alice/tab 1:a', 'alice/tab 2:b', 'bob:a'])
+    await service.update(dir, a, revision(a), { status: 'planned' }, BY)
+    await service.closeSimple(dir, b, revision(b), { outcome: 'done', label: 'B', claim: 'B is there.' }, BY)
+    expect(readBindings(userDir())).toEqual({})
+    // Bob's file is his own to write; a binding to a task that is not active does not count.
+    expect(service.bindings(dir)).toEqual([])
+  })
+
+  it("reads the other users' bindings as theirs and ignores this user's left-over ones", async () => {
+    const live = new Set(['tab-1'])
+    service = new TaskService({ userDir: () => userDir(), user: () => 'alice', owner: { user: 'alice', host: 'pc1' }, liveTab: (tabId) => live.has(tabId), now: () => new Date('2026-11-20T10:00:00Z') })
+    const { id } = await service.create(dir, { title: 'Shared work' }, BY)
+    await service.start(dir, id, 'tab-1', 'alice')
+    const bindings = readBindings(userDir())
+    writeFileSync(join(userDir(), 'bindings.json'), JSON.stringify({
+      ...bindings,
+      'tab-5': { task: id, since: 'x', user: 'alice', host: 'pc1', pid: process.pid }, // closed tab of this AIDE
+      'tab-6': { task: id, since: 'x', user: 'alice', host: 'pc1', pid: -1 }, // an earlier AIDE process
+      'tab-7': { task: id, since: 'x', user: 'alice', host: 'pc9', pid: 3 } // this user on another host
+    }))
+    writeBindingsOf('bob', { 'tab-1': { task: id, since: 'x', user: 'bob', host: 'pc2', pid: 7 } })
+    const views = service.bindings(dir)
+    expect(views.map((v) => [v.tabId, v.here, v.who])).toEqual(expect.arrayContaining([['tab-1', true, 'alice/tab 1'], ['tab-7', false, 'alice on pc9'], ['tab-1', false, 'bob']]))
+    expect(views).toHaveLength(3)
+    expect(service.tabTasks(dir)).toEqual({ 'tab-1': { id, title: 'Shared work' } })
+    // A new binding drops the left-overs of earlier processes of this user on this host.
+    live.add('tab-8')
+    await service.start(dir, id, 'tab-8', 'alice')
+    expect(Object.keys(readBindings(userDir())).sort()).toEqual(['tab-1', 'tab-5', 'tab-7', 'tab-8'])
   })
 })

@@ -13,6 +13,7 @@ import ThinkingPanel from '../components/thinking/ThinkingPanel'
 import StatusBar from '../components/layout/StatusBar'
 import { connectPipelineStore } from '../store/usePipelineStore'
 import { connectPlanStore } from '../store/usePlanStore'
+import { connectTaskStore } from '../store/useTaskStore'
 
 export default function EditorApp(): React.ReactElement {
   const [initialized, setInitialized] = useState(false)
@@ -57,6 +58,7 @@ export default function EditorApp(): React.ReactElement {
   // Pipeline run state for the pipeline tab and the terminal banner
   useEffect(() => connectPipelineStore(), [])
   useEffect(() => connectPlanStore(), [])
+  useEffect(() => connectTaskStore(), [])
 
 
   // Forward CLI log events from main process into the LogPanel

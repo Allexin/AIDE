@@ -105,3 +105,48 @@ describe('task tools', () => {
     expect(result.text).toContain('is not a task id')
   })
 })
+
+describe('the tracker tail and task_snapshot', () => {
+  const server = (): ReturnType<typeof buildPipelineTools> => buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'l', tasks: service, guide: () => 'GUIDE', liveTab: (tabId) => LIVE.has(tabId) }))
+  async function on(connectionId: string, tabId: string | null, name: string, args: Record<string, unknown> = {}): Promise<string> {
+    const tool = server().find((t) => t.name === name)!
+    return (await tool.handler(args, { projectPath: dir, connectionId, tabId, clientInfo: null })).text
+  }
+  const TAIL = '— tracker since your last call:'
+
+  it('a result gets the tail only when something changed for that connection since its last tail, at most 5 items', async () => {
+    service.beginConnection(dir, 'agent') // the tab's session starts
+    service.beginConnection(dir, 'other') // a headless session starts
+    expect(await on('other', null, 'task_search')).toBe('No matching tasks.')
+
+    expect(await on('agent', 'tab-3', 'task_create', { id: 'a', title: 'A' })).not.toContain(TAIL)
+    // The connection that made the change is not told about it; the other one is, once.
+    expect(await on('agent', 'tab-3', 'task_search')).not.toContain(TAIL)
+    expect(await on('other', null, 'task_search')).toContain(`\n\n${TAIL} task a created by alice/tab 3.`)
+    expect(await on('other', null, 'task_search')).not.toContain(TAIL)
+
+    // A notice of a change that changed nothing (the watcher's echo of a write) brings no tail.
+    service.notifyDiskChange(dir)
+    await Promise.resolve()
+    expect(await on('other', null, 'task_search')).not.toContain(TAIL)
+
+    for (const id of ['b', 'c', 'd', 'e', 'f', 'g']) await on('agent', 'tab-3', 'task_create', { id, title: id.toUpperCase() })
+    // Plan and pipeline results carry it too.
+    const result = await on('other', null, 'pipeline_schema')
+    expect(result.slice(result.indexOf(TAIL))).toBe(`${TAIL} task b created by alice/tab 3; task c created by alice/tab 3; task d created by alice/tab 3; task e created by alice/tab 3; task f created by alice/tab 3; and 1 more.`)
+    expect(await on('other', null, 'toolbar_guide')).not.toContain(TAIL)
+  })
+
+  it('task_snapshot shows the tab its task and counts as seen', async () => {
+    service.beginConnection(dir, 'agent')
+    service.beginConnection(dir, 'other')
+    await on('agent', 'tab-3', 'task_create', { id: 'work', title: 'The work', description: 'What to do.' })
+    await on('agent', 'tab-3', 'task_start', { id: 'work' })
+    const snapshot = await on('other', null, 'task_snapshot')
+    expect(snapshot).not.toContain(TAIL)
+    expect(snapshot).toContain('- active work: The work — alice/tab 3')
+    expect(await on('other', null, 'task_search')).not.toContain(TAIL)
+    const mine = await on('agent', 'tab-3', 'task_snapshot')
+    expect(mine).toContain("## This tab's task\nThe work (work), active\nWhat to do.")
+  })
+})

@@ -10,6 +10,7 @@ import RunStateBanner from '../pipeline/RunStateBanner'
 import PipelineView, { PipelineTabButton } from '../pipeline/PipelineView'
 import { hasPipelineTab, usePipelineStore } from '../../store/usePipelineStore'
 import { hasPlans, usePlanStore } from '../../store/usePlanStore'
+import { tabTaskLabel, useTaskStore } from '../../store/useTaskStore'
 
 // VS Dark terminal theme
 const VS_DARK_THEME = {
@@ -737,6 +738,9 @@ interface TabButtonProps {
 function TabButton({ tab, isActive, isLocked, canClose, onSelect, onClose }: TabButtonProps): React.ReactElement {
   const [dim, setDim] = useState(false)
   const [hovered, setHovered] = useState(false)
+  const task = useTaskStore((s) => s.tabTasks[tab.tabId])
+  const taskLabel = tabTaskLabel(task)
+  const tooltip = [tab.slug, ...(tab.sessionId ? [`[${tab.sessionId}]`] : []), task ? `Task: ${task.title} (${task.id})` : 'no task'].join('\n')
 
   useEffect(() => {
     if (!tab.attention) {
@@ -760,7 +764,7 @@ function TabButton({ tab, isActive, isLocked, canClose, onSelect, onClose }: Tab
       onClick={onSelect}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      title={tab.sessionId ? `${tab.slug}\n[${tab.sessionId}]` : tab.slug}
+      title={tooltip}
       style={{
         background: isActive ? '#1e1e1e' : '#2d2d2d',
         color,
@@ -773,7 +777,7 @@ function TabButton({ tab, isActive, isLocked, canClose, onSelect, onClose }: Tab
         whiteSpace: 'nowrap',
         lineHeight: 1.5,
         flexShrink: 0,
-        maxWidth: 200,
+        maxWidth: taskLabel ? 320 : 200,
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         userSelect: 'none',
@@ -784,6 +788,7 @@ function TabButton({ tab, isActive, isLocked, canClose, onSelect, onClose }: Tab
     >
       {isLocked && <span title="Remotely controlled" style={{ flexShrink: 0, fontSize: 12 }}>📱</span>}
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{tab.slug}</span>
+      {taskLabel && <span style={{ flexShrink: 0, color: '#858585', fontSize: 11 }}>{taskLabel}</span>}
       {canClose && (hovered || isActive) && (
         <span
           onClick={(e) => { e.stopPropagation(); onClose() }}

@@ -1,7 +1,7 @@
 import http from 'http'
 import { randomBytes, randomUUID, timingSafeEqual } from 'crypto'
 import { logEvent } from '../../diagnostics'
-import { McpServer, type ToolDefinition } from '../mcp/protocol'
+import { McpServer, type RequestContext, type ToolDefinition } from '../mcp/protocol'
 import { orchestrators } from '../orchestrators'
 import { tabActivity } from '../../pty/tabActivity'
 import { inWaitScope, isSignificant, pipelineEvents, type PipelineEvent } from '../events'
@@ -28,7 +28,7 @@ export interface PipelineServerOptions {
   runtimeDir: string
   serverName: string
   serverVersion: string
-  instructions: string | (() => string)
+  instructions: string | ((context: RequestContext) => string)
   tools: () => ToolDefinition[]
 }
 

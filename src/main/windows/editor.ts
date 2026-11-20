@@ -21,7 +21,17 @@ import { startToolbarWatcher } from '../toolbar/toolbarWatcher'
 import { rebuildMenu, removeEditorWindow } from '../menu'
 import type { StartupTerminalOptions } from '../pty/ptyManager'
 import { getProjectUserPath } from '../config/projectUserData'
-import { attachPipelineProject } from '../pipeline'
+import { attachPipelineProject, taskService } from '../pipeline'
+
+
+/** Drop the task bindings of closed tabs; a failure to write them is recorded, never thrown into a close. */
+function unbindTaskTabs(projectPath: string, tabIds: string[]): void {
+  try {
+    taskService.unbindTabs(projectPath, tabIds)
+  } catch (err) {
+    logEvent('task-unbind-failed', { projectPath, tabIds, message: err instanceof Error ? err.message : String(err) }, 'warn')
+  }
+}
 
 export interface OpenProjectOptions {
   terminal?: StartupTerminalOptions
@@ -123,7 +133,11 @@ export function openProjectAndTrack(
     const filePath = transcriptPath ?? tool.getSessionFilePath?.(projectPath, sessionId) ?? null
     thinkingWatcher.startWatching(tabId, sessionId, projectPath, filePath, tool)
   }
-  ptyMgr.onTabClosed = (tabId) => thinkingWatcher.stopWatching(tabId)
+  ptyMgr.onTabClosed = (tabId) => {
+    thinkingWatcher.stopWatching(tabId)
+    // A closed tab works on no task any more (task tracker §6).
+    unbindTaskTabs(projectPath, [tabId])
+  }
 
   // Start filesystem watcher after the window is ready to receive IPC events
   editorWin.webContents.once('did-finish-load', () => {
@@ -167,6 +181,8 @@ export function openProjectAndTrack(
   })
 
   editorWin.on('closed', () => {
+    // The window's tabs close with it, so they work on no task any more.
+    unbindTaskTabs(projectPath, ptyMgr.getTabs().map((tab) => tab.tabId))
     detachPipeline()
     // Save active sessions before disposing (must be before disposeAll clears tabs)
     const sessions = ptyMgr.getActiveSessions()

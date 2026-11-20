@@ -176,6 +176,9 @@ export interface EditorAPI {
   planGetDecision: (planId: string, decision: number) => Promise<unknown>
   onPlanSnapshot: (cb: (snapshot: unknown) => void) => () => void
   onPlanDecisionEntry: (cb: (event: { planId: string; decision: number }) => void) => () => void
+  // Task tracker
+  tasksTabTasks: () => Promise<Record<string, { id: string; title: string }>>
+  onTasksChanged: (cb: () => void) => () => void
   onPipelineTranscript: (cb: (event: { runId: string; node: string; visit: number; entry: unknown }) => void) => () => void
 
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
@@ -475,6 +478,12 @@ const editorApi: EditorAPI = {
     const handler = (_: unknown, snapshot: unknown): void => cb(snapshot)
     ipcRenderer.on('plan:snapshot', handler)
     return () => ipcRenderer.removeListener('plan:snapshot', handler)
+  },
+  tasksTabTasks: () => ipcRenderer.invoke('tasks:tab-tasks'),
+  onTasksChanged: (cb: () => void): (() => void) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('tasks:changed', handler)
+    return () => ipcRenderer.removeListener('tasks:changed', handler)
   },
   onPipelineRunState: (cb: (snapshot: unknown) => void): (() => void) => {
     const handler = (_: unknown, snapshot: unknown): void => cb(snapshot)

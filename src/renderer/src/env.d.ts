@@ -269,6 +269,9 @@ interface EditorAPI {
   planGetDecision: (planId: string, decision: number) => Promise<{ entries: HistoryEntry[]; inputs: import('../../shared/pipelineMachine').AgentInputRecord[]; decision: unknown } | null>
   onPlanSnapshot: (cb: (snapshot: import('../../shared/plan').PlanSnapshot) => void) => () => void
   onPlanDecisionEntry: (cb: (event: { planId: string; decision: number }) => void) => () => void
+  // Task tracker
+  tasksTabTasks: () => Promise<Record<string, { id: string; title: string }>>
+  onTasksChanged: (cb: () => void) => () => void
   onPipelineTranscript: (cb: (event: { runId: string; node: string; visit: number; entry: HistoryEntry }) => void) => () => void
 
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)

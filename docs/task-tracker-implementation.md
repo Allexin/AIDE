@@ -1,10 +1,9 @@
 # Task tracker — implementation of build steps 2 and 4
 
-Status: §1–§5 (shared types, file format, store, service, MCP tools) are implemented, with these parts
-left to the binding and snapshot work: of §6 only the binding `task_start` writes (and its removal when
-the task leaves `active`) exists; `task_snapshot` answers with a placeholder line and no tool result
-carries the §7 tail yet. §6–§8 are not implemented otherwise. The `by` of an agent uses the number of its
-tab id (`tab-3` → `allex/tab 3`): the tab strip shows titles, not numbers.
+Status: §1–§7 (shared types, file format, store, service, MCP tools, tab binding, snapshot, orientation
+and tails) are implemented; §8 (the Tasks tab) is not. The `by` of an agent uses the number of its tab id
+(`tab-3` → `allex/tab 3`): the tab strip shows titles, not numbers. Choices the §6–§7 implementation made
+are noted at the end of those sections.
 
 The concept is `docs/task-tracker-spec.md`; read it first, §The task, §Current task, §Context delivery,
 §Storage and §MCP tools in particular. This document turns build steps 2 (storage, schema, tools,
@@ -183,6 +182,23 @@ Tests: `taskTools` with a fake context — write refused without a tab, round tr
 - The terminal tab shows its current task: a small label after the tab title (`· <task title>`, cut to
   30 chars) and "no task" in the tab's tooltip when none. Renderer gets bindings with the task list.
 
+As implemented (`src/main/tasks/taskBindings.ts`, `TaskService.bindings`):
+
+- Each binding also records `user`, `host` and `pid` (the AIDE process). Readers take the user from the
+  entry, never from the directory name (`.aide/users/` names are `DOMAIN.user--hash`), and the user is
+  the same one recorded in `activeBy`. Tab ids restart at `tab-1` in every AIDE process, so a binding of
+  this user on this host counts only when its `pid` is this process and the tab is open
+  (`liveTab`); the left-overs of a crashed or earlier process are ignored and dropped by the next bind.
+  A binding of this user on another host is shown as `<user> on <host>`.
+- A binding counts only while its task is `active` (and not in history), so a paused or closed task
+  loses the bindings of every user at once; this user's own entries are also removed from the file.
+- Closing a window removes the bindings of all its tabs, as closing each tab does
+  (`PtyManager.onTabClosed`).
+- `start` writes a journal line `<by>: started` (with the status change when there is one), so the tail
+  can say who started a task; it sends one `tasks:changed` per call.
+- The renderer reads the tabs' tasks through `tasks:tab-tasks` (`useTaskStore`) and reads again on
+  `tasks:changed`; the Tasks tab (§8) will add the task list next to it.
+
 ## 7. Snapshot, orientation and tails
 
 **Orientation** — extend `serverInstructions()` in `src/main/pipeline/mcp/tools.ts` with a tracker
@@ -220,6 +236,26 @@ gets, when anything changed since, one block:
 ```
 
 At most 5 items, then "and N more". Nothing when nothing changed.
+
+As implemented (`src/main/tasks/taskSnapshot.ts`, `taskTail.ts`, `withTrackerTail` in
+`src/main/pipeline/mcp/taskTools.ts`):
+
+- The orientation is a paragraph of its own between the pipeline/plan sentences and the work instruction.
+  With a tracker the rule ends with "Rules: task_guide."; without one it is the three rule sentences
+  only. The instructions function receives the connection (`RequestContext`), and `initialize` also
+  starts that connection's tail.
+- Section 0 keeps tags up to the first that does not fit (in the priority order), reserving room for the
+  "Other tags" line and the count, so the section stays within the budget. Decided-against tasks are
+  listed in their tag as `<label> (decided against)`. An invalid `config.json` falls back to the default
+  budget and is listed under problems.
+- "No plan run" for stale actives is read as "no pipeline run of the project is going": plans do not
+  name their tasks until `solves` (step 8).
+- The tail is kept per MCP connection (the shim process, one per agent session). A change event (a write
+  or the FS watcher) only marks the project for a new reading; the tail compares task revisions and
+  problem keys between readings, so the watcher's echo of a write adds nothing and changes made by
+  another AIDE are seen. `by` comes from the task's last journal line; items made by the connection's
+  own tab are left out. A connection's first call starts its tail from that moment; `task_snapshot`
+  counts as seen and carries no tail.
 
 ## 8. UI — the Tasks tab
 

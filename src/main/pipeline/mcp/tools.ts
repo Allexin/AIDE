@@ -8,7 +8,7 @@ import { compactReport } from '../engine/reportView'
 import { ENGINE_CHANGES, ENGINE_VERSION, outdatedMachine } from '../engine/compat'
 import type { PlanService } from '../plan/planService'
 import { buildPlanTools } from './planTools'
-import { buildTaskTools } from './taskTools'
+import { buildTaskTools, withTrackerTail } from './taskTools'
 import type { TaskService } from '../../tasks/taskService'
 
 /**
@@ -70,15 +70,19 @@ export const AIDE_WORK_INSTRUCTION = 'Use plans and pipelines whenever you work,
  * server is and when to turn to it. The server carries pipeline orchestration
  * today; other AIDE tools may join it.
  */
-export function serverInstructions(workInstruction: string = AIDE_WORK_INSTRUCTION): string {
-  return [
+export function serverInstructions(workInstruction: string = AIDE_WORK_INSTRUCTION, tracker: string = ''): string {
+  const intro = [
     "AIDE's MCP server: tools of the AIDE editor that has this project open.",
     'Pipeline orchestration (pipeline_* tools): AIDE runs pipeline machines — multi-step agent work with checks, review loops and commits — deterministically, and you orchestrate them.',
-    'Plans (plan_* tools): when the user asks for a plan, or work needs several tasks tracked over sessions, make it an AIDE plan, whatever way of planning your client has; plan_guide says how. AIDE shows its progress and can walk it task by task.',
+    'Plans (plan_* tools): when the user asks for a plan, or work needs several tasks tracked over sessions, make it an AIDE plan, whatever way of planning your client has; plan_guide says how. AIDE shows its progress and can walk it task by task.'
+  ].join(' ')
+  const rest = [
     workInstruction.trim(),
     'Start with pipeline_hello: it returns the rules and how to receive pipeline events.',
-    'Guides, read when the task calls for them: pipeline_guide (writing machines), plan_guide (writing plans), toolbar_guide (toolbar buttons in aide/toolbar.json).'
+    'Guides, read when the task calls for them: pipeline_guide (writing machines), plan_guide (writing plans), task_guide (the task tracker), toolbar_guide (toolbar buttons in aide/toolbar.json).'
   ].filter(Boolean).join(' ')
+  // The tracker part (task tracker §7) is a paragraph of its own: it has lines of its own.
+  return [intro, tracker.trim(), rest].filter(Boolean).join('\n\n')
 }
 
 function eventDeliveryText(launcherPath: string): string {
@@ -455,5 +459,6 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     })),
     ...buildTaskTools(() => ({ tasks: env().tasks, guide: env().taskGuide, liveTab: env().liveTab }))
   )
-  return tools
+  const onTailError = (err: unknown): void => { logEvent('task-tail-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn') }
+  return tools.map((tool) => withTrackerTail(tool, () => env().tasks, onTailError))
 }

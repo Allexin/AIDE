@@ -52,6 +52,33 @@ function optionalStrings(value: unknown, name: string): string[] | undefined {
   return value as string[]
 }
 
+/** Tools whose results carry the tracker tail: the task, plan and pipeline tools. */
+const TAIL_TOOLS = /^(task|plan|pipeline)_/
+
+/**
+ * `tool` with the tracker tail (§7) appended to its results: what changed in the tracker
+ * since the calling connection last got a tail, made by others. A result gets it only when
+ * something changed; a failure to read the tracker never spoils the result.
+ */
+export function withTrackerTail(tool: ToolDefinition, tasks: () => TaskService | undefined, onError?: (err: unknown) => void): ToolDefinition {
+  if (!TAIL_TOOLS.test(tool.name)) return tool
+  return {
+    ...tool,
+    handler: async (args, context) => {
+      const result = await tool.handler(args, context)
+      const service = tasks()
+      if (!service) return result
+      let tail: string | null = null
+      try {
+        tail = service.tailFor(context.projectPath, context.connectionId, context.tabId)
+      } catch (err) {
+        onError?.(err)
+      }
+      return tail ? { ...result, text: `${result.text}\n\n${tail}` } : result
+    }
+  }
+}
+
 export function buildTaskTools(env: () => TaskToolEnvironment): ToolDefinition[] {
   const tasks = (): TaskService => {
     const service = env().tasks
@@ -75,16 +102,16 @@ export function buildTaskTools(env: () => TaskToolEnvironment): ToolDefinition[]
       name: 'task_guide',
       description: 'How the task tracker works: what a task is (and what belongs in a plan instead), claims and labels, code globs, closing, decided against. Read it before you create or close tasks.',
       inputSchema: OBJECT({}),
-      handler: () => {
+      handler: reader(() => {
         const guide = env().guide?.()
         return guide ? ok(guide) : fail('The task guide is not available.')
-      }
+      })
     },
     {
       name: 'task_snapshot',
-      description: 'The live state of the tracker for this tab. Not available in this AIDE version yet.',
+      description: "The live state of the tracker for your tab, in this order: the project's claims by tag (reopened and unverified marked, decided against listed), your tab's current task, problems, active tasks with who works on them and blocked tasks with reasons, tasks closed or moved to history in the last 7 days. Call it before you start work.",
       inputSchema: OBJECT({}),
-      handler: () => ok('task_snapshot is not available in this AIDE version yet; use task_search and task_get.')
+      handler: reader((_args, { projectPath, tabId, connectionId }) => ok(tasks().snapshot(projectPath, tabId, connectionId)))
     },
     {
       name: 'task_search',

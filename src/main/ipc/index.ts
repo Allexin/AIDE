@@ -21,7 +21,7 @@ import {
   type ToolbarItem
 } from '../config/toolbarConfig'
 import { openProjectAndTrack } from '../windows/editor'
-import { pipelineView, planService } from '../pipeline'
+import { pipelineView, planService, taskService } from '../pipeline'
 import type { AnswerAction, RunControl } from '../pipeline/viewService'
 import { orchestrators } from '../pipeline/orchestrators'
 import { osDisplayName } from '../platform'
@@ -481,6 +481,11 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     return projectPath ? pipelineView.checkLog(projectPath, runId, node, visit) : ''
   })
   // ── Plans: the plan tab ─────────────────────────────────────────────────────────
+  // ── Tasks: the current task of each terminal tab (task tracker §6) ──────────
+  ipcMain.handle('tasks:tab-tasks', (event) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? taskService.tabTasks(projectPath) : {}
+  })
   ipcMain.handle('plan:get', (event) => {
     const projectPath = projectOf(event.sender)
     return projectPath ? planService.snapshot(projectPath) : null

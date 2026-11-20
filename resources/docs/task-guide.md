@@ -25,6 +25,30 @@ one task or several.
 **A work item goes to `task_create`, never into a TODO in a file.** A TODO in
 code or a "Planned" line in a document is forgotten state; a task is found.
 
+## Before you work: `task_snapshot`
+
+`task_snapshot` is the tracker as it is now, for your tab:
+
+0. The project's claims by label, grouped by tag (a task under its first tag),
+   reopened and unverified claims marked, decided against listed. A large
+   project does not fit: whole tags are kept (those of active tasks, of the
+   next planned tasks, then the most recently closed), the others are counted
+   and `task_search` finds them.
+1. Your tab's current task: the one `task_start` bound to it.
+2. Problems: invalid task files, interrupted closes, active tasks nobody works
+   on (bound to no tab while no pipeline run goes) or unchanged for 7 days.
+3. Active tasks with who works on them, blocked tasks with their reasons.
+4. Tasks closed or moved to history in the last 7 days.
+
+A tab has one current task; `task_start` of another replaces it, and closing
+the tab frees it. A task that is paused or closed is no one's current task.
+
+After that, the results of `task_*`, `plan_*` and `pipeline_*` tools end with a
+line `— tracker since your last call: …` when someone else changed the tracker
+since you last heard: tasks created, started, closed, moved to history, new
+problems. Your own changes are not repeated to you. Nothing is added when
+nothing changed.
+
 ## States
 
 - `backlog`: an idea or need, not committed to.

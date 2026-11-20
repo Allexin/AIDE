@@ -48,8 +48,8 @@ interface JsonRpcMessage {
 export interface ServerInfo {
   name: string
   version: string
-  /** A function is read at every `initialize`, so a changed setting reaches the next session. */
-  instructions: string | (() => string)
+  /** A function is read at every `initialize`, with the connection that asks, so a changed setting reaches the next session. */
+  instructions: string | ((context: RequestContext) => string)
 }
 
 const ERR_METHOD_NOT_FOUND = -32601
@@ -116,7 +116,7 @@ export class McpServer {
             protocolVersion,
             capabilities: { tools: { listChanged: false } },
             serverInfo: { name: this.info.name, version: this.info.version },
-            instructions: typeof this.info.instructions === 'function' ? this.info.instructions() : this.info.instructions
+            instructions: typeof this.info.instructions === 'function' ? this.info.instructions(context) : this.info.instructions
           }
         }
       }
