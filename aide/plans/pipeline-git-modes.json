@@ -1,0 +1,250 @@
+{
+  "id": "pipeline-git-modes",
+  "title": "Pipeline git modes",
+  "goal": "Pipelines work in projects whose git repos live in subfolders, in projects that forbid AI commits, and in projects without git; projects without the new config behave byte-for-byte as before.",
+  "spec": "docs/pipeline-git-modes-spec.md",
+  "state": "approved",
+  "revision": 5,
+  "orchestrator": {
+    "cli": "claude-code",
+    "model": "sonnet",
+    "effort": "low",
+    "prompt": "Check that the step met its acceptance criteria and that root-mode behaviour (a project with no git config whose root is a repo) is unchanged. Wake the Strategist if the run changed an interface a later task relies on differently from docs/pipeline-git-modes-spec.md, if a reviewer's non-blocking findings point at a design problem, or if the run ended without a commit. You may answer a limit escalation with retry once when the last review findings are small and concrete; pass everything else on.",
+    "maxUnreviewed": 2,
+    "escalations": [
+      "limit"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "scope",
+      "title": "Git config resolution and repo-aware reads",
+      "status": "done",
+      "phase": "Git modes",
+      "machine": "code-feature",
+      "params": {
+        "taskSpec": "Implement step 1 of docs/pipeline-git-modes-spec.md §10: §1 (new src/main/pipeline/gitConfig.ts with resolveGitSetup, config validation, GitSetup stored in RunState.git at run start, resume re-check) and §2 (repo-aware workingDiff/stagedDiff/status with project-relative prefixes; EngineDeps.git takes the run's scope instead of a cwd; manager.ts dirty warning and abandon list span all repos). Commit steps keep committing in the single repo for now (repos mode with several repos and commit steps is task 'commit-repo'); in no-git mode reads return an empty diff with a note until task 'shadow'. Also commit docs/pipeline-git-modes-spec.md (untracked) with this change."
+      },
+      "spec": "docs/pipeline-git-modes-spec.md#1-config",
+      "acceptance": [
+        "A project without git config whose root is a repo produces byte-identical run.diff / run.stagedDiff / run.changedFiles to before (test proves it)",
+        "With git.repos {web: 'frontend', api: 'backend'} run.diff and run.changedFiles cover both repos with paths prefixed frontend/ and backend/",
+        "Invalid git config (bad id, missing path, path inside a repo rather than its top level) makes pipeline_start fail with the list of problems",
+        "A project whose root is not a repo and has no git config starts a run instead of escalating on git status",
+        "npm run typecheck and npm test pass"
+      ],
+      "checkpoint": true
+    },
+    {
+      "id": "commit-repo",
+      "title": "Commit step `repo` field in repos mode",
+      "status": "done",
+      "phase": "Git modes",
+      "after": [
+        "scope"
+      ],
+      "machine": "code-feature",
+      "params": {
+        "taskSpec": "Implement step 2 of docs/pipeline-git-modes-spec.md §10, i.e. §3: optional `repo` on the commit step (machineSchema.ts, types, validate.ts: string, template may reference params.* only), start-time resolution in the manager (stored in RunState.commitRepos), coverage/staged diff/commit limited to that repo with project-relative paths, CommitResult.repo, commit_done summary naming the repo when there are several, prep-agent context line naming the repo path, report field `uncommitted`. Document `repo` in resources/docs/pipeline-authoring.md §4."
+      },
+      "spec": "docs/pipeline-git-modes-spec.md#3-commit-steps-in-repos-mode",
+      "acceptance": [
+        "A commit step without repo in a single-repo project works as before",
+        "Several repos and a commit step without repo: pipeline_start fails naming the step and the repo ids",
+        "\"repo\": \"{{params.repo}}\" resolves from params",
+        "Coverage ignores changes in other repos; those appear in the report's uncommitted list",
+        "The prep agent's context names the repo path (root repo: unchanged text)",
+        "npm run typecheck and npm test pass"
+      ]
+    },
+    {
+      "id": "wait-plan-events",
+      "title": "Every event that needs the Strategist reaches a live wait or the terminal; time limits recognized",
+      "status": "done",
+      "phase": "Fixes",
+      "machine": "code-feature",
+      "params": {
+        "taskSpec": "Bug: a plan or run holds and needs the Strategist, nobody is told, and only a Continue button in the UI shows it. It recurs in normal work. Target invariant: every significant event (isSignificant in src/main/pipeline/events.ts) is either returned by a live wait/event stream that covers it, or typed into the Strategist's terminal by EventRelay. Five items:\n\n1. Run-scoped waits drop plan_attention. Its runId is `plan:<planId>`, and waits scoped to a run (pipeline_start / pipeline_answer / pipeline_resume with `wait`, pipeline_wait with runId, `aide-pipeline wait/events --run`) filter on event.runId === runId. plan_attention is project-level: it must reach every wait whatever run it is scoped to. Add one shared predicate in events.ts and use it in waitForEvent (src/main/pipeline/mcp/tools.ts: pending lookup and subscription) and in handleEvents / handleWait (src/main/pipeline/server/pipelineServer.ts). Keep pipelineEvents.since(runId) strict for its other callers. pipeline_start with wait passes since 0 and must not return a plan_attention raised before this start.\n\n2. 'Observed' means 'someone is subscribed', not 'someone can receive this'. hasObserver() is true for any listener, so manager.ts emit and PlanService.announce pass observed=true and EventRelay skips the event even when the only waiter filters it out. Likewise EventRelay.flush drops queued events when observerActivity changed, assuming the asker gets them, which is false for a wait scoped elsewhere or with a later `since`. Make the decision per event: observed only when a live waiter/stream whose filter covers this event exists, and flush drops only the events that were actually handed to a waiter.\n\n3. Abandoned waits stay subscribed. src/main/pipeline/mcp/protocol.ts:78 ignores notifications/cancelled, waitForEvent has no cancellation, and an MCP request whose client went away (interrupted turn, closed session) keeps its listener for up to 3000 s. Such a zombie counts as an observer and swallows events for up to 50 minutes. Handle notifications/cancelled by request id and the closing of the HTTP connection of an MCP request, pass an AbortSignal through the tool context to waitForEvent, and unsubscribe at once. An event handed to a waiter whose response can no longer be written must count as not delivered.\n\n4. Delivery trail, so the next lost event can be diagnosed after the fact. For every significant event record one logEvent (src/main/diagnostics, see docs/crash-diagnostics.md) with the event id, type, runId, the number of live waiters that cover it and of those that do not, and the outcome: handed to a waiter, queued for the terminal, typed into the terminal (tab id), dropped because no tab is known (orchestrators.lastTab is null), the tool's setting is off, or submitWhenReady returned false. Also log a wait ending by cancellation or a closed connection. Keep it to these events, not progress events.\n\n5. Time-window limits are not recognized. LIMIT_MARKERS in src/main/pipeline/headless/common.ts does not match Claude Code's \"You've hit your 5-hour limit · resets 2:40pm (Europe/Samara)\", so classifyFailure returns 'failed' and the run raises an engine escalation instead of holding and resuming by itself. Match \"hit your <words> limit\" within one sentence (5-hour, weekly, session and the like). Add this exact message to the classifyFailure tests and assert that limitResetTime reads its reset time.\n\nAdd unit tests for each item. Do not touch the git-modes work of this plan. No engine version bump."
+      },
+      "acceptance": [
+        "A wait scoped to a run returns a plan_attention emitted while it waits; so do pipeline_answer / pipeline_resume with wait and `aide-pipeline wait/events --run`",
+        "pipeline_start with wait does not return a plan_attention raised before the start",
+        "Events of other runs still do not reach a run-scoped wait, and when that wait is the only one, those significant events are typed into the terminal",
+        "After notifications/cancelled or a dropped connection the wait's listener is gone at once, and the next significant event is typed into the terminal",
+        "EventRelay.flush keeps queued events that no waiter received",
+        "`npm run diagnose` input contains, for each significant event, how it was delivered or why it was not",
+        "classifyFailure(\"You've hit your 5-hour limit · resets 2:40pm (Europe/Samara)\") returns 'limit' and limitResetTime finds the reset time",
+        "npm run typecheck and npm test pass"
+      ]
+    },
+    {
+      "id": "shadow",
+      "title": "Shadow snapshots; no-commit and no-git modes",
+      "status": "done",
+      "phase": "Git modes",
+      "after": [
+        "scope"
+      ],
+      "machine": "code-feature",
+      "params": {
+        "taskSpec": "Implement step 3 of docs/pipeline-git-modes-spec.md §10: §5 shadow snapshot module (new file, per-run per-user git dir under .aide/users/<user>/shadow/<runId>/, excludes, size and file-count limits, cleanup when the run becomes final and of leftovers at app start) and §4 no-commit / no-git behaviour (commit blocks skipped with checkpoint and commit_skipped event, agent context line, outline marker, validate warning for references to commit prep outputs, planCommit at the skipped last commit, no dirty warning)."
+      },
+      "spec": "docs/pipeline-git-modes-spec.md#4-no-commits",
+      "acceptance": [
+        "git.commits false: commit blocks do not run their prep agent, AIDE makes no commit, and run.diff after a skipped commit shows only later changes",
+        "No git (git: false, or root not a repo): run.diff shows the run's changes from the shadow baseline; changes made before the run are not in it",
+        "The shadow never touches the project's .git or files; its directory is removed when the run finishes, fails or is abandoned",
+        "Over the file-count limit or without a git binary, run.diff is the 'diff unavailable' note and the run continues",
+        "A plan task run in no-commit mode is marked done at the skipped last commit",
+        "Agents in these modes are told not to stage or commit",
+        "npm run typecheck and npm test pass"
+      ],
+      "checkpoint": true
+    },
+    {
+      "id": "state-ui",
+      "title": "State migration, plan outside-commits per repo, UI labels, guide",
+      "status": "done",
+      "phase": "Git modes",
+      "after": [
+        "commit-repo",
+        "shadow"
+      ],
+      "machine": "code-feature",
+      "params": {
+        "taskSpec": "Implement step 4 of docs/pipeline-git-modes-spec.md §10: §6 (RunState.startCommits with migration of old states, AutopilotState.lastCommits with migration of lastCommit, commitsSince per repo in planService's orchestrator prompt) and §7 (pipeline tab and remote page commit labels with repo id, skipped commit shown as skipped, pipeline-authoring.md modes table, pipeline_hello/validation one-line mode summary). Mark the spec's status line as implemented."
+      },
+      "spec": "docs/pipeline-git-modes-spec.md#6-run-state-and-plans",
+      "acceptance": [
+        "Old run states and autopilot states load without errors",
+        "Outside commits are listed per repo with a repo prefix when there are several",
+        "UI shows repo labels and skipped commits; all text in English",
+        "pipeline-authoring.md documents the modes and the repo field",
+        "npm run typecheck and npm test pass"
+      ],
+      "checkpoint": true
+    }
+  ],
+  "followups": [
+    {
+      "id": "f1",
+      "text": "git.ts prefixRenameLines: git quotes unusual paths (non-ASCII with core.quotepath on, tabs, quotes). For those, `rename from \"\\321\\204.txt\"` becomes `rename from frontend/\"\\321\\204.txt\"`, which is malformed. The `diff --git` header is fine because git applies --src-prefix inside the quotes itself. Only renames in prefixed repos with such names are affected. Put the prefix inside the quotes, or pass `-c core.quotepath=off` for prefixed reads.",
+      "from": "scope",
+      "at": "2026-11-09T08:35:48.468Z"
+    },
+    {
+      "id": "f2",
+      "text": "gitConfig.checkRepos: a configured `git.repos: {root: '.'}` takes the no-config branch, because it has the same id and path as rootSetup. On resume it is then only checked for being inside a work tree, not for being a top level. resolveGitSetup does enforce top level for that same config at start. A flag on the setup (or comparing against the config source) would keep the two checks the same.",
+      "from": "scope",
+      "at": "2026-11-09T08:35:48.468Z"
+    },
+    {
+      "id": "f3",
+      "text": "runner.run(): the resume re-check also runs after every answered escalation (answer() calls run()). That is harmless and cheap, but the message 'changed since it started' then also fires on step/gate answers. This is fine as long as it is intended.",
+      "from": "scope",
+      "at": "2026-11-09T08:35:48.468Z"
+    },
+    {
+      "id": "f4",
+      "text": "commits:false and no-git mode: the commitPrep agent still runs and may stage files before the commit step escalates. This is an accepted stopgap until task 'shadow' (spec §4 skips the whole block), and it only affects projects that opt in. Worth noting in the next task.",
+      "from": "scope",
+      "at": "2026-11-09T08:35:48.468Z"
+    },
+    {
+      "id": "f5",
+      "text": "manager.test 'an invalid git config…' writes aide/config.json after project() creates the dir. Fine, but the test does not cover the GitConfigError route through the plan autopilot (planService.startStep turns it into a hold with the message). An optional extra test.",
+      "from": "scope",
+      "at": "2026-11-09T08:35:48.468Z"
+    },
+    {
+      "id": "f6",
+      "text": "`publishEnd` guards only the git read. If `store.writeReport` or `emit` throws, `this.ended` rejects and `run_finished` is never emitted. The earlier synchronous code had a similar failure mode, so this is not a regression, but a catch with `logEvent` would make it visible after a crash.",
+      "from": "commit-repo",
+      "at": "2026-11-09T08:51:57.868Z"
+    },
+    {
+      "id": "f7",
+      "text": "eventRelay.test.ts: 'keeps every queued event when a wait asked with a later since and received none' involves no wait at all, it only queues an event and types it. The behaviour is covered by the test before it ('keeps the queued events no waiter received'), but this test's name claims more than it checks. Either drive a real wait with a later since through it, or remove it.",
+      "from": "wait-plan-events",
+      "at": "2026-11-09T09:08:50.290Z"
+    },
+    {
+      "id": "f8",
+      "text": "EventRelay: an event queued for a busy tab that then closes never gets a final outcome, because the trail ends at 'queued' and the pending entry stays in the map. A final record when the tab goes away would close the last gap in the delivery trail.",
+      "from": "wait-plan-events",
+      "at": "2026-11-09T09:08:50.290Z"
+    },
+    {
+      "id": "f9",
+      "text": "docs/crash-diagnostics.md lists the two new kinds but not 'pipeline-event-submit-failed' or 'pipeline-server-response-error', which this change also records.",
+      "from": "wait-plan-events",
+      "at": "2026-11-09T09:08:50.290Z"
+    },
+    {
+      "id": "f10",
+      "text": "scripts/analyze-crashes.mjs describeEvent falls through to the default branch for 'pipeline-event-delivery', so a crash tail shows only the kind and not the outcome. The raw trail has everything, which meets the acceptance criterion; a dedicated case would make the tail easier to read.",
+      "from": "wait-plan-events",
+      "at": "2026-11-09T09:08:50.290Z"
+    },
+    {
+      "id": "f11",
+      "text": "The untracked aide/plans/pipeline-git-modes.json is not part of this change and is not in the diff; commitPrep should leave it unstaged.",
+      "from": "wait-plan-events",
+      "at": "2026-11-09T09:08:50.290Z"
+    },
+    {
+      "id": "f12",
+      "text": "shadow.ts shadowArgs: settings from the user's own git config (`core.fsmonitor`, `core.untrackedCache`, `core.excludesFile`) still apply to the private commands. Adding `-c core.fsmonitor=false` would stop an fsmonitor daemon from starting on the real work tree in a repo scope.",
+      "from": "shadow",
+      "at": "2026-11-09T09:28:40.480Z"
+    },
+    {
+      "id": "f13",
+      "text": "shadow.ts bigChanges: a file that was over 256 KB at the checkpoint and is now smaller is not in the shadow index, so the diff shows it as a new file instead of a modified one. The comment says it 'has its own diff', but that diff mislabels the change.",
+      "from": "shadow",
+      "at": "2026-11-09T09:28:40.480Z"
+    },
+    {
+      "id": "f14",
+      "text": "runner.ts shadowChanges: when the shadow is off in commits-off mode, run.changedFiles falls back to the real repo's `git status`. That list includes changes made before the run, which run.diff (the note) does not imply. A short line about this in the guide would help, or return [] there.",
+      "from": "shadow",
+      "at": "2026-11-09T09:28:40.480Z"
+    },
+    {
+      "id": "f15",
+      "text": "If a run is abandoned while its baseline snapshot is still running, `remove` can run before `snapshot` finishes, and `snapshot` then recreates the run dir with `mkdirSync`. `removeLeftovers` deletes it at the next project open, so the effect is small, but the shadow-dir removal on abandon is not guaranteed in that window.",
+      "from": "shadow",
+      "at": "2026-11-09T09:28:40.480Z"
+    },
+    {
+      "id": "f16",
+      "text": "events.ts was one of the event-delivery files from wait-plan-events. The change there is only the new `commit_skipped` member of the `PipelineEventType` union and does not touch delivery, which looks justified. Mentioned so commitPrep and the Orchestrator know the file was touched on purpose.",
+      "from": "shadow",
+      "at": "2026-11-09T09:28:40.480Z"
+    },
+    {
+      "id": "f17",
+      "text": "Spec §8 rules out an ENGINE_VERSION bump, and this change respects that: root mode stays byte-identical, and only opt-in or no-git projects change. The new validate warning about commit prep outputs, however, appears for every project's machines, including root-mode ones. The spec asks for it, so this is not a defect, but it is a visible change for projects that did not opt in.",
+      "from": "shadow",
+      "at": "2026-11-09T09:28:40.480Z"
+    },
+    {
+      "id": "f18",
+      "text": "currentStartCommits: a run stored between commit 2e39884 and this change, with several repos and no `startCommits`, loads as `{ <first repo>: startCommit }`. Its report then has one key and its commits lose their repo labels. Such runs are hours old at most, so this does not matter in practice.",
+      "from": "state-ui",
+      "at": "2026-11-09T10:11:01.435Z"
+    },
+    {
+      "id": "f19",
+      "text": "gitConfig.commitSkipReason now only forwards to setupSkipReason. Callers could import setupSkipReason directly, or the wrapper could stay only for its narrower GitSetup type.",
+      "from": "state-ui",
+      "at": "2026-11-09T10:11:01.435Z"
+    },
+    {
+      "id": "f20",
+      "text": "The two-repo planService test uses repo paths that do not exist on disk. It passes because the fixture stubs git, but a comment saying so would help a later reader.",
+      "from": "state-ui",
+      "at": "2026-11-09T10:11:01.435Z"
+    }
+  ]
+}
