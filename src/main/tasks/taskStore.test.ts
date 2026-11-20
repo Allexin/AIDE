@@ -8,13 +8,32 @@ import { TaskConflictError, TaskStore, isTrackerPath } from './taskStore'
 
 /** Every rename the store makes, so the order of its writes can be checked. */
 const renames = vi.hoisted(() => [] as string[])
+/**
+ * A lease file "pending deletion", as Windows reports it: while `pendingDelete` is set,
+ * an exclusive create and a read of the lease file fail with EPERM although the file
+ * is there. `leaseOpens` counts the create attempts.
+ */
+const faults = vi.hoisted(() => ({ pendingDelete: false, leaseOpens: 0 }))
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>()
+  const isLease = (path: unknown): boolean => String(path).endsWith('.write-lock')
+  const eperm = (): Error => Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
   return {
     ...actual,
     renameSync: (from: string, to: string) => {
       renames.push(to)
       return actual.renameSync(from, to)
+    },
+    openSync: (path: string, ...rest: unknown[]) => {
+      if (isLease(path)) {
+        faults.leaseOpens++
+        if (faults.pendingDelete) throw eperm()
+      }
+      return (actual.openSync as (...args: unknown[]) => number)(path, ...rest)
+    },
+    readFileSync: (path: string, ...rest: unknown[]) => {
+      if (isLease(path) && faults.pendingDelete) throw eperm()
+      return (actual.readFileSync as (...args: unknown[]) => unknown)(path, ...rest)
     }
   }
 })
@@ -39,6 +58,8 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'aide-task-store-'))
   store = new TaskStore(dir, join(dir, '.aide', 'users', 'alice', 'tasks'), owner)
   renames.length = 0
+  faults.pendingDelete = false
+  faults.leaseOpens = 0
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
@@ -76,6 +97,21 @@ describe('TaskStore reads', () => {
     expect(() => store.config()).toThrow('"snapshotLabelBudget" must be a positive whole number')
     writeFileSync(join(tasksDir(), 'config.json'), '{')
     expect(() => store.config()).toThrow('config.json is not valid JSON')
+  })
+})
+
+describe('task ids', () => {
+  it('read and exists reject an id that is not a slug, so no id resolves outside aide/tasks/', async () => {
+    mkdirSync(join(dir, 'aide'), { recursive: true })
+    writeFileSync(join(dir, 'x.md'), serializeTask(task('x')))
+    expect(store.exists('../../x')).toBe(false)
+    expect(store.exists('../x')).toBe(false)
+    expect(() => store.read('../../x')).toThrow('is not a task id')
+    expect(() => store.read('../x')).toThrow('is not a task id')
+    expect(() => store.read('A')).toThrow('is not a task id')
+    await store.write([{ task: task('a'), baseRevision: null }])
+    expect(store.exists('a')).toBe(true)
+    expect(store.read('a').task.id).toBe('a')
   })
 })
 
@@ -168,6 +204,28 @@ describe('the write lease', () => {
     expect(Date.now()).toBeGreaterThanOrEqual(expires)
     expect(existsSync(file('a'))).toBe(true)
     expect(existsSync(lockPath())).toBe(false)
+  })
+
+  it('treats EPERM on the exclusive create as a lease that exists while the file is there, and waits for it to go', async () => {
+    writeLease(Date.now() + 8000)
+    faults.pendingDelete = true
+    let done = false
+    const writing = store.write([{ task: task('a'), baseRevision: null }]).then(() => { done = true })
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve))
+    expect(done).toBe(false)
+    // One attempt, then a wait for the lease file's change: no spinning on the unreadable file.
+    expect(faults.leaseOpens).toBe(1)
+    faults.pendingDelete = false
+    unlinkSync(lockPath())
+    await writing
+    expect(existsSync(file('a'))).toBe(true)
+    expect(existsSync(lockPath())).toBe(false)
+  })
+
+  it('reports EPERM on the exclusive create when there is no lease file', async () => {
+    faults.pendingDelete = true
+    await expect(store.write([{ task: task('a'), baseRevision: null }])).rejects.toThrow('EPERM')
+    expect(existsSync(file('a'))).toBe(false)
   })
 
   it('does not remove a lease another writer took over', async () => {

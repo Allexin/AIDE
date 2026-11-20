@@ -3,7 +3,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, 
 import { hostname, userInfo } from 'os'
 import { join } from 'path'
 import { CLOSED_TASK_STATUSES, DEFAULT_TASK_CONFIG, type TaskConfig, type TaskFile, type TaskListEntry, type TaskProblem } from '../../shared/task'
-import { frontMatterId, parseTask, revisionOf, serializeTask, taskProblems } from './taskFile'
+import { TASK_ID_PATTERN, frontMatterId, parseTask, revisionOf, serializeTask, taskProblems } from './taskFile'
 
 /**
  * Task files on disk (docs/task-tracker-implementation.md §3):
@@ -109,12 +109,14 @@ export class TaskStore {
     return { id, file, task: parsed.task, revision: revisionOf(bytes), error: null }
   }
 
+  /** False for an id that is not a task slug: such an id never names a path, inside aide/tasks/ or out of it. */
   exists(id: string): boolean {
-    return existsSync(this.taskPath(id))
+    return TASK_ID_PATTERN.test(id) && existsSync(this.taskPath(id))
   }
 
-  /** The task and its revision; throws with a readable message when it is missing or invalid. */
+  /** The task and its revision; throws with a readable message when the id is not a slug, or the task is missing or invalid. */
   read(id: string): { task: TaskFile; revision: string } {
+    if (!TASK_ID_PATTERN.test(id)) throw new Error(`"${id}" is not a task id: ids are slugs of lowercase letters, digits and "-".`)
     if (!this.exists(id)) throw new Error(`Unknown task "${id}".`)
     const entry = this.entry(id)
     if (!entry.task || !entry.revision) throw new Error(entry.error ?? `${entry.file} cannot be read`)
@@ -200,13 +202,18 @@ export class TaskStore {
     return { lease: null, text, expiresAt: mtime + LEASE_MS }
   }
 
-  /** Create the lease file exclusively; false when it exists. */
+  /**
+   * Create the lease file exclusively; false when it exists. Windows reports EPERM,
+   * not EEXIST, for a file that is pending deletion (its last handle not closed yet):
+   * while the file is still there that is a lease that exists.
+   */
   private tryCreate(lease: Lease): boolean {
     let fd: number
     try {
       fd = openSync(this.leasePath(), 'wx')
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'EEXIST' || (code === 'EPERM' && existsSync(this.leasePath()))) return false
       throw err
     }
     try {
@@ -217,7 +224,13 @@ export class TaskStore {
     return true
   }
 
-  /** Replace an expired lease, then read it back: another writer may have replaced it at the same moment. */
+  /**
+   * Replace an expired lease, then read it back: another writer may have replaced it at
+   * the same moment. Two writers can both replace it and both read back their own token
+   * only if one's rename and read-back fall between the other's rename and read-back;
+   * with a 10 s lease and a write of milliseconds this is accepted, and the revision
+   * check under the lease still refuses a write based on a task the other changed.
+   */
   private tryTakeOver(lease: Lease): boolean {
     writeAtomic(this.leasePath(), JSON.stringify(lease))
     return this.readLease()?.lease?.token === lease.token
@@ -228,22 +241,28 @@ export class TaskStore {
     for (;;) {
       const lease = this.newLease()
       if (this.tryCreate(lease)) return lease
+      // Null: the file was released between the attempt and the read, or it is there but
+      // cannot be read (on Windows, pending deletion). Either way the next attempt waits
+      // for the file to change, so a lease that stays unreadable is not spun on.
       const current = this.readLease()
-      if (current === null) continue // released between our attempt and the read
-      if (current.expiresAt <= Date.now()) {
+      if (current !== null && current.expiresAt <= Date.now()) {
         if (this.tryTakeOver(lease)) return lease
         continue
       }
       if (Date.now() >= giveUpAt) {
-        const holder = current.lease ? `${current.lease.user} on ${current.lease.host}` : 'another writer'
+        const holder = current?.lease ? `${current.lease.user} on ${current.lease.host}` : 'another writer'
         throw new Error(`The task tracker is being written by ${holder}; try again.`)
       }
-      await this.waitForLeaseChange(current.text, Math.min(current.expiresAt, giveUpAt))
+      await this.waitForLeaseChange(current?.text ?? null, Math.min(current?.expiresAt ?? Date.now() + LEASE_MS, giveUpAt))
     }
   }
 
-  /** Resolves when the lease file changes or disappears, or at `until` at the latest. */
-  private waitForLeaseChange(seen: string, until: number): Promise<void> {
+  /**
+   * Resolves when the lease file changes or disappears, or at `until` at the latest.
+   * `seen` is the lease text read before, or null when the file could not be read: then
+   * the wait ends when the file is gone or can be read again.
+   */
+  private waitForLeaseChange(seen: string | null, until: number): Promise<void> {
     return new Promise((resolve) => {
       let watcher: FSWatcher | null = null
       let timer: NodeJS.Timeout | null = null
@@ -266,9 +285,10 @@ export class TaskStore {
       }
       // Bounds the wait for the event: on a share the change may never be reported.
       timer = setTimeout(finish, Math.max(0, until - Date.now()))
-      // The lease may have been released between the read and the watch.
+      // The lease may have changed between the read and the watch.
       const now = this.readLease()
-      if (now === null || now.text !== seen) finish()
+      const changed = seen === null ? now !== null || !existsSync(this.leasePath()) : now === null || now.text !== seen
+      if (changed) finish()
     })
   }
 

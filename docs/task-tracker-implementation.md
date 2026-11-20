@@ -1,6 +1,10 @@
 # Task tracker — implementation of build steps 2 and 4
 
-Status: §1–§3 (shared types, file format, store) are implemented; §4–§8 are not.
+Status: §1–§5 (shared types, file format, store, service, MCP tools) are implemented, with these parts
+left to the binding and snapshot work: of §6 only the binding `task_start` writes (and its removal when
+the task leaves `active`) exists; `task_snapshot` answers with a placeholder line and no tool result
+carries the §7 tail yet. §6–§8 are not implemented otherwise. The `by` of an agent uses the number of its
+tab id (`tab-3` → `allex/tab 3`): the tab strip shows titles, not numbers.
 
 The concept is `docs/task-tracker-spec.md`; read it first, §The task, §Current task, §Context delivery,
 §Storage and §MCP tools in particular. This document turns build steps 2 (storage, schema, tools,
@@ -134,6 +138,12 @@ Operations (each validates, applies, writes through `TaskStore.write`):
   the tabs bound to it, the plans that list it in `solves` (empty until step 8).
 
 `by` is `"<user>/tab <n>"` for an agent (tab number as shown in the tab strip) or `"<user>"` for the UI.
+
+Details the implementation fixed: `create` takes `label`/`claim` only with `status: "done"` (migration);
+blocking needs a `reason`, unblocking clears it; `activeBy` is cleared when the task is paused or closed
+and kept while it is blocked; status changes, closes, supersedes, reopen, history moves and restores
+each write a journal line; only a closed task can be superseded; a search hit also carries `history`
+(true for a task in history); `get` returns the chain as `{ earlier, later }`, the oldest first.
 
 ## 5. MCP tools — `src/main/pipeline/mcp/taskTools.ts`
 

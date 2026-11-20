@@ -13,7 +13,7 @@ import type { GitSetup } from './gitConfig'
  */
 
 /** Pathspec of a diff that leaves plan and tracker files out. */
-const NOT_PLANS = ['--', '.', `:(exclude)${PLANS_DIR}`, `:(exclude)${TASKS_DIR}`]
+const NOT_RECORDS = ['--', '.', `:(exclude)${PLANS_DIR}`, `:(exclude)${TASKS_DIR}`]
 
 /** Plan and tracker files: AIDE writes them while a run works, they are not part of its work and AIDE never stages them. */
 function isAideRecordPath(path: string): boolean {
@@ -131,7 +131,7 @@ export function prefixArgs(read: Pick<RepoRead, 'prefix'>): string[] {
 
 /** Pathspec of a diff: plan and tracker files left out at the root (they live in the project root's aide/plans and aide/tasks), nested repos left out. */
 function diffPathspec(read: RepoRead): string[] {
-  return [...(read.prefix ? ['--', '.'] : NOT_PLANS), ...read.nested.map((path) => `:(exclude)${path}`)]
+  return [...(read.prefix ? ['--', '.'] : NOT_RECORDS), ...read.nested.map((path) => `:(exclude)${path}`)]
 }
 
 /** Pathspec of a status/ls-files call: nested repos left out (none at the root of root mode: no pathspec, as before). */

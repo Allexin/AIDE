@@ -1,6 +1,6 @@
 import { app, BrowserWindow } from 'electron'
 import { readFileSync } from 'fs'
-import { join } from 'path'
+import { join, relative } from 'path'
 import { logEvent } from '../diagnostics'
 import { pipelineServer } from './server/pipelineServer'
 import { shimLaunch, writeLauncher } from './server/runtimeFiles'
@@ -25,6 +25,10 @@ import { ShadowStore } from './shadow'
 import { PlanService } from './plan/planService'
 import { tabCacheTtl } from './promptCache'
 import { smokeTestMachine } from './smoke'
+import { TaskService } from '../tasks/taskService'
+import { isTrackerPath } from '../tasks/taskStore'
+import { ptyRegistry } from '../pty/registry'
+import { addFsChangeObserver } from '../filetree/watcher'
 
 /**
  * Pipeline bootstrap for the main process: the local pipeline server, the
@@ -71,6 +75,21 @@ export const planService = new PlanService(pipelineManager, {
   commitsSince
 })
 
+/** The task trackers of the open projects; the MCP tools and the tasks tab work through this. */
+export const taskService = new TaskService({
+  userDir: (projectPath) => getProjectUserPath(projectPath, 'tasks')
+})
+
+/** Whether a tab id names a terminal tab open in this AIDE. */
+function liveTab(tabId: string): boolean {
+  for (const mgr of ptyRegistry.values()) if (mgr.getTabs().some((tab) => tab.tabId === tabId)) return true
+  return false
+}
+
+function taskGuide(): string {
+  return readFileSync(join(__dirname, '../../resources/docs/task-guide.md'), 'utf8')
+}
+
 function planGuide(): string {
   return readFileSync(join(__dirname, '../../resources/docs/plan-guide.md'), 'utf8')
 }
@@ -115,6 +134,9 @@ export async function startPipelineServer(): Promise<void> {
         smoke: (projectPath, machineId, pingAgents) => smokeTestMachine(pipelineManager, projectPath, machineId, pingAgents),
         plans: planService,
         planGuide,
+        tasks: taskService,
+        taskGuide,
+        liveTab,
         toolbarGuide,
         workInstruction,
         cacheTtl: tabCacheTtl
@@ -154,6 +176,12 @@ export function attachPipelineProject(projectPath: string, win: BrowserWindow): 
   planService.on('changed', onPlanChanged)
   const onDecisionEntry = (path: string, planId: string, decision: number): void => { if (path === projectPath) send('plan:decision-entry', { planId, decision }) }
   planService.on('decision-entry', onDecisionEntry)
+  const onTasksChanged = (path: string): void => { if (path === projectPath) send('tasks:changed', projectPath) }
+  taskService.on('changed', onTasksChanged)
+  // The FS watcher skips dot paths only: changes under aide/tasks/ reach it, the lease file does not.
+  const stopTaskWatch = addFsChangeObserver((path, fullPath) => {
+    if (path === projectPath && isTrackerPath(relative(projectPath, fullPath))) taskService.notifyDiskChange(projectPath)
+  })
   try {
     pipelineManager.recover(projectPath)
     planService.recover(projectPath)
@@ -165,6 +193,8 @@ export function attachPipelineProject(projectPath: string, win: BrowserWindow): 
     unsubscribe()
     planService.off('changed', onPlanChanged)
     planService.off('decision-entry', onDecisionEntry)
+    taskService.off('changed', onTasksChanged)
+    stopTaskWatch()
     planService.forget(projectPath)
     pipelineManager.forget(projectPath)
     orchestrators.forgetProject(projectPath)

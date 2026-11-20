@@ -8,6 +8,8 @@ import { compactReport } from '../engine/reportView'
 import { ENGINE_CHANGES, ENGINE_VERSION, outdatedMachine } from '../engine/compat'
 import type { PlanService } from '../plan/planService'
 import { buildPlanTools } from './planTools'
+import { buildTaskTools } from './taskTools'
+import type { TaskService } from '../../tasks/taskService'
 
 /**
  * Pipeline MCP tools — the orchestrator's interface to AIDE (plan §4.2).
@@ -32,6 +34,12 @@ export interface ToolEnvironment {
   plans?: PlanService
   /** Plan guide text (`plan_guide`). */
   planGuide?: () => string
+  /** The task tracker (`task_*` tools). */
+  tasks?: TaskService
+  /** Task guide text (`task_guide`). */
+  taskGuide?: () => string
+  /** Whether a tab id names a terminal tab open in this AIDE: tracker writes need one. */
+  liveTab?: (tabId: string) => boolean
   /** Toolbar guide text (`toolbar_guide`). */
   toolbarGuide?: () => string
   /** The work instruction in effect (AIDE's or the user's override); empty for none. */
@@ -444,7 +452,8 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
       waitAfter: async (context, since, seconds) => {
         return waitText(await waitForEvent(context, null, since, waitSeconds(seconds, DEFAULT_WAIT_SEC)), env(), context.projectPath, context.tabId)
       }
-    }))
+    })),
+    ...buildTaskTools(() => ({ tasks: env().tasks, guide: env().taskGuide, liveTab: env().liveTab }))
   )
   return tools
 }
