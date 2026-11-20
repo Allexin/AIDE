@@ -4,7 +4,11 @@ Feature: show agent-produced explanation artifacts — Markdown with diagrams, S
 self-contained HTML pages — rendered inside the editor area, next to the existing
 Edit and Diff views.
 
-Status: specification, not implemented.
+Status: superseded by the file viewer (`docs/file-viewer-spec.md`). The editor Render view
+and follow mode will not be built: agents show files with `view_show`, and the viewer
+renders and diffs them. The protocol (`aide-preview://`), the HTML sandbox and the Markdown
+notes (Mermaid, images) below stay as the design for the viewer tasks `viewer-html-pages`
+and `viewer-mermaid-images`.
 
 ## Background
 
