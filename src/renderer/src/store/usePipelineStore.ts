@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import { logManager } from './useLogStore'
+import { shownFeatures, useFeatureStore, watchFeature } from './useFeatureStore'
 
 /**
  * State of the project's active pipeline run for the pipeline tab and the banner.
@@ -62,10 +64,24 @@ export const usePipelineStore = create<PipelineState>((set) => ({
   dismiss: () => set((state) => ({ dismissedRunId: state.run?.runId ?? null, viewActive: false }))
 }))
 
-/** Subscribe to the main process; call once per editor window. Returns an unsubscribe. */
+/**
+ * Subscribe to the main process; call once per editor window. Returns an unsubscribe.
+ * With pipelines turned off in Settings the store holds no run and reads nothing.
+ */
 export function connectPipelineStore(): () => void {
-  void window.editorApi.pipelineGetRun().then((run) => usePipelineStore.getState().setRun(run))
-  const offState = window.editorApi.onPipelineRunState((run) => usePipelineStore.getState().setRun(run))
-  const offTranscript = window.editorApi.onPipelineTranscript(({ runId, node, visit, entry }) => usePipelineStore.getState().appendLive(runId, node, visit, entry))
-  return () => { offState(); offTranscript() }
+  let on = false
+  const offFeature = watchFeature('pipelines', (enabled) => {
+    on = enabled
+    if (!enabled) {
+      // With plans on the tab stays, showing the plans: the user is not moved off it.
+      usePipelineStore.setState((state) => ({ run: null, viewActive: state.viewActive && shownFeatures(useFeatureStore.getState()).plans, selected: null, live: {} }))
+      return
+    }
+    window.editorApi.pipelineGetRun()
+      .then((run) => { if (on) usePipelineStore.getState().setRun(run) })
+      .catch((err: unknown) => logManager.append('Pipeline', `Could not read the pipeline run: ${err instanceof Error ? err.message : String(err)}`))
+  })
+  const offState = window.editorApi.onPipelineRunState((run) => { if (on) usePipelineStore.getState().setRun(run) })
+  const offTranscript = window.editorApi.onPipelineTranscript(({ runId, node, visit, entry }) => { if (on) usePipelineStore.getState().appendLive(runId, node, visit, entry) })
+  return () => { offFeature(); offState(); offTranscript() }
 }

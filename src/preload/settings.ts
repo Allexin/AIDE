@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { SettingsField } from '../shared/settingsTypes'
+import type { FeatureLayer } from '../shared/features'
 
 export type { SettingsField }
 
@@ -49,6 +50,11 @@ export interface RemoteConfig {
   buttonRows: RemoteButtonRow[]
 }
 
+export interface FeatureSettings {
+  global: FeatureLayer
+  project: { path: string; config: FeatureLayer; personal: FeatureLayer } | null
+}
+
 export interface WorkInstruction {
   aide: string
   override: string | null
@@ -74,6 +80,9 @@ export interface SettingsAPI {
   saveRemoteConfig: (config: RemoteConfig) => Promise<void>
   getActivatedTools: () => Promise<{ id: string; name: string }[]>
   askAiAboutRemote: (toolId: string) => Promise<void>
+  getFeatures: () => Promise<FeatureSettings>
+  /** Null when saved; the reason when refused (nothing is written then). */
+  saveFeatures: (global: FeatureLayer, personal: FeatureLayer | null) => Promise<string | null>
 }
 
 const settingsApi: SettingsAPI = {
@@ -95,7 +104,9 @@ const settingsApi: SettingsAPI = {
   getRemoteConfig: () => ipcRenderer.invoke('settings:get-remote'),
   saveRemoteConfig: (config) => ipcRenderer.invoke('settings:save-remote', config),
   getActivatedTools: () => ipcRenderer.invoke('settings:get-activated-tools'),
-  askAiAboutRemote: (toolId) => ipcRenderer.invoke('settings:ask-ai-remote', toolId)
+  askAiAboutRemote: (toolId) => ipcRenderer.invoke('settings:ask-ai-remote', toolId),
+  getFeatures: () => ipcRenderer.invoke('settings:get-features'),
+  saveFeatures: (global, personal) => ipcRenderer.invoke('settings:save-features', global, personal)
 }
 
 contextBridge.exposeInMainWorld('settingsApi', settingsApi)

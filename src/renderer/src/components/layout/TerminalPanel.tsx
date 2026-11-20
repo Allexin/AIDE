@@ -11,6 +11,7 @@ import PipelineView, { PipelineTabButton } from '../pipeline/PipelineView'
 import { hasPipelineTab, usePipelineStore } from '../../store/usePipelineStore'
 import { hasPlans, usePlanStore } from '../../store/usePlanStore'
 import { hasTasksTab, tabTaskLabel, useTaskStore } from '../../store/useTaskStore'
+import { pipelineTabShown, shownFeatures, useFeatureStore } from '../../store/useFeatureStore'
 import TasksView, { TasksTabButton } from '../tasks/TasksView'
 
 // VS Dark terminal theme
@@ -319,12 +320,14 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   // The pipeline tab sits in the same strip but outside the session store: while it is
   // selected the session tabs keep their selection (PTY input, history, remote stay bound to it).
   // The plan is the parent of the pipeline in this tab, so it is there as soon as the project has a plan.
+  // A feature turned off in Settings hides its tab (docs/task-tracker-implementation.md §10).
+  const features = useFeatureStore(shownFeatures)
   const planExists = usePlanStore(hasPlans)
-  const pipelineTab = usePipelineStore(hasPipelineTab) || planExists
+  const pipelineTab = pipelineTabShown(features, usePipelineStore(hasPipelineTab), planExists)
   const pipelineActive = usePipelineStore((s) => s.viewActive) && pipelineTab
   const setPipelineActive = usePipelineStore((s) => s.setViewActive)
   // The Tasks tab sits next to it the same way, shown when the project has aide/tasks/.
-  const tasksTab = useTaskStore(hasTasksTab)
+  const tasksTab = useTaskStore(hasTasksTab) && features.tracker
   const tasksActive = useTaskStore((s) => s.viewActive) && tasksTab && !pipelineActive
   const setTasksActive = useTaskStore((s) => s.setViewActive)
   const terminalVisible = !pipelineActive && !tasksActive
@@ -748,9 +751,10 @@ interface TabButtonProps {
 function TabButton({ tab, isActive, isLocked, canClose, onSelect, onClose }: TabButtonProps): React.ReactElement {
   const [dim, setDim] = useState(false)
   const [hovered, setHovered] = useState(false)
+  const tracker = useFeatureStore((s) => shownFeatures(s).tracker)
   const task = useTaskStore((s) => s.tabTasks[tab.tabId])
-  const taskLabel = tabTaskLabel(task)
-  const tooltip = [tab.slug, ...(tab.sessionId ? [`[${tab.sessionId}]`] : []), task ? `Task: ${task.title} (${task.id})` : 'no task'].join('\n')
+  const taskLabel = tracker ? tabTaskLabel(task) : null
+  const tooltip = [tab.slug, ...(tab.sessionId ? [`[${tab.sessionId}]`] : []), ...(tracker ? [task ? `Task: ${task.title} (${task.id})` : 'no task'] : [])].join('\n')
 
   useEffect(() => {
     if (!tab.attention) {

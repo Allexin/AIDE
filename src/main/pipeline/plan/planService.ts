@@ -34,6 +34,8 @@ export interface PlanEnvironment {
   headSha(cwd: string): Promise<string | null>
   /** Commits of the repo at `cwd` after `since`, as "<short sha> <subject>". */
   commitsSince(cwd: string, since: string): Promise<string[]>
+  /** Why the autopilot cannot start now (pipelines turned off in Settings); null when it can. */
+  runRefusal?(projectPath: string): string | null
 }
 
 const DEFAULT_MAX_UNREVIEWED = 5
@@ -221,6 +223,21 @@ export class PlanService extends EventEmitter {
     }
   }
 
+  /**
+   * The plan whose autopilot is working, or null: the Orchestrator deciding, or a step whose run
+   * is running or pausing. A step whose run is paused, stopped or waiting for an answer does no work.
+   */
+  autopilotWorking(projectPath: string): string | null {
+    const store = this.store(projectPath)
+    const id = store.activeId()
+    if (!id || !store.exists(id)) return null
+    const status = store.readAutopilot(id)?.status
+    if (this.deciding.has(projectPath) || status === 'deciding') return id
+    const live = this.manager.activeRun(projectPath)
+    const stepWorking = live !== null && (live.state.status === 'running' || live.state.status === 'pausing')
+    return status === 'running' && stepWorking ? id : null
+  }
+
   /** The transcript, input and answer of one Orchestrator call. */
   decisionRecord(projectPath: string, planId: string, decision: number): DecisionRecord {
     return this.store(projectPath).readDecisionRecord(planId, decision)
@@ -373,6 +390,8 @@ export class PlanService extends EventEmitter {
 
   /** Start or continue the autopilot of the active plan. Throws when it cannot. */
   async run(projectPath: string, options: { planId?: string; note?: string; redecide?: boolean } = {}): Promise<void> {
+    const refusal = this.env.runRefusal?.(projectPath) ?? null
+    if (refusal) throw new Error(refusal)
     const id = this.resolveId(projectPath, options.planId)
     const store = this.store(projectPath)
     if (store.activeId() !== id) throw new Error(`Plan "${id}" is not active; plan_activate it first.`)

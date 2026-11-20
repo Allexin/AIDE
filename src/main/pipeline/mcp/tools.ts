@@ -10,6 +10,8 @@ import type { PlanService } from '../plan/planService'
 import { buildPlanTools } from './planTools'
 import { buildTaskTools, withTrackerTail } from './taskTools'
 import type { TaskService } from '../../tasks/taskService'
+import { ALL_FEATURES_ON, PLAN_RUN_OFF_TEXT, toolFeature, type FeatureSet } from '../../../shared/features'
+import { TRACKER_NO_PLAN_CLAUSE, TRACKER_PLAN_CLAUSE } from '../../tasks/taskSnapshot'
 
 /**
  * Pipeline MCP tools — the orchestrator's interface to AIDE (plan §4.2).
@@ -46,6 +48,8 @@ export interface ToolEnvironment {
   workInstruction?: () => string
   /** The prompt-cache lifetime of the agent in a tab, when AIDE can tell. */
   cacheTtl?: (projectPath: string, tabId: string | null) => '5m' | '1h' | null
+  /** The feature switches of the project asking (src/shared/features.ts); all on when absent. */
+  features?: FeatureSet
 }
 
 export const ORCHESTRATOR_RULES = [
@@ -57,6 +61,14 @@ export const ORCHESTRATOR_RULES = [
   'Every call you make re-reads your whole context, so keep each cycle to the few calls it needs. Do not re-verify what the machine\'s checks and reviewers already verified: the report\'s `checks` lists every check command with its last result, and a check that passed there ran on the final code — do not run it again. Inspect results yourself only on a signal (a reviewer flagged something, a first capture of a new visual stage, a failed run).'
 ]
 
+/** The rules with plans turned off in Settings: nothing about plans, the Orchestrator or plan_edit. */
+export const ORCHESTRATOR_RULES_WITHOUT_PLANS = [
+  ORCHESTRATOR_RULES[0],
+  'AIDE executes pipeline machines deterministically: it spawns step agents, runs checks, repeats loops, commits and reports. You decide what gets done, answer what the runs bring you, and talk to the user. For one concrete task, pipeline_start runs a machine directly.',
+  'While a run is executing, leave the working tree to it: do not edit files yourself.',
+  ...ORCHESTRATOR_RULES.slice(3)
+]
+
 /**
  * AIDE's instruction on when an agent turns to plans and pipelines on its own.
  * The user can override it in Settings; the override replaces it, AIDE's text
@@ -65,36 +77,60 @@ export const ORCHESTRATOR_RULES = [
  */
 export const AIDE_WORK_INSTRUCTION = 'Use plans and pipelines whenever you work, not only when the user asks for them: when a task is big enough that its implementation details would crowd out your strategic view (a feature across many files, a series of tasks), hand the details to pipeline runs and act as the Strategist yourself — keep the vision, decide what gets done, and review the results.'
 
+/** AIDE's instruction with plans turned off in Settings: pipelines only. */
+export const AIDE_WORK_INSTRUCTION_WITHOUT_PLANS = 'Use pipelines whenever you work, not only when the user asks for them: when a task is big enough that its implementation details would crowd out your strategic view (a feature across many files, a series of tasks), hand the details to pipeline runs and act as the Strategist yourself — keep the vision, decide what gets done, and review the results.'
+
+/**
+ * The work instruction for a project's switches: AIDE's own text loses its plans with plans
+ * off; a user's override is theirs and passes as written.
+ */
+export function workInstructionFor(text: string, features: FeatureSet): string {
+  return !features.plans && text.trim() === AIDE_WORK_INSTRUCTION ? AIDE_WORK_INSTRUCTION_WITHOUT_PLANS : text
+}
+
 /**
  * The server's instructions, shown by clients that read them: what AIDE's MCP
  * server is and when to turn to it. The server carries pipeline orchestration
  * today; other AIDE tools may join it.
  */
-export function serverInstructions(workInstruction: string = AIDE_WORK_INSTRUCTION, tracker: string = ''): string {
+export function serverInstructions(workInstruction: string = AIDE_WORK_INSTRUCTION, tracker: string = '', features: FeatureSet = ALL_FEATURES_ON): string {
+  // A feature turned off in Settings leaves its sentences out (docs/task-tracker-implementation.md §10).
   const intro = [
     "AIDE's MCP server: tools of the AIDE editor that has this project open.",
-    'Pipeline orchestration (pipeline_* tools): AIDE runs pipeline machines — multi-step agent work with checks, review loops and commits — deterministically, and you orchestrate them.',
-    'Plans (plan_* tools): when the user asks for a plan, or work needs several tasks tracked over sessions, make it an AIDE plan, whatever way of planning your client has; plan_guide says how. AIDE shows its progress and can walk it task by task.'
+    ...(features.pipelines ? ['Pipeline orchestration (pipeline_* tools): AIDE runs pipeline machines — multi-step agent work with checks, review loops and commits — deterministically, and you orchestrate them.'] : []),
+    ...(features.plans ? [`Plans (plan_* tools): when the user asks for a plan, or work needs several tasks tracked over sessions, make it an AIDE plan, whatever way of planning your client has; plan_guide says how. AIDE shows its progress${features.pipelines ? ' and can walk it task by task' : ''}.`] : [])
   ].join(' ')
+  const guides = [
+    ...(features.pipelines ? ['pipeline_guide (writing machines)'] : []),
+    ...(features.plans ? ['plan_guide (writing plans)'] : []),
+    ...(features.tracker ? ['task_guide (the task tracker)'] : []),
+    'toolbar_guide (toolbar buttons in aide/toolbar.json)'
+  ]
   const rest = [
-    workInstruction.trim(),
-    'Start with pipeline_hello: it returns the rules and how to receive pipeline events.',
-    'Guides, read when the task calls for them: pipeline_guide (writing machines), plan_guide (writing plans), task_guide (the task tracker), toolbar_guide (toolbar buttons in aide/toolbar.json).'
+    // The work instruction sends agents to pipeline runs: it goes with pipelines.
+    features.pipelines ? workInstructionFor(workInstruction, features).trim() : '',
+    features.pipelines ? 'Start with pipeline_hello: it returns the rules and how to receive pipeline events.' : '',
+    `Guides, read when the task calls for them: ${guides.join(', ')}.`
   ].filter(Boolean).join(' ')
   // The tracker part (task tracker §7) is a paragraph of its own: it has lines of its own.
-  return [intro, tracker.trim(), rest].filter(Boolean).join('\n\n')
+  // The tracker's rule sends short-lived work to a plan: not with plans off.
+  const trackerPart = features.plans ? tracker : tracker.replace(TRACKER_PLAN_CLAUSE, TRACKER_NO_PLAN_CLAUSE)
+  return [intro, features.tracker ? trackerPart.trim() : '', rest].filter(Boolean).join('\n\n')
 }
 
-function eventDeliveryText(launcherPath: string): string {
+/** How the Strategist receives pipeline events; with plans off, nothing about plans. */
+function eventDeliveryText(launcherPath: string, plans: boolean = true): string {
+  const planAttention = 'plan_attention (the plan holds and needs you: see its kind, reason and proposal; change the plan with plan_edit if needed, then plan_run with a note), '
+  const passedOn = ' — one the Orchestrator of a plan passed on carries its reason and proposal in "orchestrator"'
   return [
     'Waiting for runs, cheapest first:',
     '1. Stay in one turn and block: pass `wait` to pipeline_start / pipeline_answer / pipeline_resume (they act, then return the next event), or call pipeline_wait. The event comes back as the call result — no output files, no extra turns. When the user types in your terminal, the wait returns early with type "user_input", so their message reaches you right away; handle it, then wait again.',
     `2. If your client cannot block on a tool call for long: a background command or monitor — "${launcherPath}" events --run <runId> --since <lastEventId> (one JSON line per event that needs you) or "${launcherPath}" wait --run <runId> --since <lastEventId> (prints the next one and exits). Each wake-up costs extra calls.`,
     '3. Last resort: poll pipeline_status.',
-    'While a plan\'s autopilot is on, wait without runId: runs change, and pipeline_wait then covers every run and the plan. A wait for one run also returns plan_attention: a plan that needs you reaches every wait; events of other runs do not.',
-    'Events that need you: plan_attention (the plan holds and needs you: see its kind, reason and proposal; change the plan with plan_edit if needed, then plan_run with a note), escalation (a decision; answer with pipeline_answer — one the Orchestrator of a plan passed on carries its reason and proposal in "orchestrator"), run_paused / run_stopped (the run changed hands, possibly by the user or an AIDE restart; continue with pipeline_resume — reason "usage_limit" means a CLI hit its usage limit: the run resumes by itself at resumeAt when the message said when, keeping the step\'s session; when AIDE switches the CLI to another account of the user\'s pool and goes on, you are not told), run_finished / run_failed (the event carries the compact report; read all of it — when you wait in code, return the report whole rather than a few fields; recurring findings are your signal to plan a refactoring task). Step progress is not sent, nor are retries of a CLI that is temporarily unavailable (model at capacity, overloaded, network): AIDE retries the step every minute and sends an engine escalation only after 20 minutes.',
+    ...(plans ? ['While a plan\'s autopilot is on, wait without runId: runs change, and pipeline_wait then covers every run and the plan. A wait for one run also returns plan_attention: a plan that needs you reaches every wait; events of other runs do not.'] : []),
+    `Events that need you: ${plans ? planAttention : ''}escalation (a decision; answer with pipeline_answer${plans ? passedOn : ''}), run_paused / run_stopped (the run changed hands, possibly by the user or an AIDE restart; continue with pipeline_resume — reason "usage_limit" means a CLI hit its usage limit: the run resumes by itself at resumeAt when the message said when, keeping the step\'s session; when AIDE switches the CLI to another account of the user\'s pool and goes on, you are not told), run_finished / run_failed (the event carries the compact report; read all of it — when you wait in code, return the report whole rather than a few fields; recurring findings are your signal to plan a refactoring task). Step progress is not sent, nor are retries of a CLI that is temporarily unavailable (model at capacity, overloaded, network): AIDE retries the step every minute and sends an engine escalation only after 20 minutes.`,
     'Escalation kinds and their actions: step (a step asks for a decision, e.g. plan_wrong or a check failed outside any loop): continue / retry / stop; gate (approval): continue / reject / stop; limit (a loop used up its iterations): retry for one more / continue to accept as it is / stop; engine (a step could not run): retry continues the failed session / stop. stop ends the run for good; to hold a run without deciding, do not answer: it waits and survives AIDE restarts.',
-    'Pass the last event id you have seen as `since`, also when waiting without runId; ids continue across AIDE restarts, and after a restart AIDE re-announces a pending escalation or paused run, so nothing is lost. An event that has been dealt with since (the escalation answered, the plan continued, the run resumed) is not handed out again.',
+    `Pass the last event id you have seen as \`since\`, also when waiting without runId; ids continue across AIDE restarts, and after a restart AIDE re-announces a pending escalation or paused run, so nothing is lost. An event that has been dealt with since (the escalation answered, ${plans ? 'the plan continued, ' : ''}the run resumed) is not handed out again.`,
     'If an event that needs you arrives while no wait covers it (you are not waiting, or you wait for another run) and your session is idle, AIDE types it into your terminal as a message starting with "AIDE pipeline:"; act on it as on a waited event, then wait again with the since it gives.',
     'Claude Code moves an MCP call that runs longer than 120 s to the background and delivers its result in the task notification: the event arrives there, with no output file to read. Clients that cut long calls: pass a wait shorter than their limit.'
   ].join('\n')
@@ -195,10 +231,10 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
   const tools: ToolDefinition[] = [
     {
       name: 'pipeline_hello',
-      description: ['Start here for pipeline orchestration.', (env().workInstruction?.() ?? AIDE_WORK_INSTRUCTION).trim(), 'Confirms the connection to AIDE and returns the rules for the Strategist and how to receive pipeline events.'].filter(Boolean).join(' '),
+      description: ['Start here for pipeline orchestration.', workInstructionFor(env().workInstruction?.() ?? AIDE_WORK_INSTRUCTION, env().features ?? ALL_FEATURES_ON).trim(), 'Confirms the connection to AIDE and returns the rules for the Strategist and how to receive pipeline events.'].filter(Boolean).join(' '),
       inputSchema: OBJECT({}),
       handler: async (_args, context) => {
-        const { aideVersion, launcherPath, manager: pipelines } = env()
+        const { aideVersion, launcherPath, manager: pipelines, features = ALL_FEATURES_ON } = env()
         orchestrators.hello({ projectPath: context.projectPath, connectionId: context.connectionId, tabId: context.tabId, client: context.clientInfo })
         // The project's git mode in one line (docs/pipeline-git-modes-spec.md §7); pipeline_validate lists the problems of an invalid config.
         const git = pipelines ? (await pipelines.projectCheck(context.projectPath)).git : null
@@ -206,9 +242,9 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
           `Connected to AIDE ${aideVersion} for project ${context.projectPath}.`,
           ...(git ? [`Project ${git}${git === 'git: invalid config' ? ' (pipeline_validate lists the problems)' : ''}.`] : []),
           '',
-          ...ORCHESTRATOR_RULES,
+          ...(features.plans ? ORCHESTRATOR_RULES : ORCHESTRATOR_RULES_WITHOUT_PLANS),
           '',
-          eventDeliveryText(launcherPath)
+          eventDeliveryText(launcherPath, features.plans)
         ].join('\n')
         return ok(text)
       }
@@ -460,5 +496,12 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
     ...buildTaskTools(() => ({ tasks: env().tasks, guide: env().taskGuide, liveTab: env().liveTab }))
   )
   const onTailError = (err: unknown): void => { logEvent('task-tail-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn') }
-  return tools.map((tool) => withTrackerTail(tool, () => env().tasks, onTailError))
+  // Feature switches (docs/task-tracker-implementation.md §10): the tools of a feature that is
+  // off are not offered, the tracker tail is not added with the tracker off, and plan_run says
+  // up front that it cannot run while pipelines are off.
+  const features = env().features ?? ALL_FEATURES_ON
+  return tools
+    .filter((tool) => { const feature = toolFeature(tool.name); return feature === null || features[feature] })
+    .map((tool) => tool.name === 'plan_run' && !features.pipelines ? { ...tool, description: `${PLAN_RUN_OFF_TEXT} ${tool.description}`, handler: () => fail(PLAN_RUN_OFF_TEXT) } : tool)
+    .map((tool) => withTrackerTail(tool, () => (env().features ?? ALL_FEATURES_ON).tracker ? env().tasks : undefined, onTailError))
 }

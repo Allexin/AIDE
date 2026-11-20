@@ -75,6 +75,7 @@ interface FixtureOptions {
   gitSetup?: (dir: string) => GitSetup
   headSha?: PlanEnvironment['headSha']
   commitsSince?: PlanEnvironment['commitsSince']
+  runRefusal?: PlanEnvironment['runRefusal']
 }
 
 function fixture(options: FixtureOptions = {}): Fixture {
@@ -135,7 +136,8 @@ function fixture(options: FixtureOptions = {}): Fixture {
   fx.plans = new PlanService(fx.manager, {
     userDir: (p) => join(p, '.aide', 'plans'),
     headSha: options.headSha ?? (async () => `head${fx.committed.length}`),
-    commitsSince: options.commitsSince ?? (async () => [])
+    commitsSince: options.commitsSince ?? (async () => []),
+    ...(options.runRefusal ? { runRefusal: options.runRefusal } : {})
   })
   fx.server = new McpServer({ name: 'aide', version: '1', instructions: '' }, () => buildPipelineTools(() => ({ aideVersion: '1', launcherPath: 'x', manager: fx.manager, plans: fx.plans, planGuide: () => 'guide' })))
   lastFixture = fx
@@ -391,6 +393,39 @@ describe('autopilot', () => {
     expect(fx.file().tasks[0].status).toBe('done')
     expect(fx.orchestratorPrompts).toHaveLength(1)
     expect(events(fx)).toEqual([])
+  })
+
+  it('says the autopilot is working while the Orchestrator decides or a step runs', async () => {
+    const fx = fixture()
+    approvedPlan(fx)
+    expect(fx.plans.autopilotWorking(fx.dir)).toBeNull()
+    let release: () => void = () => {}
+    fx.holdImplement = new Promise<void>((r) => { release = r })
+    await fx.plans.run(fx.dir)
+    await until(() => fx.manager.activeRun(fx.dir)?.state.current === 'implement')
+    expect(fx.plans.autopilotWorking(fx.dir)).toBe('p')
+    // Pausing the run: working while the step ends (pausing), not once the run is paused.
+    fx.manager.pause(fx.dir)
+    expect(fx.plans.autopilotWorking(fx.dir)).toBe('p')
+    fx.holdImplement = null
+    release()
+    await until(() => fx.manager.activeRun(fx.dir)?.state.status === 'paused')
+    expect(fx.plans.autopilotWorking(fx.dir)).toBeNull()
+    fx.manager.resume(fx.dir)
+    await until(() => attentionOf(fx)?.kind === 'finished')
+    expect(fx.plans.autopilotWorking(fx.dir)).toBeNull()
+  })
+
+  it('with pipelines turned off the autopilot does not start and says why; the plan stays as it was', async () => {
+    const reason = 'Plans run through pipelines, which are off.'
+    const fx = fixture({ runRefusal: () => reason })
+    approvedPlan(fx)
+    await expect(fx.plans.run(fx.dir)).rejects.toThrow(reason)
+    expect(await fx.plans.control(fx.dir, 'run')).toBe(reason)
+    expect(fx.plans.snapshot(fx.dir).autopilot).toBeNull()
+    expect(fx.orchestratorPrompts).toHaveLength(0)
+    // The other plan actions work.
+    expect(fx.plans.status(fx.dir).next).toBe('one')
   })
 })
 

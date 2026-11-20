@@ -1,6 +1,6 @@
 import { app, BrowserWindow } from 'electron'
 import { readFileSync } from 'fs'
-import { join, relative } from 'path'
+import { join, relative, sep } from 'path'
 import { logEvent } from '../diagnostics'
 import { pipelineServer } from './server/pipelineServer'
 import { shimLaunch, writeLauncher } from './server/runtimeFiles'
@@ -29,6 +29,9 @@ import { TaskService } from '../tasks/taskService'
 import { isTrackerPath } from '../tasks/taskStore'
 import { ptyRegistry } from '../pty/registry'
 import { addFsChangeObserver } from '../filetree/watcher'
+import { projectFeatures } from '../config/features'
+import { featureBusyReason } from './featureBusy'
+import { PLAN_RUN_OFF_TEXT, featureOffText, toolFeature, type FeatureName } from '../../shared/features'
 
 /**
  * Pipeline bootstrap for the main process: the local pipeline server, the
@@ -72,8 +75,22 @@ export const pipelineView = new PipelineViewService(pipelineManager)
 export const planService = new PlanService(pipelineManager, {
   userDir: (projectPath) => getProjectUserPath(projectPath, 'plans'),
   headSha,
-  commitsSince
+  commitsSince,
+  // Plans run through pipelines: with pipelines off the autopilot cannot start (§10 of the tracker implementation doc).
+  runRefusal: (projectPath) => projectFeatures(projectPath).pipelines ? null : PLAN_RUN_OFF_TEXT
 })
+
+/**
+ * Why `feature` cannot be turned off in `projectPath` now, or null: pipelines while a run
+ * is running or the plan autopilot is working, plans while the autopilot is working.
+ */
+export function featureBusy(projectPath: string, feature: FeatureName): string | null {
+  const run = pipelineManager.activeRun(projectPath)
+  return featureBusyReason(projectPath, feature, {
+    run: run ? { runId: run.runId, status: run.state.status } : null,
+    autopilotPlan: planService.autopilotWorking(projectPath)
+  })
+}
 
 /** The task trackers of the open projects; the MCP tools and the tasks tab work through this. */
 export const taskService = new TaskService({
@@ -139,22 +156,35 @@ export async function startPipelineServer(): Promise<void> {
       runtimeDir: runtimeDir(),
       serverName: 'aide',
       serverVersion: app.getVersion(),
-      instructions: (context) => serverInstructions(workInstruction(), trackerOrientation(context.projectPath, context.connectionId)),
-      tools: () => buildPipelineTools(() => ({
-        aideVersion: app.getVersion(),
-        launcherPath,
-        manager: pipelineManager,
-        authoringGuide,
-        smoke: (projectPath, machineId, pingAgents) => smokeTestMachine(pipelineManager, projectPath, machineId, pingAgents),
-        plans: planService,
-        planGuide,
-        tasks: taskService,
-        taskGuide,
-        liveTab,
-        toolbarGuide,
-        workInstruction,
-        cacheTtl: tabCacheTtl
-      }))
+      // A feature switched off in Settings leaves its part out; with the tracker off no tail starts.
+      instructions: (context) => {
+        const features = projectFeatures(context.projectPath)
+        return serverInstructions(workInstruction(), features.tracker ? trackerOrientation(context.projectPath, context.connectionId) : '', features)
+      },
+      // The switches of the asking project, read for every request (a client reads the list at initialize).
+      unavailableTool: (name, context) => {
+        const feature = toolFeature(name)
+        return feature && !projectFeatures(context.projectPath)[feature] ? featureOffText(feature) : null
+      },
+      tools: (context) => {
+        const features = projectFeatures(context.projectPath)
+        return buildPipelineTools(() => ({
+          aideVersion: app.getVersion(),
+          launcherPath,
+          manager: pipelineManager,
+          authoringGuide,
+          smoke: (projectPath, machineId, pingAgents) => smokeTestMachine(pipelineManager, projectPath, machineId, pingAgents),
+          plans: planService,
+          planGuide,
+          tasks: taskService,
+          taskGuide,
+          liveTab,
+          toolbarGuide,
+          workInstruction,
+          cacheTtl: tabCacheTtl,
+          features
+        }))
+      }
     })
     logEvent('pipeline-server-started', { port: pipelineServer.getPort() })
     // CLI tabs get AIDE's MCP server at launch, with the paths of this AIDE.
@@ -207,8 +237,13 @@ export function attachPipelineProject(projectPath: string, win: BrowserWindow): 
   }
   taskService.on('changed', onTasksChanged)
   // The FS watcher skips dot paths only: changes under aide/tasks/ reach it, the lease file does not.
+  // aide/config.json may carry the project layer of the feature switches (put there by hand):
+  // the window reads its switches again, as it does after Settings saves them.
   const stopTaskWatch = addFsChangeObserver((path, fullPath) => {
-    if (path === projectPath && isTrackerPath(relative(projectPath, fullPath))) taskService.notifyDiskChange(projectPath)
+    if (path !== projectPath) return
+    const inProject = relative(projectPath, fullPath)
+    if (isTrackerPath(inProject)) taskService.notifyDiskChange(projectPath)
+    if (inProject.split(sep).join('/') === 'aide/config.json') send('features:changed', projectPath)
   })
   try {
     pipelineManager.recover(projectPath)

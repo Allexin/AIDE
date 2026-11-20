@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { logManager } from './useLogStore'
 import { usePipelineStore } from './usePipelineStore'
+import { watchFeature } from './useFeatureStore'
 import type { TaskBoard } from '../../../shared/task'
 
 /**
@@ -20,6 +21,8 @@ interface TaskStoreState {
   tabTasks: Record<string, TabTask>
   /** The sections of the Tasks tab; null until read. */
   board: TaskBoard | null
+  /** Why the last reading of the sections failed; null after one that worked. */
+  boardError: string | null
   /** Counts the changes heard of, so an open card or search reads again. */
   version: number
   /** The Tasks tab is the selected tab of the terminal panel (the session tabs keep their own selection). */
@@ -36,6 +39,7 @@ interface TaskStoreState {
 export const useTaskStore = create<TaskStoreState>((set) => ({
   tabTasks: {},
   board: null,
+  boardError: null,
   version: 0,
   viewActive: false,
   selectedId: null,
@@ -62,26 +66,47 @@ export function tabTaskLabel(task: TabTask | undefined): string | null {
   return `· ${title}`
 }
 
-function failed(what: string, err: unknown): void {
-  logManager.append('Tasks', `Could not read ${what}: ${err instanceof Error ? err.message : String(err)}`)
+function failed(what: string, err: unknown): string {
+  const text = `Could not read ${what}: ${err instanceof Error ? err.message : String(err)}`
+  logManager.append('Tasks', text)
+  return text
 }
 
-/** Subscribe to the main process; call once per editor window. Returns an unsubscribe. */
+/**
+ * Subscribe to the main process; call once per editor window. Returns an unsubscribe.
+ * With the tracker turned off in Settings the store holds nothing (no Tasks tab, no task
+ * labels on terminal tabs) and reads nothing; aide/tasks/ stays as it is.
+ */
 export function connectTaskStore(): () => void {
   // Changes can arrive while a read is in flight: only the latest read is applied.
   let latest = 0
+  let on = false
   const load = (): void => {
+    if (!on) return
     const request = ++latest
     window.editorApi.tasksTabTasks()
       .then((tabTasks) => { if (request === latest) useTaskStore.getState().setTabTasks(tabTasks) })
       .catch((err: unknown) => failed('the tasks of the terminal tabs', err))
     window.editorApi.tasksList()
-      .then((board) => { if (request === latest) useTaskStore.getState().setBoard(board) })
-      .catch((err: unknown) => failed('the task tracker', err))
+      .then((board) => { if (request === latest) useTaskStore.setState({ board, boardError: null }) })
+      .catch((err: unknown) => {
+        const text = failed('the task tracker', err)
+        if (request === latest) useTaskStore.setState({ boardError: text })
+      })
   }
-  load()
-  return window.editorApi.onTasksChanged(() => {
+  const offFeature = watchFeature('tracker', (enabled) => {
+    on = enabled
+    if (enabled) {
+      load()
+      return
+    }
+    latest++
+    useTaskStore.setState({ tabTasks: {}, board: null, boardError: null, viewActive: false, selectedId: null })
+  })
+  const offChanged = window.editorApi.onTasksChanged(() => {
+    if (!on) return
     useTaskStore.getState().changed()
     load()
   })
+  return () => { offFeature(); offChanged() }
 }

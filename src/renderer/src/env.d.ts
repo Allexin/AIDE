@@ -280,6 +280,9 @@ interface EditorAPI {
   tasksRestore: (id: string) => Promise<import('../../shared/task').TaskWriteResult>
   onTasksChanged: (cb: () => void) => () => void
   onPipelineTranscript: (cb: (event: { runId: string; node: string; visit: number; entry: HistoryEntry }) => void) => () => void
+  // Feature switches
+  featuresGet: () => Promise<import('../../shared/features').FeatureSet>
+  onFeaturesChanged: (cb: () => void) => () => void
 
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
   getPathForFile: (file: File) => string
@@ -528,6 +531,8 @@ interface SettingsAPI {
   saveRemoteConfig: (config: RemoteConfig) => Promise<void>
   getActivatedTools: () => Promise<{ id: string; name: string }[]>
   askAiAboutRemote: (toolId: string) => Promise<void>
+  getFeatures: () => Promise<import('../../shared/features').FeatureSettings>
+  saveFeatures: (global: import('../../shared/features').FeatureLayer, personal: import('../../shared/features').FeatureLayer | null) => Promise<string | null>
 }
 
 interface SettingsField {

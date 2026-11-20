@@ -1,7 +1,7 @@
 # Task tracker — implementation of build steps 2 and 4
 
 Status: §1–§8 (shared types, file format, store, service, MCP tools, tab binding, snapshot, orientation
-and tails, the Tasks tab) are implemented. The `by` of an agent uses the number of its tab id
+and tails, the Tasks tab) and §10 (feature switches for pipelines, plans and the tracker) are implemented. The `by` of an agent uses the number of its tab id
 (`tab-3` → `allex/tab 3`): the tab strip shows titles, not numbers. Choices the §6–§8 implementation made
 are noted at the end of those sections.
 
@@ -300,3 +300,89 @@ As implemented (`src/renderer/src/components/tasks/TasksView.tsx`, `taskRank.ts`
 
 Fingerprints, drift states, candidates and the full close (`answers`, `mechanical`, `globs`, `dryRun`),
 `task_acknowledge`, `task_amend_claim(s)`, proposals, the Documenter, `solves` on plans, the remote page.
+
+## 10. Feature switches
+
+Three switches — **pipelines**, **plans**, **tracker** — turn a feature off for a project. Types and
+the pure resolution are in `src/shared/features.ts`, the reading and writing of the layers in
+`src/main/config/features.ts`.
+
+### Layers
+
+The effective value of each switch is the **last layer that sets it**, in this order:
+
+1. **built-in default** — on;
+2. **global** — `features: { pipelines?, plans?, tracker? }` in the user's app config
+   (`aide-config.json` in the user data folder, `AppConfig.features`); edited in Settings → Features →
+   "All projects" (a checkbox per switch: unchecked writes `false`, checked removes the key). It applies
+   to every project that does not set the switch itself, live: open projects get it on save;
+3. **project** — `features` in the project's shared `aide/config.json` (read by `readSharedConfig`, the
+   same file as the `git` section). There is **no UI** for this layer: it takes effect only when someone
+   puts it into the file by hand (e.g. copies a config). It is read on every use, as the `git` section is,
+   and a change of the file makes the open window read its switches again (FS watcher);
+4. **personal** — `features` in `.aide/users/<user>/settings.json` (`ProjectSettings.features`); edited
+   in Settings → Features → "This project" for the project whose window opened Settings, as a three-state
+   choice per switch: **Default** (inherit; writes nothing, removes the key, and the whole `features` key
+   when it sets no switch), **On**, **Off**. Next to each choice Settings shows the value it would inherit
+   and its layer: "Default: on — built-in default", "off — global", "off — project config".
+
+A missing file, section or key, or a value that is not a boolean, sets nothing at that layer. With no
+`features` anywhere every switch is on and AIDE behaves exactly as before (the MCP texts and tool list are
+byte-identical). Every layer is read from its file at each use, so two projects resolve independently: the
+project and personal layers of one never reach another.
+
+### What "off" means
+
+| | MCP (AIDE's server, per project) | UI | IPC |
+|---|---|---|---|
+| pipelines | no `pipeline_*` tools; the pipeline sentence, the work instruction, "Start with pipeline_hello" and `pipeline_guide` left out of `serverInstructions` | the Pipeline tab's run part and the run banner; with plans on the tab shows the plans only and says pipelines are off | `pipeline:*` |
+| plans | no `plan_*` tools; the plan sentence and `plan_guide` left out; AIDE's work instruction becomes its pipelines-only variant (`AIDE_WORK_INSTRUCTION_WITHOUT_PLANS`, in the instructions and the `pipeline_hello` description; a user's override from Settings is passed as written, since it is the user's text); the tracker rule ends "…, not what only the current work needs." instead of "…belongs in a plan."; `pipeline_hello` uses rules and event texts without plans (`ORCHESTRATOR_RULES_WITHOUT_PLANS`, no `plan_attention`, no autopilot line) | the plan views in the pipeline tab and `PlanSensor` in the status bar | `plan:*` |
+| tracker | no `task_*` tools; the tracker orientation and `task_guide` left out, no tail starts; the tracker tail is not added to any tool result | the Tasks tab and the current-task label (and "no task" tooltip line) on terminal tabs | `tasks:*` |
+
+- **MCP.** `McpServer` reads its tool list for every request with the connection's project
+  (`tools(context)`), and `pipeline/index.ts` builds it with `projectFeatures(projectPath)`; the
+  instructions are computed at every `initialize` the same way. A client reads the tool list when its
+  session starts, so a change applies to CLI sessions started after saving; Settings says so. A call of a
+  tool whose switch is off (an older session) answers "<Feature> … turned off in Settings." as a tool error
+  (`ServerInfo.unavailableTool`). `toolbar_guide` belongs to no switch.
+- **IPC.** Reads throw `"<Pipelines|Plans> are turned off in Settings."` / `"The task tracker is turned off
+  in Settings."`; controls (`pipeline:control`, `pipeline:answer`, `plan:control`) return it as their
+  error text, task writes as `{ error }`. The renderer reads nothing for a feature that is off:
+  `useFeatureStore` (`features:get`, `features:changed`) gates `connectPipelineStore`, `connectPlanStore`
+  and `connectTaskStore`, which drop what they hold when their switch goes off and read again when it comes
+  back.
+- **Disk.** Nothing is deleted or written: `aide/plans/`, `aide/tasks/`, bindings and the run history stay
+  and come back when the switch is on again.
+
+### Dependencies and refusals
+
+- Plans run through pipelines. With pipelines off and plans on, the plan tools work but the autopilot
+  does not: `PlanService.run` throws `PLAN_RUN_OFF_TEXT` (through `PlanEnvironment.runRefusal`), so
+  `plan_run`, the "Run plan" / "Continue the plan" buttons and the remote page all get the reason; the
+  `plan_run` tool stays in the list with the reason first in its description, and "Run plan" is disabled
+  with it as tooltip. The tracker depends on neither.
+- Settings saves the switches as a whole (`settings:save-features`). Before writing, it checks every open
+  project the change reaches (`featureSaveRefusal`, with `featureBusy` / `featureBusyReason` in
+  `src/main/pipeline/featureBusy.ts`). Only work in progress refuses: turning **pipelines** off is refused
+  while a run of that project is `running` or `pausing` (its step is still going), or while its plan
+  autopilot is working; turning **plans** off is refused while the autopilot is working, so an autopilot is
+  never left running with its controls hidden (this second rule is an addition of the implementation). The
+  autopilot works while the Orchestrator decides, or while its step's run is running or pausing
+  (`PlanService.autopilotWorking`). A run that is `paused`, `stopped` or `waiting` for an answer does not
+  refuse it: the run stays on disk and is there again with pipelines. The reason names the run or plan and
+  the project and says what lifts it (pause or stop the run, pause the plan); it is shown in Settings and
+  nothing is written then. A save broadcasts `features:changed` to every open editor window.
+
+### TasksView fixes made with this work
+
+- Every IPC read of the Tasks tab (`tasks:list` in the store, `tasks:search`, `tasks:get`) has a rejection
+  handler: the error is logged to the `Tasks` log channel and shown in place of "Loading…"/"Searching…".
+  Writes already answered `{ error }`.
+- A doc or description link is resolved by `projectFileOfLink` (`components/tasks/taskLinks.ts`): `.` and
+  `..` are resolved, and a link that leaves the project root (above it, another drive, a network path, a
+  `:` in a segment) is not opened; the refusal is logged to `Tasks`.
+
+### Not covered
+
+The remote page has no switch of its own: it keeps showing runs and plans (only the plan autopilot refuses
+to start with pipelines off). The project layer has no editor by design.

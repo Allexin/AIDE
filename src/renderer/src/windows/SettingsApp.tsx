@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import type { SettingsField } from '../../../shared/settingsTypes'
 import { maskEmails } from '../../../shared/emailMask'
+import { FEATURE_LABEL, FEATURE_NAMES, describeFeatureValue, resolveFeature, withFeatureChoice, type FeatureName, type FeatureSettings } from '../../../shared/features'
 
 interface ReasoningConfig {
   showPanel: boolean
@@ -48,13 +49,20 @@ interface AccountToolEntry {
   hasAccount: boolean
 }
 
-type TabId = 'general' | 'cli' | 'remote'
+type TabId = 'general' | 'features' | 'cli' | 'remote'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'general', label: 'General' },
+  { id: 'features', label: 'Features' },
   { id: 'cli', label: 'CLI Settings' },
   { id: 'remote', label: 'Remote Access' }
 ]
+
+const FEATURE_NOTE: Record<FeatureName, string> = {
+  pipelines: 'The Pipeline tab and the pipeline_* tools of agents.',
+  plans: 'The plan views, the plan sensor in the status bar and the plan_* tools. Plans run through pipelines: with pipelines off, the plan autopilot cannot run.',
+  tracker: 'The Tasks tab, the current task on terminal tabs and the task_* tools.'
+}
 
 const fieldsetStyle: React.CSSProperties = {
   border: '1px solid #444',
@@ -130,6 +138,70 @@ const smallBtnStyle: React.CSSProperties = {
   cursor: 'pointer'
 }
 
+/**
+ * Feature switches (docs/task-tracker-implementation.md §10): the global part for every
+ * project, and this user's choice for the project whose window opened Settings. The project
+ * layer (`features` in aide/config.json) has no UI; it shows here as what a project inherits.
+ */
+function FeaturesSection({ value, onChange }: {
+  value: FeatureSettings
+  onChange: (value: FeatureSettings) => void
+}): React.ReactElement {
+  const noteStyle: React.CSSProperties = { margin: '0 0 10px', fontSize: 11, color: '#777', lineHeight: 1.5 }
+  const project = value.project
+  return (
+    <>
+      <p style={noteStyle}>
+        A switch that is off hides its views and its MCP tools; nothing on disk is deleted (aide/plans/, aide/tasks/
+        and the run history stay and come back when it is on again). Views change when you save; agents get the change
+        in CLI sessions started after saving, since a session reads its tool list when it starts.
+      </p>
+      <fieldset style={fieldsetStyle}>
+        <legend style={legendStyle}>All projects</legend>
+        {FEATURE_NAMES.map((name) => {
+          const on = resolveFeature({ global: value.global }, name, 'global').on
+          return (
+            <label key={name} style={{ display: 'flex', alignItems: 'baseline', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
+              <input type="checkbox" checked={on} onChange={(e) => onChange({ ...value, global: withFeatureChoice(value.global, name, e.target.checked ? 'default' : 'off') })} />
+              <span>
+                {FEATURE_LABEL[name]}
+                <span style={{ display: 'block', color: '#777', fontSize: 11 }}>{FEATURE_NOTE[name]}</span>
+              </span>
+            </label>
+          )
+        })}
+        <p style={{ ...noteStyle, margin: 0 }}>A project that sets a switch in its aide/config.json keeps its value, and your choice for a project below wins over both.</p>
+      </fieldset>
+      <fieldset style={fieldsetStyle}>
+        <legend style={legendStyle}>This project{project ? ` — ${project.path}` : ''}</legend>
+        {!project && <p style={{ ...noteStyle, margin: 0 }}>Open Settings from a project window to choose switches for that project.</p>}
+        {project && FEATURE_NAMES.map((name) => {
+          const inherited = resolveFeature({ global: value.global, project: project.config }, name, 'project')
+          const choice = project.personal[name] === undefined ? 'default' : project.personal[name] ? 'on' : 'off'
+          return (
+            <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+              <span style={{ width: 100, flexShrink: 0 }}>{FEATURE_LABEL[name]}</span>
+              <select
+                value={choice}
+                onChange={(e) => onChange({ ...value, project: { ...project, personal: withFeatureChoice(project.personal, name, e.target.value as 'default' | 'on' | 'off') } })}
+                style={{ ...inputStyle, width: 'auto' }}
+              >
+                <option value="default">Default</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+              <span style={{ color: '#888', fontSize: 12 }}>Default: {describeFeatureValue(inherited)}</span>
+            </div>
+          )
+        })}
+        {project && <p style={{ ...noteStyle, margin: 0 }}>
+          Your choice for this project only; Default follows the project&apos;s aide/config.json when it sets the switch, else the global part.
+        </p>}
+      </fieldset>
+    </>
+  )
+}
+
 function ToolSettingsSection({ entry, onChange }: {
   entry: ToolSettingsEntry
   onChange: (values: Record<string, unknown>) => void
@@ -202,12 +274,15 @@ export default function SettingsApp(): React.ReactElement {
   const [accountTools, setAccountTools] = useState<AccountToolEntry[]>([])
   const [accountIdentifiers, setAccountIdentifiers] = useState<Record<string, string | null>>({})
   const [workInstruction, setWorkInstruction] = useState<{ aide: string; override: string | null }>({ aide: '', override: null })
+  const [features, setFeatures] = useState<FeatureSettings | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
     window.settingsApi.getReasoningConfig().then(setReasoning)
     window.settingsApi.getPrivacyConfig().then(setPrivacy)
     window.settingsApi.getWorkInstruction().then(setWorkInstruction)
+    window.settingsApi.getFeatures().then(setFeatures)
     window.settingsApi.getUpdatesConfig().then(setUpdates)
     window.settingsApi.getSessionsConfig().then(setSessions)
     window.settingsApi.getRemoteConfig().then((cfg) => {
@@ -243,7 +318,11 @@ export default function SettingsApp(): React.ReactElement {
     for (const entry of toolSettings) {
       saves.push(window.settingsApi.updateToolSettings(entry.toolId, entry.values))
     }
-    await Promise.all(saves)
+    // The switches are refused as a whole when one would go off where it is busy (a run, the plan autopilot).
+    const featureError = features ? window.settingsApi.saveFeatures(features.global, features.project?.personal ?? null) : Promise.resolve(null)
+    const [refusal] = await Promise.all([featureError, ...saves])
+    setSaveError(refusal)
+    if (refusal) return
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
@@ -364,6 +443,12 @@ export default function SettingsApp(): React.ReactElement {
               </p>
             </fieldset>
           </>
+        )}
+
+        {/* Features tab */}
+        {activeTab === 'features' && (
+          features ? <FeaturesSection value={features} onChange={(value) => { setFeatures(value); setSaveError(null) }} />
+            : <p style={{ color: '#777', fontSize: 12 }}>Loading…</p>
         )}
 
         {/* CLI Settings tab */}
@@ -578,6 +663,7 @@ export default function SettingsApp(): React.ReactElement {
           Save
         </button>
         {saved && <span style={{ color: '#4ec9b0', fontSize: 12 }}>Saved</span>}
+        {saveError && <span style={{ color: '#f48771', fontSize: 12 }}>Feature switches not saved: {saveError}</span>}
       </div>
     </div>
   )

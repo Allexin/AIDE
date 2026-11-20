@@ -7,7 +7,10 @@ import type { TaskFile } from '../../shared/task'
  */
 
 /** The tracker's rule, the first part of the orientation, so a cut never removes it. */
-export const TRACKER_RULE = "Task tracker (task_* tools): the project's state — what is in it, what we do, what we decided not to do. Call task_snapshot before you start work. A work item goes to task_create, never into a TODO in a file; a task is what the user would ask about a week later, anything needed only for the current work belongs in a plan."
+/** The end of the tracker rule that sends short-lived work to plans; replaced when plans are turned off in Settings. */
+export const TRACKER_PLAN_CLAUSE = ', anything needed only for the current work belongs in a plan.'
+export const TRACKER_NO_PLAN_CLAUSE = ', not what only the current work needs.'
+export const TRACKER_RULE = `Task tracker (task_* tools): the project's state — what is in it, what we do, what we decided not to do. Call task_snapshot before you start work. A work item goes to task_create, never into a TODO in a file; a task is what the user would ask about a week later${TRACKER_PLAN_CLAUSE}`
 
 /** Characters of the tracker part of the server instructions, the rule included. */
 export const ORIENTATION_LIMIT = 2500

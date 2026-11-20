@@ -1,12 +1,15 @@
 import { join } from 'path'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs'
 import { ensureProjectUserDirectory, getProjectUserPath } from './projectUserData'
+import type { FeatureLayer } from '../../shared/features'
 
 export interface ProjectSettings {
   activePanelRatio: number
   collapsedWidthPx: number
   fileTreeWidth: number
   defaultToolId?: string
+  /** The personal layer of the feature switches (src/shared/features.ts); absent when it sets none. */
+  features?: FeatureLayer
 }
 
 const DEFAULTS: ProjectSettings = {

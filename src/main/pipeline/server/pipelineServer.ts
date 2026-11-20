@@ -29,7 +29,10 @@ export interface PipelineServerOptions {
   serverName: string
   serverVersion: string
   instructions: string | ((context: RequestContext) => string)
-  tools: () => ToolDefinition[]
+  /** The tools for the connection that asks; read for every request. */
+  tools: (context: RequestContext) => ToolDefinition[]
+  /** Why a tool missing from that list cannot be called (see ServerInfo.unavailableTool). */
+  unavailableTool?: (name: string, context: RequestContext) => string | null
 }
 
 /** MCP server name of a step's result channel. */
@@ -85,7 +88,7 @@ export class PipelineServer {
     if (this.server) return
     this.options = options
     this.token = randomBytes(24).toString('hex')
-    this.mcp = new McpServer({ name: options.serverName, version: options.serverVersion, instructions: options.instructions }, options.tools)
+    this.mcp = new McpServer({ name: options.serverName, version: options.serverVersion, instructions: options.instructions, unavailableTool: options.unavailableTool }, options.tools)
     pruneStaleRuntimes(options.runtimeDir, isAlive)
     this.server = http.createServer((req, res) => { void this.handle(req, res) })
     await new Promise<void>((resolve, reject) => {

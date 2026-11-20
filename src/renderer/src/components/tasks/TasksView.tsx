@@ -2,9 +2,11 @@ import React, { useEffect, useState } from 'react'
 import { hasTasksTab, useTaskStore } from '../../store/useTaskStore'
 import { useFileTreeStore } from '../../store/useFileTreeStore'
 import { useEditorStore } from '../../store/useEditorStore'
+import { logManager } from '../../store/useLogStore'
 import { useMarkdownHtml } from '../history/markdown'
 import '../history/transcript.css'
 import { rankAtEnd, rankMoves } from './taskRank'
+import { projectFileOfLink } from './taskLinks'
 import type { TaskBoard, TaskBoardItem, TaskDetail, TaskSearchHit, TaskStatus, TaskWriteResult } from '../../../../shared/task'
 
 /**
@@ -51,17 +53,30 @@ function useWrite(): { error: string | null; write: (action: () => Promise<TaskW
   return { error, write, clear: () => setError(null) }
 }
 
-/** Opens a project-relative path (an optional "#anchor" is dropped) in the editor. */
+/** The text of a failed read, logged to the Tasks channel; the view shows it in place of the result. */
+function readFailure(what: string, err: unknown): string {
+  const text = `Could not read ${what}: ${err instanceof Error ? err.message : String(err)}`
+  logManager.append('Tasks', text)
+  return text
+}
+
+/**
+ * Opens a project file named by a doc or description link (an optional "#anchor" is dropped)
+ * in the editor. A link that resolves outside the project root is not opened.
+ */
 function openInEditor(projectPath: string | null, path: string): void {
   if (!projectPath) return
-  const relative = path.split('#')[0].replace(/^\.?[\\/]+/, '').replace(/\\/g, '/')
-  if (!relative) return
-  const sep = projectPath.includes('\\') ? '\\' : '/'
-  useEditorStore.getState().openFileInEditor(`${projectPath}${sep}${relative.split('/').join(sep)}`, relative)
+  const file = projectFileOfLink(projectPath, path)
+  if (!file) {
+    logManager.append('Tasks', `Not opened: "${path}" is not a file inside the project.`)
+    return
+  }
+  useEditorStore.getState().openFileInEditor(file.absolute, file.relative)
 }
 
 export default function TasksView(): React.ReactElement {
   const board = useTaskStore((s) => s.board)
+  const boardError = useTaskStore((s) => s.boardError)
   const selectedId = useTaskStore((s) => s.selectedId)
   const [query, setQuery] = useState('')
   const [history, setHistory] = useState(false)
@@ -75,7 +90,8 @@ export default function TasksView(): React.ReactElement {
         </label>
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 8 }}>
-        {searching ? <SearchHits query={query} history={history} /> : board ? <Sections board={board} /> : <div style={quietStyle}>Loading…</div>}
+        {!searching && boardError && <div style={{ ...quietStyle, color: '#f48771', overflowWrap: 'anywhere' }}>{boardError}</div>}
+        {searching ? <SearchHits query={query} history={history} /> : board ? <Sections board={board} /> : !boardError && <div style={quietStyle}>Loading…</div>}
       </div>
     </div>
     <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
@@ -87,11 +103,15 @@ export default function TasksView(): React.ReactElement {
 function SearchHits({ query, history }: { query: string; history: boolean }): React.ReactElement {
   const version = useTaskStore((s) => s.version)
   const [hits, setHits] = useState<TaskSearchHit[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     let alive = true
-    void window.editorApi.tasksSearch(query, history).then((result) => { if (alive) setHits(result) })
+    window.editorApi.tasksSearch(query, history)
+      .then((result) => { if (alive) { setHits(result); setError(null) } })
+      .catch((err: unknown) => { const text = readFailure('the search', err); if (alive) setError(text) })
     return () => { alive = false }
   }, [query, history, version])
+  if (error) return <div style={{ ...quietStyle, color: '#f48771', overflowWrap: 'anywhere' }}>{error}</div>
   if (!hits) return <div style={quietStyle}>Searching…</div>
   if (!hits.length) return <div style={quietStyle}>No task matches.</div>
   return <>
@@ -222,14 +242,18 @@ function TaskCard({ id }: { id: string }): React.ReactElement {
   const board = useTaskStore((s) => s.board)
   const projectPath = useFileTreeStore((s) => s.projectPath)
   const [detail, setDetail] = useState<TaskDetail | null | undefined>(undefined)
+  const [readError, setReadError] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [blocking, setBlocking] = useState(false)
   const { error, write, clear } = useWrite()
   useEffect(() => {
     let alive = true
-    void window.editorApi.tasksGet(id).then((result) => { if (alive) setDetail(result) })
+    window.editorApi.tasksGet(id)
+      .then((result) => { if (alive) { setDetail(result); setReadError(null) } })
+      .catch((err: unknown) => { const text = readFailure(`task "${id}"`, err); if (alive) setReadError(text) })
     return () => { alive = false }
   }, [id, version])
+  if (readError) return <div style={{ padding: 16, color: '#f48771', overflowWrap: 'anywhere' }}>{readError}</div>
   if (detail === undefined) return <div style={{ padding: 16, color: '#777' }}>Loading…</div>
   if (detail === null) return <div style={{ padding: 16, color: '#777' }}>Task "{id}" is no longer in aide/tasks/ or cannot be read.</div>
   const { task, revision, chain } = detail

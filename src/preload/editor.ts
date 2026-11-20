@@ -187,6 +187,9 @@ export interface EditorAPI {
   tasksRestore: (id: string) => Promise<{ error: string | null }>
   onTasksChanged: (cb: () => void) => () => void
   onPipelineTranscript: (cb: (event: { runId: string; node: string; visit: number; entry: unknown }) => void) => () => void
+  // Feature switches: the effective value for this window's project, and when it may have changed
+  featuresGet: () => Promise<{ pipelines: boolean; plans: boolean; tracker: boolean }>
+  onFeaturesChanged: (cb: () => void) => () => void
 
   // Drag & drop file path resolution (webUtils.getPathForFile, Electron 32+)
   getPathForFile: (file: File) => string
@@ -498,6 +501,12 @@ const editorApi: EditorAPI = {
     const handler = (): void => cb()
     ipcRenderer.on('tasks:changed', handler)
     return () => ipcRenderer.removeListener('tasks:changed', handler)
+  },
+  featuresGet: () => ipcRenderer.invoke('features:get'),
+  onFeaturesChanged: (cb: () => void): (() => void) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('features:changed', handler)
+    return () => ipcRenderer.removeListener('features:changed', handler)
   },
   onPipelineRunState: (cb: (snapshot: unknown) => void): (() => void) => {
     const handler = (_: unknown, snapshot: unknown): void => cb(snapshot)

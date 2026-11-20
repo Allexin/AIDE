@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import { logManager } from './useLogStore'
+import { watchFeature } from './useFeatureStore'
 import type { PlanSnapshot } from '../../../shared/plan'
 
 /**
@@ -37,8 +39,22 @@ export function hasPlans(state: { snapshot: PlanSnapshot | null }): boolean {
   return (state.snapshot?.plans.length ?? 0) > 0
 }
 
-/** Subscribe to the main process; call once per editor window. Returns an unsubscribe. */
+/**
+ * Subscribe to the main process; call once per editor window. Returns an unsubscribe.
+ * With plans turned off in Settings the store holds no plans and reads nothing.
+ */
 export function connectPlanStore(): () => void {
-  void window.editorApi.planGet().then((snapshot) => usePlanStore.getState().setSnapshot(snapshot))
-  return window.editorApi.onPlanSnapshot((snapshot) => usePlanStore.getState().setSnapshot(snapshot))
+  let on = false
+  const offFeature = watchFeature('plans', (enabled) => {
+    on = enabled
+    if (!enabled) {
+      usePlanStore.setState({ snapshot: null, detail: null })
+      return
+    }
+    window.editorApi.planGet()
+      .then((snapshot) => { if (on) usePlanStore.getState().setSnapshot(snapshot) })
+      .catch((err: unknown) => logManager.append('Pipeline', `Could not read the plans: ${err instanceof Error ? err.message : String(err)}`))
+  })
+  const offSnapshot = window.editorApi.onPlanSnapshot((snapshot) => { if (on) usePlanStore.getState().setSnapshot(snapshot) })
+  return () => { offFeature(); offSnapshot() }
 }

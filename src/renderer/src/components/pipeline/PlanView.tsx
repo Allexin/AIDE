@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { usePlanStore, type PlanDetail } from '../../store/usePlanStore'
 import { usePipelineStore } from '../../store/usePipelineStore'
+import { shownFeatures, useFeatureStore } from '../../store/useFeatureStore'
+import { PLAN_RUN_OFF_TEXT } from '../../../../shared/features'
 import { TranscriptView } from '../history/TranscriptView'
 import { journalCommitsText, skippedLabel } from '../../../../shared/pipelineCommits'
 import { planProgress, type AttentionKind, type AutopilotState, type JournalEntry, type PlanAttention, type PlanFile, type PlanTask } from '../../../../shared/plan'
@@ -45,8 +47,9 @@ export function planNeedsAttention(attention: PlanAttention | null | undefined):
 /** The status bar's plan sensor: progress and what the plan is doing. */
 export function PlanSensor({ style }: { style: React.CSSProperties }): React.ReactElement | null {
   const snapshot = usePlanStore((s) => s.snapshot)
+  const plansOn = useFeatureStore((s) => shownFeatures(s).plans)
   const active = snapshot?.plans.find((p) => p.id === snapshot.activeId)?.plan
-  if (!active) return null
+  if (!active || !plansOn) return null
   const { done, total } = planProgress(active)
   const auto = snapshot?.autopilot
   const attention = planNeedsAttention(auto?.attention)
@@ -83,6 +86,8 @@ function ActivePlan({ plan, journal, auto, control }: { plan: PlanFile; journal:
   const { done, total } = planProgress(plan)
   const status = auto?.status ?? 'idle'
   const show = usePlanStore.getState().showDetail
+  // Plans run through pipelines: with pipelines off the autopilot cannot start.
+  const canRun = useFeatureStore((s) => shownFeatures(s).pipelines)
   let phase: string | null = null
   return <>
     <div style={{ padding: '2px 10px 4px' }}>
@@ -93,7 +98,7 @@ function ActivePlan({ plan, journal, auto, control }: { plan: PlanFile; journal:
     <div style={{ height: 3, margin: '0 10px 6px', background: '#333' }}><div style={{ height: '100%', width: `${total ? Math.round(done * 100 / total) : 0}%`, background: '#4ec9b0' }} /></div>
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 10px 6px' }}>
       {(status === 'deciding' || status === 'running') && <button style={buttonStyle} title="Hold the plan after the running step" onClick={() => void control('pause')}>Pause plan</button>}
-      {status === 'idle' && plan.state === 'approved' && <button style={primaryStyle} onClick={() => void control('run')}>Run plan</button>}
+      {status === 'idle' && plan.state === 'approved' && <button style={{ ...primaryStyle, ...(canRun ? {} : { opacity: 0.5, cursor: 'default' }) }} disabled={!canRun} title={canRun ? undefined : PLAN_RUN_OFF_TEXT} onClick={() => void control('run')}>Run plan</button>}
       {plan.state === 'draft' && <button style={primaryStyle} onClick={() => void control('approve', { planId: plan.id })}>Approve</button>}
       {status === 'deciding' && auto && auto.decisions > 0 && <button style={buttonStyle} onClick={() => show({ kind: 'decision', planId: plan.id, number: auto.decisions })}>Orchestrator transcript</button>}
       {auto?.answering && <button style={buttonStyle} title={`The Orchestrator answers the ${auto.answering.kind} escalation at ${auto.answering.node}`} onClick={() => show({ kind: 'decision', planId: plan.id, number: auto.answering!.decision })}>Orchestrator answering</button>}

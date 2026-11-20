@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
+import type { FeatureLayer } from '../../shared/features'
 
 export interface EditorConfig {
   maxFileSizeMb: number
@@ -86,6 +87,8 @@ export interface AppConfig {
   agents: AgentsConfig
   updates: UpdatesConfig
   remote: RemoteConfig
+  /** The global layer of the feature switches (src/shared/features.ts); a missing key leaves the built-in default. */
+  features: FeatureLayer
   toolConfigs: Record<string, Record<string, unknown>>
 }
 
@@ -141,6 +144,7 @@ const DEFAULTS: AppConfig = {
       }
     ]
   },
+  features: {},
   toolConfigs: {},
   toolbar: {
     sounds: {
@@ -183,6 +187,7 @@ export function initAppConfig(): void {
         agents: { ...DEFAULTS.agents, ...(parsed.agents ?? {}) },
         updates: { ...DEFAULTS.updates, ...(parsed.updates ?? {}) },
         remote: { ...DEFAULTS.remote, ...(parsed.remote ?? {}) },
+        features: parsed.features && typeof parsed.features === 'object' ? parsed.features : {},
         toolConfigs: { ...DEFAULTS.toolConfigs, ...(parsed.toolConfigs ?? {}) },
         toolbar: {
           sounds: {

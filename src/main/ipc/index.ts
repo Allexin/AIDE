@@ -21,7 +21,9 @@ import {
   type ToolbarItem
 } from '../config/toolbarConfig'
 import { openProjectAndTrack } from '../windows/editor'
-import { pipelineView, planService, taskService } from '../pipeline'
+import { featureBusy, pipelineView, planService, taskService } from '../pipeline'
+import { featureRefusal, featureSaveRefusal, projectFeatures, readFeatureLayers, requireFeature, writeGlobalFeatures, writePersonalFeatures } from '../config/features'
+import { ALL_FEATURES_ON, parseFeatureLayer, type FeatureLayer, type FeatureName } from '../../shared/features'
 import type { TaskWriteResult } from '../../shared/task'
 import type { AnswerAction, RunControl } from '../pipeline/viewService'
 import { orchestrators } from '../pipeline/orchestrators'
@@ -457,49 +459,60 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   })
 
   // ── Pipeline: run view and controls (overlay) ─────────────────────────────────
-  ipcMain.handle('pipeline:get-run', (event) => {
+  // A feature turned off in Settings (docs/task-tracker-implementation.md §10): reads throw
+  // the "turned off in Settings" error, controls and writes answer it as their error text.
+  const projectWith = (event: Electron.IpcMainInvokeEvent, feature: FeatureName): string | undefined => {
     const projectPath = projectOf(event.sender)
+    if (projectPath) requireFeature(projectPath, feature)
+    return projectPath
+  }
+  ipcMain.handle('pipeline:get-run', (event) => {
+    const projectPath = projectWith(event, 'pipelines')
     return projectPath ? pipelineView.snapshot(projectPath) : null
   })
   ipcMain.handle('pipeline:control', async (event, action: RunControl) => {
     const projectPath = projectOf(event.sender)
-    return projectPath ? pipelineView.control(projectPath, action) : 'No project.'
+    if (!projectPath) return 'No project.'
+    return featureRefusal(projectPath, 'pipelines') ?? pipelineView.control(projectPath, action)
   })
   ipcMain.handle('pipeline:answer', async (event, escalationId: string, action: AnswerAction, text: string) => {
     const projectPath = projectOf(event.sender)
-    return projectPath ? pipelineView.answer(projectPath, escalationId, action, text) : 'No project.'
+    if (!projectPath) return 'No project.'
+    return featureRefusal(projectPath, 'pipelines') ?? pipelineView.answer(projectPath, escalationId, action, text)
   })
   ipcMain.handle('pipeline:get-transcript', (event, runId: string, node: string, visit: number) => {
-    const projectPath = projectOf(event.sender)
+    const projectPath = projectWith(event, 'pipelines')
     return projectPath ? pipelineView.transcript(projectPath, runId, node, visit) : []
   })
   ipcMain.handle('pipeline:get-agent-input', (event, runId: string, node: string, visit: number) => {
-    const projectPath = projectOf(event.sender)
+    const projectPath = projectWith(event, 'pipelines')
     return projectPath ? pipelineView.agentInputs(projectPath, runId, node, visit) : []
   })
   ipcMain.handle('pipeline:get-check-log', (event, runId: string, node: string, visit: number) => {
-    const projectPath = projectOf(event.sender)
+    const projectPath = projectWith(event, 'pipelines')
     return projectPath ? pipelineView.checkLog(projectPath, runId, node, visit) : ''
   })
   // ── Plans: the plan tab ─────────────────────────────────────────────────────────
   ipcMain.handle('plan:get', (event) => {
-    const projectPath = projectOf(event.sender)
+    const projectPath = projectWith(event, 'plans')
     return projectPath ? planService.snapshot(projectPath) : null
   })
   ipcMain.handle('plan:control', async (event, action: string, options: { planId?: string; note?: string; redecide?: boolean }) => {
     const projectPath = projectOf(event.sender)
-    return projectPath ? planService.control(projectPath, action, options ?? {}) : 'No project.'
+    if (!projectPath) return 'No project.'
+    // With pipelines off, "run" is refused by the plan service itself, with the reason.
+    return featureRefusal(projectPath, 'plans') ?? planService.control(projectPath, action, options ?? {})
   })
   ipcMain.handle('plan:run-snapshot', (event, runId: string) => {
-    const projectPath = projectOf(event.sender)
+    const projectPath = projectWith(event, 'plans')
     return projectPath ? planService.runSnapshot(projectPath, runId) : null
   })
   ipcMain.handle('plan:decision', (event, planId: string, decision: number) => {
-    const projectPath = projectOf(event.sender)
+    const projectPath = projectWith(event, 'plans')
     return projectPath ? planService.decisionRecord(projectPath, planId, decision) : null
   })
   ipcMain.handle('pipeline:get-report', (event, runId: string) => {
-    const projectPath = projectOf(event.sender)
+    const projectPath = projectWith(event, 'pipelines')
     return projectPath ? pipelineView.report(projectPath, runId) : null
   })
 
@@ -509,6 +522,8 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   const taskWrite = async (event: Electron.IpcMainInvokeEvent, write: (projectPath: string, by: string) => Promise<{ id?: string; revision?: string }>): Promise<TaskWriteResult> => {
     const projectPath = projectOf(event.sender)
     if (!projectPath) return { error: 'No project.' }
+    const refusal = featureRefusal(projectPath, 'tracker')
+    if (refusal) return { error: refusal }
     try {
       const result = await write(projectPath, taskService.actor(null))
       return { error: null, ...(result.id ? { id: result.id } : {}) }
@@ -517,19 +532,19 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     }
   }
   ipcMain.handle('tasks:tab-tasks', (event) => {
-    const projectPath = projectOf(event.sender)
+    const projectPath = projectWith(event, 'tracker')
     return projectPath ? taskService.tabTasks(projectPath) : {}
   })
   ipcMain.handle('tasks:list', (event) => {
-    const projectPath = projectOf(event.sender)
+    const projectPath = projectWith(event, 'tracker')
     return projectPath ? taskService.board(projectPath) : null
   })
   ipcMain.handle('tasks:search', (event, query: string, history: boolean) => {
-    const projectPath = projectOf(event.sender)
+    const projectPath = projectWith(event, 'tracker')
     return projectPath ? taskService.search(projectPath, { query, history }) : []
   })
   ipcMain.handle('tasks:get', (event, id: string) => {
-    const projectPath = projectOf(event.sender)
+    const projectPath = projectWith(event, 'tracker')
     if (!projectPath) return null
     try {
       return taskService.get(projectPath, id)
@@ -1331,6 +1346,38 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     // The status bar, the pipeline tab and the Load Account menu show account data.
     broadcastAccountsChanged()
     rebuildMenu()
+  })
+
+  // ── Feature switches (docs/task-tracker-implementation.md §10) ─────────────────
+  // The editor window reads the effective switches of its project; Settings edits the
+  // global layer and the personal layer of the project whose window opened it.
+  ipcMain.handle('features:get', (event) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? projectFeatures(projectPath) : ALL_FEATURES_ON
+  })
+  const settingsProject = (sender: Electron.WebContents): string | null => {
+    const parent = BrowserWindow.fromWebContents(sender)?.getParentWindow()
+    return parent ? [...openProjects].find(([, win]) => win === parent)?.[0] ?? null : null
+  }
+  ipcMain.handle('settings:get-features', (event) => {
+    const projectPath = settingsProject(event.sender)
+    const layers = projectPath ? readFeatureLayers(projectPath) : null
+    return {
+      global: parseFeatureLayer(getAppConfig().features),
+      project: projectPath && layers ? { path: projectPath, config: parseFeatureLayer(layers.project), personal: parseFeatureLayer(layers.personal) } : null
+    }
+  })
+  ipcMain.handle('settings:save-features', (event, global: FeatureLayer, personal: FeatureLayer | null) => {
+    const projectPath = settingsProject(event.sender)
+    const nextGlobal = parseFeatureLayer(global)
+    const nextPersonal = projectPath && personal ? { projectPath, layer: parseFeatureLayer(personal) } : null
+    // Nothing is written when a switch would go off where it is busy (a run, the plan autopilot).
+    const refusal = featureSaveRefusal([...openProjects.keys()], nextGlobal, nextPersonal, readFeatureLayers, featureBusy)
+    if (refusal) return refusal
+    writeGlobalFeatures(nextGlobal)
+    if (nextPersonal) writePersonalFeatures(nextPersonal.projectPath, nextPersonal.layer)
+    for (const [path, win] of openProjects) if (!win.isDestroyed()) win.webContents.send('features:changed', path)
+    return null
   })
 
   // ── Settings: agents' work instruction (AIDE's text and the user's override) ─

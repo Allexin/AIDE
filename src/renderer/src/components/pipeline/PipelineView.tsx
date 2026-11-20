@@ -5,6 +5,7 @@ import { blockTitle, machineClis, walkSteps, type AgentInputRecord, type Step } 
 import { AccountLabel, UsageLabel, useAccountUsage } from '../cli/AccountUsage'
 import { DecisionDetail, PlanPanel, planNeedsAttention, usePastRun } from './PlanView'
 import { hasPlans, usePlanStore } from '../../store/usePlanStore'
+import { shownFeatures, useFeatureStore } from '../../store/useFeatureStore'
 import { escalationAudience, planProgress } from '../../../../shared/plan'
 import { commitLine, hasSeveralRepos, reportHasSeveralRepos, setupSkipReason, skippedCommitReason, skippedLabel } from '../../../../shared/pipelineCommits'
 
@@ -111,11 +112,14 @@ export function PipelineTabButton({ isActive, onSelect }: { isActive: boolean; o
 /** The pipeline tab: the plan, when there is one, as the parent of the run shown next to it. */
 export default function PipelineView(): React.ReactElement | null {
   const current = usePipelineStore((s) => s.run)
-  const plans = usePlanStore(hasPlans)
+  const features = useFeatureStore(shownFeatures)
+  const plans = usePlanStore(hasPlans) && features.plans
   const detail = usePlanStore((s) => s.detail)
-  const past = usePastRun(detail?.kind === 'run' ? detail.runId : null)
+  // With pipelines off the tab shows the plans only: no run, past or current (§10 of the tracker implementation doc).
+  const past = usePastRun(detail?.kind === 'run' && features.pipelines ? detail.runId : null)
   const shownRun = detail?.kind === 'run' ? past : current
   const pane = detail?.kind === 'decision' ? <DecisionDetail key={detail.number} planId={detail.planId} number={detail.number} />
+    : !features.pipelines ? <div style={{ padding: 16, color: '#777', fontSize: 12, fontFamily: 'Segoe UI, sans-serif' }}>Pipelines are turned off in Settings. Runs and their history are kept and come back when pipelines are on again.</div>
     : shownRun ? <RunView key={shownRun.runId} run={shownRun} past={detail?.kind === 'run' && current?.runId !== shownRun.runId} withPlan={plans} />
       : <div style={{ padding: 16, color: '#777', fontSize: 12, fontFamily: 'Segoe UI, sans-serif' }}>{detail?.kind === 'run' ? 'Loading…' : 'No run yet. Open a task to see what happened to it.'}</div>
   return <div style={{ position: 'absolute', inset: 0, display: 'flex', background: '#1e1e1e' }}>

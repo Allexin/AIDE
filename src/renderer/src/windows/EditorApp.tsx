@@ -13,6 +13,7 @@ import ThinkingPanel from '../components/thinking/ThinkingPanel'
 import StatusBar from '../components/layout/StatusBar'
 import { connectPipelineStore } from '../store/usePipelineStore'
 import { connectPlanStore } from '../store/usePlanStore'
+import { connectFeatureStore } from '../store/useFeatureStore'
 import { connectTaskStore } from '../store/useTaskStore'
 
 export default function EditorApp(): React.ReactElement {
@@ -56,6 +57,8 @@ export default function EditorApp(): React.ReactElement {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pipeline run state for the pipeline tab and the terminal banner
+  // The feature switches first: the stores below load nothing for a feature that is off.
+  useEffect(() => connectFeatureStore(), [])
   useEffect(() => connectPipelineStore(), [])
   useEffect(() => connectPlanStore(), [])
   useEffect(() => connectTaskStore(), [])

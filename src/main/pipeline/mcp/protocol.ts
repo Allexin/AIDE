@@ -50,6 +50,8 @@ export interface ServerInfo {
   version: string
   /** A function is read at every `initialize`, with the connection that asks, so a changed setting reaches the next session. */
   instructions: string | ((context: RequestContext) => string)
+  /** Why a tool that is not in the list cannot be called for this connection (a feature switched off); null: unknown tool. */
+  unavailableTool?: (name: string, context: RequestContext) => string | null
 }
 
 const ERR_METHOD_NOT_FOUND = -32601
@@ -71,7 +73,8 @@ export class McpServer {
   /** Tool calls in progress, by shim connection and request id, so notifications/cancelled can reach them. */
   private readonly inFlight = new Map<string, AbortController>()
 
-  constructor(private readonly info: ServerInfo, private readonly tools: () => ToolDefinition[]) {}
+  /** `tools` is read for every request with the connection that asks: the list can differ per project (feature switches). */
+  constructor(private readonly info: ServerInfo, private readonly tools: (context: RequestContext) => ToolDefinition[]) {}
 
   clientInfo(connectionId: string): { name: string; version: string } | null {
     return this.clients.get(connectionId) ?? null
@@ -126,12 +129,16 @@ export class McpServer {
         return {
           jsonrpc: '2.0',
           id: message.id,
-          result: { tools: this.tools().map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) }
+          result: { tools: this.tools(context).map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) }
         }
       case 'tools/call': {
         const name = params.name
-        const tool = this.tools().find((t) => t.name === name)
-        if (!tool) return errorResponse(message.id, ERR_INVALID_PARAMS, `Unknown tool: ${String(name)}`)
+        const tool = this.tools(context).find((t) => t.name === name)
+        if (!tool) {
+          const reason = typeof name === 'string' ? this.info.unavailableTool?.(name, context) ?? null : null
+          if (reason) return { jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: reason }], isError: true } }
+          return errorResponse(message.id, ERR_INVALID_PARAMS, `Unknown tool: ${String(name)}`)
+        }
         const args = params.arguments && typeof params.arguments === 'object' ? params.arguments as Record<string, unknown> : {}
         const controller = new AbortController()
         const key = requestKey(context.connectionId, message.id)
