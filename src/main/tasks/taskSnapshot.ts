@@ -31,16 +31,16 @@ export function hasClaim(task: TaskFile): boolean {
   return !task.history && task.claim !== null
 }
 
-function isDecidedAgainst(task: TaskFile): boolean {
+export function isDecidedAgainst(task: TaskFile): boolean {
   return !task.history && task.claim === null && task.decidedAgainst !== null
 }
 
 /** The tag a task is listed under: its first. */
-function tagOf(task: TaskFile): string {
+export function tagOf(task: TaskFile): string {
   return task.tags[0] ?? NO_TAG
 }
 
-function byRank(a: TaskFile, b: TaskFile): number {
+export function byRank(a: TaskFile, b: TaskFile): number {
   if (a.rank !== b.rank) return a.rank === null ? 1 : b.rank === null ? -1 : a.rank - b.rank
   return a.created.localeCompare(b.created)
 }

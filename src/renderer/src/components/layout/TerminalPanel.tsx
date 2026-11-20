@@ -10,7 +10,8 @@ import RunStateBanner from '../pipeline/RunStateBanner'
 import PipelineView, { PipelineTabButton } from '../pipeline/PipelineView'
 import { hasPipelineTab, usePipelineStore } from '../../store/usePipelineStore'
 import { hasPlans, usePlanStore } from '../../store/usePlanStore'
-import { tabTaskLabel, useTaskStore } from '../../store/useTaskStore'
+import { hasTasksTab, tabTaskLabel, useTaskStore } from '../../store/useTaskStore'
+import TasksView, { TasksTabButton } from '../tasks/TasksView'
 
 // VS Dark terminal theme
 const VS_DARK_THEME = {
@@ -322,10 +323,16 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
   const pipelineTab = usePipelineStore(hasPipelineTab) || planExists
   const pipelineActive = usePipelineStore((s) => s.viewActive) && pipelineTab
   const setPipelineActive = usePipelineStore((s) => s.setViewActive)
-  const terminalVisible = !pipelineActive
+  // The Tasks tab sits next to it the same way, shown when the project has aide/tasks/.
+  const tasksTab = useTaskStore(hasTasksTab)
+  const tasksActive = useTaskStore((s) => s.viewActive) && tasksTab && !pipelineActive
+  const setTasksActive = useTaskStore((s) => s.setViewActive)
+  const terminalVisible = !pipelineActive && !tasksActive
 
-  // Any session tab switch (click, keyboard, main process) leaves the pipeline tab.
-  useEffect(() => { setPipelineActive(false) }, [activeTabId, setPipelineActive])
+  // Any session tab switch (click, keyboard, main process) leaves the pipeline and Tasks tabs.
+  useEffect(() => { setPipelineActive(false); setTasksActive(false) }, [activeTabId, setPipelineActive, setTasksActive])
+  // The pipeline tab opened (here or from the run banner) leaves the Tasks tab.
+  useEffect(() => { if (pipelineActive) setTasksActive(false) }, [pipelineActive, setTasksActive])
 
   const activeTab = tabs.find((tab) => tab.tabId === activeTabId)
 
@@ -367,10 +374,11 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
     // Render the switch synchronously: a terminal that is still hidden cannot take focus.
     flushSync(() => {
       setPipelineActive(false)
+      setTasksActive(false)
       setActiveTab(tabId)
     })
     fitFunctions.current.get(tabId)?.focus()
-  }, [setActiveTab, setPipelineActive])
+  }, [setActiveTab, setPipelineActive, setTasksActive])
 
   // H3: Close tab — kill PTY, remove from store
   const handleCloseTab = useCallback((tabId: string) => {
@@ -553,9 +561,10 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
       >
         {/* Session tab strip — scrolls horizontally on overflow */}
         {pipelineTab && <PipelineTabButton isActive={pipelineActive} onSelect={() => setPipelineActive(true)} />}
+        {tasksTab && <TasksTabButton isActive={tasksActive} onSelect={() => setTasksActive(true)} />}
         <TabStrip
           tabs={tabs}
-          activeTabId={pipelineActive ? null : activeTabId}
+          activeTabId={terminalVisible ? activeTabId : null}
           remoteLockedTabs={remoteLockedTabs}
           onSelectTab={handleSelectTab}
           onCloseTab={handleCloseTab}
@@ -640,6 +649,7 @@ export default function TerminalPanel({ style }: TerminalPanelProps): React.Reac
           />
         ))}
         {pipelineActive && <PipelineView />}
+        {tasksActive && <TasksView />}
         {!initialized && (
           <div
             style={{

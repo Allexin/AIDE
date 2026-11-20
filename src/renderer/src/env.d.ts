@@ -271,6 +271,13 @@ interface EditorAPI {
   onPlanDecisionEntry: (cb: (event: { planId: string; decision: number }) => void) => () => void
   // Task tracker
   tasksTabTasks: () => Promise<Record<string, { id: string; title: string }>>
+  tasksList: () => Promise<import('../../shared/task').TaskBoard | null>
+  tasksSearch: (query: string, history: boolean) => Promise<import('../../shared/task').TaskSearchHit[]>
+  tasksGet: (id: string) => Promise<import('../../shared/task').TaskDetail | null>
+  tasksCreate: (fields: { title: string; status: 'backlog' | 'planned'; rank?: number }) => Promise<import('../../shared/task').TaskWriteResult>
+  tasksUpdate: (id: string, baseRevision: string, fields: Record<string, unknown>) => Promise<import('../../shared/task').TaskWriteResult>
+  tasksToHistory: (id: string, reason?: string) => Promise<import('../../shared/task').TaskWriteResult>
+  tasksRestore: (id: string) => Promise<import('../../shared/task').TaskWriteResult>
   onTasksChanged: (cb: () => void) => () => void
   onPipelineTranscript: (cb: (event: { runId: string; node: string; visit: number; entry: HistoryEntry }) => void) => () => void
 

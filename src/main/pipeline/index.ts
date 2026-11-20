@@ -190,7 +190,21 @@ export function attachPipelineProject(projectPath: string, win: BrowserWindow): 
   planService.on('changed', onPlanChanged)
   const onDecisionEntry = (path: string, planId: string, decision: number): void => { if (path === projectPath) send('plan:decision-entry', { planId, decision }) }
   planService.on('decision-entry', onDecisionEntry)
-  const onTasksChanged = (path: string): void => { if (path === projectPath) send('tasks:changed', projectPath) }
+  // A write of the service comes back through the FS watcher as a second 'changed': the
+  // window hears of a change only when what a view shows differs from the last notice.
+  let tasksKey: string | null = null
+  const onTasksChanged = (path: string): void => {
+    if (path !== projectPath) return
+    let key: string | null = null
+    try {
+      key = taskService.changeKey(projectPath)
+    } catch (err) {
+      logEvent('task-change-key-failed', { projectPath, message: err instanceof Error ? err.message : String(err) }, 'warn')
+    }
+    if (key !== null && key === tasksKey) return
+    tasksKey = key
+    send('tasks:changed', projectPath)
+  }
   taskService.on('changed', onTasksChanged)
   // The FS watcher skips dot paths only: changes under aide/tasks/ reach it, the lease file does not.
   const stopTaskWatch = addFsChangeObserver((path, fullPath) => {

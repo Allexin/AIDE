@@ -1,8 +1,8 @@
 # Task tracker — implementation of build steps 2 and 4
 
-Status: §1–§7 (shared types, file format, store, service, MCP tools, tab binding, snapshot, orientation
-and tails) are implemented; §8 (the Tasks tab) is not. The `by` of an agent uses the number of its tab id
-(`tab-3` → `allex/tab 3`): the tab strip shows titles, not numbers. Choices the §6–§7 implementation made
+Status: §1–§8 (shared types, file format, store, service, MCP tools, tab binding, snapshot, orientation
+and tails, the Tasks tab) are implemented. The `by` of an agent uses the number of its tab id
+(`tab-3` → `allex/tab 3`): the tab strip shows titles, not numbers. Choices the §6–§8 implementation made
 are noted at the end of those sections.
 
 The concept is `docs/task-tracker-spec.md`; read it first, §The task, §Current task, §Context delivery,
@@ -274,6 +274,27 @@ pipeline tab does: mirror it). The view (`src/renderer/src/components/tasks/Task
   edits of title/tags/description are.
 - Quick add at the top of Planned and Backlog: a title field; Enter creates the task with a generated id.
 - All text in English. Use the look of `PlanView.tsx` (fonts, colours, spacing).
+
+As implemented (`src/renderer/src/components/tasks/TasksView.tsx`, `taskRank.ts`, `useTaskStore.ts`,
+`src/main/tasks/taskBoard.ts`, `TaskService.board` / `changeKey`):
+
+- The tab mirrors the pipeline tab: it is shown when the project has `aide/tasks/`, with no menu entry.
+  Its button reads `Tasks <active count>` and turns orange with ` !` while there are problems. Selecting
+  it leaves the pipeline tab and the reverse; a session tab switch leaves both.
+- `tasks:list` returns the board (`TaskBoard` in `src/shared/task.ts`): the sections computed in main from
+  one reading, tasks in history left out. The search box uses `tasks:search` (`TaskService.search`, at
+  most 50 hits); "Include history" with an empty query lists everything. The card reads `tasks:get`.
+  Writes go through `tasks:create`, `tasks:update`, `tasks:to-history` and `tasks:restore` as the user
+  (`by` = `<user>`) and answer `{ error }` instead of throwing.
+- `tasks:changed` is sent only when `TaskService.changeKey` (the task files with their revisions, the
+  config error and the bindings that count) differs from the last notice, so a write announced by the
+  service and its echo from the FS watcher reach the window once.
+- Drag in Planned and Backlog writes the rank between the new neighbours (one `task_update` per moved
+  task). Dropped among unranked tasks, the unranked ones above the drop place get ranks too, so the order
+  written is the order shown; two neighbours with the same rank renumber the list. Quick add, "Move to
+  planned/backlog" and "Pause" put the task after the last ranked one.
+- A doc link and a relative link in the description open the project file in the editor (the `#anchor`
+  is dropped); a web link opens in the browser.
 
 ## 9. Not in this work
 

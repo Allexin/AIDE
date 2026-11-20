@@ -22,6 +22,7 @@ import {
 } from '../config/toolbarConfig'
 import { openProjectAndTrack } from '../windows/editor'
 import { pipelineView, planService, taskService } from '../pipeline'
+import type { TaskWriteResult } from '../../shared/task'
 import type { AnswerAction, RunControl } from '../pipeline/viewService'
 import { orchestrators } from '../pipeline/orchestrators'
 import { osDisplayName } from '../platform'
@@ -481,11 +482,6 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     return projectPath ? pipelineView.checkLog(projectPath, runId, node, visit) : ''
   })
   // ── Plans: the plan tab ─────────────────────────────────────────────────────────
-  // ── Tasks: the current task of each terminal tab (task tracker §6) ──────────
-  ipcMain.handle('tasks:tab-tasks', (event) => {
-    const projectPath = projectOf(event.sender)
-    return projectPath ? taskService.tabTasks(projectPath) : {}
-  })
   ipcMain.handle('plan:get', (event) => {
     const projectPath = projectOf(event.sender)
     return projectPath ? planService.snapshot(projectPath) : null
@@ -506,6 +502,50 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const projectPath = projectOf(event.sender)
     return projectPath ? pipelineView.report(projectPath, runId) : null
   })
+
+  // ── Tasks: the task tracker (docs/task-tracker-implementation.md §6, §8) ──────
+  // The current task of each terminal tab, and the Tasks tab. Writes from the UI act as
+  // the user ("<user>", no tab) and answer with the error text instead of throwing.
+  const taskWrite = async (event: Electron.IpcMainInvokeEvent, write: (projectPath: string, by: string) => Promise<{ id?: string; revision?: string }>): Promise<TaskWriteResult> => {
+    const projectPath = projectOf(event.sender)
+    if (!projectPath) return { error: 'No project.' }
+    try {
+      const result = await write(projectPath, taskService.actor(null))
+      return { error: null, ...(result.id ? { id: result.id } : {}) }
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+  ipcMain.handle('tasks:tab-tasks', (event) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? taskService.tabTasks(projectPath) : {}
+  })
+  ipcMain.handle('tasks:list', (event) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? taskService.board(projectPath) : null
+  })
+  ipcMain.handle('tasks:search', (event, query: string, history: boolean) => {
+    const projectPath = projectOf(event.sender)
+    return projectPath ? taskService.search(projectPath, { query, history }) : []
+  })
+  ipcMain.handle('tasks:get', (event, id: string) => {
+    const projectPath = projectOf(event.sender)
+    if (!projectPath) return null
+    try {
+      return taskService.get(projectPath, id)
+    } catch {
+      // Removed or made invalid since the list was read: the card says so.
+      return null
+    }
+  })
+  ipcMain.handle('tasks:create', (event, fields: { title: string; status: 'backlog' | 'planned'; rank?: number }) =>
+    taskWrite(event, (projectPath, by) => taskService.create(projectPath, fields, by)))
+  ipcMain.handle('tasks:update', (event, id: string, baseRevision: string, fields: Record<string, unknown>) =>
+    taskWrite(event, (projectPath, by) => taskService.update(projectPath, id, baseRevision, fields, by)))
+  ipcMain.handle('tasks:to-history', (event, id: string, reason?: string) =>
+    taskWrite(event, (projectPath, by) => taskService.toHistory(projectPath, id, reason, by)))
+  ipcMain.handle('tasks:restore', (event, id: string) =>
+    taskWrite(event, (projectPath, by) => taskService.restore(projectPath, id, by)))
 
   // ── CLI tools: list registered tools ──────────────────────────────────────────
   ipcMain.handle('cli-tools:list', () => getRegisteredTools().map((t) => ({ id: t.id, name: t.name })))

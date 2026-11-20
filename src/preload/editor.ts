@@ -178,6 +178,13 @@ export interface EditorAPI {
   onPlanDecisionEntry: (cb: (event: { planId: string; decision: number }) => void) => () => void
   // Task tracker
   tasksTabTasks: () => Promise<Record<string, { id: string; title: string }>>
+  tasksList: () => Promise<unknown>
+  tasksSearch: (query: string, history: boolean) => Promise<unknown[]>
+  tasksGet: (id: string) => Promise<unknown>
+  tasksCreate: (fields: { title: string; status: 'backlog' | 'planned'; rank?: number }) => Promise<{ error: string | null; id?: string }>
+  tasksUpdate: (id: string, baseRevision: string, fields: Record<string, unknown>) => Promise<{ error: string | null }>
+  tasksToHistory: (id: string, reason?: string) => Promise<{ error: string | null }>
+  tasksRestore: (id: string) => Promise<{ error: string | null }>
   onTasksChanged: (cb: () => void) => () => void
   onPipelineTranscript: (cb: (event: { runId: string; node: string; visit: number; entry: unknown }) => void) => () => void
 
@@ -480,6 +487,13 @@ const editorApi: EditorAPI = {
     return () => ipcRenderer.removeListener('plan:snapshot', handler)
   },
   tasksTabTasks: () => ipcRenderer.invoke('tasks:tab-tasks'),
+  tasksList: () => ipcRenderer.invoke('tasks:list'),
+  tasksSearch: (query, history) => ipcRenderer.invoke('tasks:search', query, history),
+  tasksGet: (id) => ipcRenderer.invoke('tasks:get', id),
+  tasksCreate: (fields) => ipcRenderer.invoke('tasks:create', fields),
+  tasksUpdate: (id, baseRevision, fields) => ipcRenderer.invoke('tasks:update', id, baseRevision, fields),
+  tasksToHistory: (id, reason) => ipcRenderer.invoke('tasks:to-history', id, reason),
+  tasksRestore: (id) => ipcRenderer.invoke('tasks:restore', id),
   onTasksChanged: (cb: () => void): (() => void) => {
     const handler = (): void => cb()
     ipcRenderer.on('tasks:changed', handler)

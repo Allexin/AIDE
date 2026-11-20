@@ -2,12 +2,13 @@ import { EventEmitter } from 'events'
 import { existsSync } from 'fs'
 import { hostname, userInfo } from 'os'
 import { join } from 'path'
-import { CLOSED_TASK_STATUSES, DEFAULT_TASK_CONFIG, type TaskFile, type TaskListEntry, type TaskStatus } from '../../shared/task'
+import { CLOSED_TASK_STATUSES, DEFAULT_TASK_CONFIG, type TaskBoard, type TaskChainEntry, type TaskDetail, type TaskFile, type TaskListEntry, type TaskSearchHit, type TaskStatus } from '../../shared/task'
 import { TASK_ID_PATTERN } from './taskFile'
 import { TASKS_DIR, TaskStore, type LeaseOwner, type TaskChange } from './taskStore'
 import { bindTab, isOwn, isThisUserHere, readAllBindings, unbindTabs, unbindTask, type BindingOwner } from './taskBindings'
 import { renderSnapshot, staleActives, trackerOrientation, type Workers } from './taskSnapshot'
 import { TrackerTail, summarize, type TrackerState } from './taskTail'
+import { taskBoard } from './taskBoard'
 
 /**
  * The task tracker of the open projects (docs/task-tracker-implementation.md §4): every
@@ -57,39 +58,7 @@ export interface TaskSearchQuery {
   history?: boolean
 }
 
-export interface TaskSearchHit {
-  id: string
-  title: string
-  status: TaskStatus
-  label: string | null
-  claimFirstLine: string | null
-  tags: string[]
-  /** In history: no longer true or no longer relevant. Only found when the search includes history. */
-  history: boolean
-}
-
-export interface TaskChainEntry {
-  id: string
-  title: string
-  status: TaskStatus
-  label: string | null
-  claim: string | null
-  closed: string | null
-  /** The task that superseded this one. */
-  supersededBy: string | null
-  journal: string[]
-}
-
-export interface TaskDetail {
-  task: TaskFile
-  revision: string
-  /** The claim chain: the tasks this one superseded (oldest first), and the ones that superseded it, in order. */
-  chain: { earlier: TaskChainEntry[]; later: TaskChainEntry[] }
-  /** Tabs of this user bound to the task. */
-  tabs: string[]
-  /** Plans that list the task in `solves` (empty until plans have `solves`). */
-  plans: string[]
-}
+export type { TaskSearchHit, TaskChainEntry, TaskDetail }
 
 export interface TaskCloseArgs {
   outcome: 'done' | 'cancelled'
@@ -618,13 +587,8 @@ export class TaskService extends EventEmitter {
     return [...loaded, ...stale]
   }
 
-  /** The text of `task_snapshot` for a tab (null outside a tab); the connection has seen the tracker as it is now. */
-  snapshot(projectPath: string, tabId: string | null, connectionId?: string): string {
-    const store = this.store(projectPath)
-    const entries = store.list()
-    const tasks = entries.flatMap((entry) => entry.task ? [entry.task] : [])
-    const bindings = this.bindings(projectPath, tasks)
-    const own = tabId ? bindings.find((binding) => binding.here && binding.tabId === tabId) : undefined
+  /** Who works on each active task: its bindings, and the users of `activeBy` without one as "<user> (no tab)". */
+  private workers(tasks: TaskFile[], bindings: TaskBindingView[]): Workers {
     const workers: Workers = new Map()
     for (const task of tasks) {
       if (task.status !== 'active' || task.history) continue
@@ -632,6 +596,55 @@ export class TaskService extends EventEmitter {
       for (const user of task.activeBy) if (!bindings.some((binding) => binding.task === task.id && binding.user === user)) who.push(`${user} (no tab)`)
       workers.set(task.id, who)
     }
+    return workers
+  }
+
+  /** The sections of the Tasks tab (§8); a project without `aide/tasks/` has an empty board with `exists: false`. */
+  board(projectPath: string): TaskBoard {
+    const exists = existsSync(join(projectPath, TASKS_DIR))
+    const entries = exists ? this.store(projectPath).list() : []
+    const tasks = entries.flatMap((entry) => entry.task ? [entry.task] : [])
+    const bindings = this.bindings(projectPath, tasks)
+    const problems = this.problems(projectPath, entries, bindings).map((problem) => problem.message)
+    try {
+      if (exists) this.store(projectPath).config()
+    } catch (err) {
+      problems.unshift(err instanceof Error ? err.message : String(err))
+    }
+    return taskBoard({ exists, entries, problems, workers: this.workers(tasks, bindings) })
+  }
+
+  /**
+   * What a view of the tracker shows, as one string: the files and their revisions, the
+   * bindings that count. Two 'changed' events with the same key changed nothing a view
+   * shows, as when the FS watcher reports a write this service already announced.
+   */
+  changeKey(projectPath: string): string {
+    const exists = existsSync(join(projectPath, TASKS_DIR))
+    const entries = exists ? this.store(projectPath).list() : []
+    const tasks = entries.flatMap((entry) => entry.task ? [entry.task] : [])
+    let config: string | null = null
+    try {
+      if (exists) this.store(projectPath).config()
+    } catch (err) {
+      config = err instanceof Error ? err.message : String(err)
+    }
+    return JSON.stringify({
+      exists,
+      config,
+      files: entries.map((entry) => [entry.file, entry.revision, entry.error]),
+      bindings: this.bindings(projectPath, tasks).map((binding) => [binding.tabId, binding.task, binding.who])
+    })
+  }
+
+  /** The text of `task_snapshot` for a tab (null outside a tab); the connection has seen the tracker as it is now. */
+  snapshot(projectPath: string, tabId: string | null, connectionId?: string): string {
+    const store = this.store(projectPath)
+    const entries = store.list()
+    const tasks = entries.flatMap((entry) => entry.task ? [entry.task] : [])
+    const bindings = this.bindings(projectPath, tasks)
+    const own = tabId ? bindings.find((binding) => binding.here && binding.tabId === tabId) : undefined
+    const workers = this.workers(tasks, bindings)
     let budget: number
     let configProblem: string[] = []
     try {

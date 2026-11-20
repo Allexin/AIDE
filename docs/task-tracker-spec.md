@@ -1,8 +1,10 @@
 # Task tracker and Documenter
 
-Draft, 2026-11-20, fifth revision (after four reviews). Implemented so far: the task file format
-and the store of build step 2 (`src/shared/task.ts`, `src/main/tasks/`; see
-`docs/task-tracker-implementation.md` §1–§3); the service, tools and views are not. The concept is
+Draft, 2026-11-20, fifth revision (after four reviews). Implemented so far: build steps 2 and 4 —
+the task file format, the store, the service, the `task_*` tools, the Tasks tab, the tab binding, the
+snapshot, the orientation and the tails (`src/shared/task.ts`, `src/main/tasks/`; see
+`docs/task-tracker-implementation.md` §1–§8), with the interim close; drift, candidates, the full
+close and the Documenter (steps 5–7) are not. The concept is
 settled; the details of drift are to be tuned on data from shadow mode (§Scope, build order step 5).
 
 ## Problem

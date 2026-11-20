@@ -97,3 +97,82 @@ export interface TaskConfig {
 }
 
 export const DEFAULT_TASK_CONFIG: TaskConfig = { snapshotLabelBudget: 12000 }
+
+/** A hit of `TaskService.search`. */
+export interface TaskSearchHit {
+  id: string
+  title: string
+  status: TaskStatus
+  label: string | null
+  claimFirstLine: string | null
+  tags: string[]
+  /** In history: no longer true or no longer relevant. Only found when the search includes history. */
+  history: boolean
+}
+
+export interface TaskChainEntry {
+  id: string
+  title: string
+  status: TaskStatus
+  label: string | null
+  claim: string | null
+  closed: string | null
+  /** The task that superseded this one. */
+  supersededBy: string | null
+  journal: string[]
+}
+
+/** A task as `TaskService.get` returns it. */
+export interface TaskDetail {
+  task: TaskFile
+  revision: string
+  /** The claim chain: the tasks this one superseded (oldest first), and the ones that superseded it, in order. */
+  chain: { earlier: TaskChainEntry[]; later: TaskChainEntry[] }
+  /** Tabs of this user bound to the task. */
+  tabs: string[]
+  /** Plans that list the task in `solves` (empty until plans have `solves`). */
+  plans: string[]
+}
+
+/** One task in a section of the Tasks tab (docs/task-tracker-implementation.md §8). */
+export interface TaskBoardItem {
+  id: string
+  title: string
+  status: TaskStatus
+  rank: number | null
+  tags: string[]
+  label: string | null
+  claimFirstLine: string | null
+  /** Why it is blocked or cancelled. */
+  reason: string | null
+  decidedAgainst: string | null
+  reopened: boolean
+  /** A claim nobody has confirmed (`confirmed: null`). */
+  unverified: boolean
+  /** Who works on an active task: tabs of this AIDE, other users and hosts, users without a tab. */
+  workers: string[]
+  /** For writes based on this reading. */
+  revision: string
+}
+
+/** The sections of the Tasks tab, read from `aide/tasks/`; tasks in history are left out. */
+export interface TaskBoard {
+  /** The project has `aide/tasks/`: the Tasks tab is shown. */
+  exists: boolean
+  /** Load-check problems and stale active tasks, one message each. */
+  problems: string[]
+  active: TaskBoardItem[]
+  blocked: TaskBoardItem[]
+  /** By rank, smaller first; unranked last, oldest first. */
+  planned: TaskBoardItem[]
+  backlog: TaskBoardItem[]
+  /** Claims by label, grouped by each task's first tag. */
+  project: { tag: string; items: TaskBoardItem[] }[]
+  decidedAgainst: TaskBoardItem[]
+}
+
+/** The result of a write from the Tasks tab: the error text, or null when it was written. */
+export interface TaskWriteResult {
+  error: string | null
+  id?: string
+}
