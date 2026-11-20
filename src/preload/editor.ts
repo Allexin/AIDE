@@ -98,6 +98,8 @@ export interface EditorAPI {
   onFileIndexUpdated: (cb: () => void) => () => void
   onGitStatusUpdated: (cb: (status: GitStatusResult) => void) => () => void
   onFsChanged: (cb: (event: { path: string }) => void) => () => void
+  /** The file viewer asks to open a file in the editor. */
+  onViewerOpenFile: (cb: (file: { absolute: string; relPath: string }) => void) => () => void
 
   // Editor file operations (sync)
   readFile: (filePath: string) => { content: string; mtime: number; size: number; isBinary?: boolean } | { error: string }
@@ -313,6 +315,12 @@ const editorApi: EditorAPI = {
     }
     ipcRenderer.on('filetree:fs-changed', handler)
     return () => ipcRenderer.removeListener('filetree:fs-changed', handler)
+  },
+
+  onViewerOpenFile: (cb: (file: { absolute: string; relPath: string }) => void) => {
+    const handler = (_: unknown, file: { absolute: string; relPath: string }): void => cb(file)
+    ipcRenderer.on('viewer:open-file', handler)
+    return () => ipcRenderer.removeListener('viewer:open-file', handler)
   },
 
   onFileIndexUpdated: (cb: () => void) => {

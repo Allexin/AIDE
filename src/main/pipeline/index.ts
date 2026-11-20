@@ -1,4 +1,5 @@
 import { app, BrowserWindow } from 'electron'
+import { viewerService } from '../viewer/viewerService'
 import { readFileSync } from 'fs'
 import { join, relative, sep } from 'path'
 import { logEvent } from '../diagnostics'
@@ -182,7 +183,8 @@ export async function startPipelineServer(): Promise<void> {
           toolbarGuide,
           workInstruction,
           cacheTtl: tabCacheTtl,
-          features
+          features,
+          viewShow: (projectPath, tabId, args) => viewerService.show(projectPath, tabId, args)
         }))
       }
     })

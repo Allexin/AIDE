@@ -62,6 +62,10 @@ export default function EditorApp(): React.ReactElement {
   useEffect(() => connectPipelineStore(), [])
   useEffect(() => connectPlanStore(), [])
   useEffect(() => connectTaskStore(), [])
+  // "Open in editor" from the file viewer window.
+  useEffect(() => window.editorApi.onViewerOpenFile(({ absolute, relPath }) => {
+    useEditorStore.getState().openFileInEditor(absolute, relPath)
+  }), [])
 
 
   // Forward CLI log events from main process into the LogPanel

@@ -27,7 +27,8 @@ export default defineConfig({
           accountManager: resolve(__dirname, 'src/preload/accountManager.ts'),
           settings: resolve(__dirname, 'src/preload/settings.ts'),
           cliTools: resolve(__dirname, 'src/preload/cliTools.ts'),
-          historyViewer: resolve(__dirname, 'src/preload/historyViewer.ts')
+          historyViewer: resolve(__dirname, 'src/preload/historyViewer.ts'),
+          fileViewer: resolve(__dirname, 'src/preload/fileViewer.ts')
         }
       }
     }

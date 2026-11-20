@@ -16,6 +16,7 @@ import { RemoteServer } from './remote'
 import { ptyRegistry } from './pty/registry'
 import { startHookServer } from './hooks/hookServer'
 import { startPipelineServer, stopPipelineServer } from './pipeline'
+import { viewerService } from './viewer/viewerService'
 import { getCommandLineArgumentsHelp, hasCommandLineHelpArg, resolveStartupArgs } from './startupArgs'
 import { flush as flushSessionMetaCache } from './pty/cliTools/sessionMetaCache'
 
@@ -68,6 +69,7 @@ if (hasCommandLineHelpArg(userArgs)) {
   setRemoteServer(remoteServer)
 
   setupIpcHandlers(openProjects, remoteServer)
+  viewerService.install()
   initUpdater()
   setupMenu(openProjects, (path) => openProjectAndTrack(path, openProjects, () => remoteServer.refreshProjects()))
 

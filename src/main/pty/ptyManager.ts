@@ -356,6 +356,13 @@ export class PtyManager {
     return true
   }
 
+  /** Paste a multi-line message into a tab's CLI and submit it (the file viewer's Send); false when the tab is gone. */
+  async submitText(tabId: string, text: string): Promise<boolean> {
+    if (!this.tabs.has(tabId)) return false
+    await this.submitPastedInput(tabId, text.replace(/\r\n?/g, '\n').trim())
+    return this.tabs.has(tabId)
+  }
+
   subscribeToOutput(tabId: string, cb: (data: string) => void): () => void {
     let set = this.outputListeners.get(tabId)
     if (!set) { set = new Set(); this.outputListeners.set(tabId, set) }

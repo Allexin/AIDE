@@ -1,0 +1,382 @@
+# File Viewer
+
+Feature: an agent shows the user a project file (a Markdown document, an image, source
+text) in a window that floats above its AIDE window, with the changes since the last show
+marked. The user collects comments on fragments in a side panel and sends them back to the
+agent in one message.
+
+Status: implemented except Markdown images and Mermaid (see Dependency on the rendered preview).
+
+Related: `docs/rendered-preview-spec.md` (Render view inside the editor). The viewer reuses
+its document Markdown renderer and its `aide-preview://` protocol. That spec lists
+"rendered diff" as a non-goal for the editor; this spec adds a rendered diff to the viewer only.
+
+## Background
+
+Agent and user often edit a shared text together: a spec, a plan, a letter. Today the agent
+writes the file and says "look at docs/x.md". The user then finds the file in the tree,
+opens it in the single-file editor (which replaces what was open there), and searches for
+what changed. To point at a place, the user describes it in words in the terminal.
+
+## Goal
+
+- The agent calls one MCP tool, `view_show`. The viewer window opens (or comes forward)
+  with the file rendered and the agent's changes since the previous show marked.
+- The user reads, selects fragments, writes comments into a panel on the right, adds free
+  text, and presses **Send**. The comments arrive in the agent's terminal tab as one
+  submitted message.
+
+### Non-goals
+
+- Editing in the viewer. It is read-only; **Open in editor** opens the file in the editor.
+- Comments stored in the document or in files. Comments live in the viewer until they are
+  sent or deleted.
+- A rendered view of HTML pages. HTML files are shown as source text (see File kinds).
+- Image diff beyond a before/after toggle.
+- Handling an agent that edits the file while it waits for the user's answer. Agents do not
+  do this; if one starts, the system prompt will forbid it. No logic for this case.
+
+---
+
+## Window
+
+- One viewer window per AIDE editor window, so one per open project. Two AIDE instances
+  on different folders have two viewers.
+- Created with `parent: <editor BrowserWindow>`, not modal. On Windows that makes it an
+  owned window: always above its own AIDE window, not above other applications, minimized
+  and closed together with it. There is no system-wide always-on-top.
+- Created on the first `view_show`, hidden (not destroyed) when the user closes it, so the
+  next show is instant and pending comments survive. Destroyed with the editor window.
+- Bounds are persisted per user in `.aide/users/<user>/settings.json` as
+  `viewerBounds?: { x, y, width, height }`. Default: right half of the editor window's
+  display area, 900×800 or smaller.
+- `view_show` never takes focus (`showInactive()`): the user may be typing anywhere. When
+  no AIDE window is in the foreground, the editor's taskbar entry flashes.
+
+### Layout
+
+```
++-----------------------------------------------------------+------------------+
+| docs/x.md   [Live ✓]  ‹ 2 of 5 ›   Rendered|Source   Open | Comments (3)     |
++-----------------------------------------------------------+ +--------------+ |
+|                                                           | | > quote…     | |
+|   rendered document, changes marked                       | | L12–14       | |
+|                                                           | | text…    [x] | |
+|                                                           | +--------------+ |
+|                                                           | ...              |
+|                                                           | +--------------+ |
+|                                                           | | free text    | |
+|                                                           | +--------------+ |
+|                                                           | [Send (3)]       |
++-----------------------------------------------------------+------------------+
+```
+
+- Header: file path, **Live** checkbox, change navigation (`‹ n of m ›`, also `F7` /
+  `Shift+F7`), **Rendered / Source** toggle (Markdown only), **Open in editor**.
+- Right: the comments panel, ~320 px wide. It can be collapsed to a narrow strip that shows
+  the count.
+
+---
+
+## Snapshots: what the diff is against
+
+The agent controls the base. It edits the file as many times as it wants, then calls
+`view_show`; that call is the boundary between one set of changes and the next.
+
+State in main, per project, per project-relative path:
+
+```ts
+interface ShownState {
+  base: string | null      // content at the previous show (null: never shown)
+  shown: string            // content at the latest show = the next base
+  shownAt: number
+}
+```
+
+`view_show(path)`:
+
+1. Read the file from disk: `current`.
+2. `base` = the `shown` of the previous show of this path (or `null`).
+3. Store `{ base, shown: current }`.
+4. The window displays **diff(base → current)**. With `base = null` it displays the
+   document without marks.
+
+Live updates, while **Live** is checked: the FS watcher reports a change to the displayed
+path; the window re-reads it as `live`.
+
+- `live == shown`: the window keeps showing diff(base → shown), the presented diff.
+- `live != shown`: the window shows **diff(shown → live)**, the changes made since the
+  show, and the header says `Live: changes since shown`. This is what the user sees while
+  the agent works on the comments: exactly the agent's new changes, appearing as it writes.
+  The next `view_show` makes them the presented diff.
+
+**Live unchecked** freezes the window: watcher events do not change what is displayed
+(useful to copy text while the agent works). The header shows `File changed` when the disk
+differs from the display. Checking Live again applies the current state. An explicit
+`view_show` always updates the window, whatever the Live checkbox says, and leaves the
+checkbox as the user set it.
+
+The diff is by content, not by author: changes the user makes in the editor are included.
+
+**Seen** (header button) clears the marks: what is on screen becomes the local base, and
+live changes from then on are marked against it. It is local to the window; the base of the
+next `view_show` is still the previous show, since the agent controls it. A new show drops
+the Seen state.
+
+**Removed** (header checkbox, on by default): unchecked, removed blocks, lines and words are
+hidden and only the current text with its additions is shown. Removed words inside a line
+are never part of a selection (`user-select: none`), so quotes and copies carry the text as
+it is now; whole removed blocks stay selectable, so they can be commented on.
+
+### Range
+
+A show can be limited to a part of a large file, for example the chapter being worked on.
+`range: { from, to }`; each bound is a 1-based line number or a marker, the text of a line
+(a heading, or a marker comment the agent puts in, such as `<!-- view:end -->`):
+
+- `from`: a number is the first line shown; text is the first line containing it, shown.
+- `to`: a number is the last line shown; text is the first line after `from` containing it,
+  not shown (it is where what follows begins). Absent: to the end of the file.
+
+Markers are looked up again on every read (the show, every live update), so the range
+follows edits made above it; line numbers do not. The same range is cut from the base, so
+the diff compares the part with the same part. A base where the markers are missing is
+dropped (shown without marks, and the tool result says so); a current file without them is
+an error of `view_show`, and a live update without them shows a problem in the header and
+keeps the last display. Comment line numbers are always lines of the whole file.
+
+Implementation: `src/shared/viewer/range.ts`.
+
+Snapshots live in memory in main. They are lost when AIDE restarts; the first show after a
+restart has no base. Optional `base` argument values: see the MCP tool.
+
+---
+
+## MCP tool `view_show`
+
+In `src/main/pipeline/mcp/viewTools.ts`, registered with the other AIDE tools. It belongs to
+no feature switch. The server instructions carry one sentence about it.
+
+```ts
+view_show({
+  path: string,                       // project-relative or absolute inside the project
+  base?: 'shown' | 'head' | 'none',   // default 'shown' (the previous show)
+  range?: { from?: number | string, to?: number | string },  // see Range
+  anchor?: string | number            // heading text or a line number to scroll to
+})
+```
+
+- `'head'`: diff against `git show HEAD:<path>` (5 s timeout, like other git calls); empty
+  base if the file is not in HEAD.
+- `'none'`: no marks; the content still becomes the next base.
+- Scroll: to `anchor` if given, else to the first change, else to the top.
+- Paths outside the project root are refused (same containment check as `aide-preview://`).
+- The calling tab (`context.tabId`) becomes the window's **reply tab**: the tab that Send
+  writes to. A call from outside an AIDE terminal tab shows the file, and Send is disabled
+  with `No agent tab to reply to`.
+- Result text: `Shown docs/x.md: 5 changes since the previous show. The user's comments
+  will arrive as a message.` (or `First show, no base.`). The tool returns at once; it does
+  not wait for comments.
+
+Tool description, for the agent: use it when the user should read or review a file you
+wrote or changed; call it after you finish a set of edits, not after each edit.
+
+---
+
+## File kinds
+
+The viewer uses `previewKind(path)` from the rendered preview spec.
+
+| Kind | Display | Diff |
+|---|---|---|
+| `markdown` | Rendered (default) or Source | Block + word diff (below); Source: line diff |
+| `image`, `svg` | Image, fit to window, click for 1:1 | Badge `Changed since last show` + **Before / After** toggle |
+| `html`, `null` (text) | Source with syntax colors | Line diff |
+| binary, not an image | Refused by the tool: `Cannot show a binary file` |  |
+
+Image bases are kept as bytes in the snapshot (images over 20 MB: no base kept, no
+toggle). Before/After of an image uses a `data:` URL for the old bytes.
+
+---
+
+## Rendered Markdown diff
+
+A line diff of the source, rendered afterwards, breaks markup (half a `**bold**`, a row cut
+out of a table). A diff of rendered HTML is unpredictable on tables and nested lists. The
+viewer compares at two levels, and every piece it renders is a whole Markdown block.
+
+### 1. Blocks
+
+`marked.lexer()` splits both versions into a flat list of blocks:
+
+- paragraph, heading, blockquote paragraph, code block, horizontal rule, HTML block;
+- each **list item** is its own block, carrying its list type and nesting depth;
+- each **table row** is its own block, carrying the table's header and alignment.
+
+Each block keeps its `raw` text and its source line range (from cumulative `raw` lengths).
+
+The two block lists are diffed by `raw` (trimmed) with `diffArrays` from the `diff`
+package (jsdiff, new dependency). The result is a sequence of equal, removed and added
+blocks.
+
+### 2. Pairing within a change
+
+In each run of removed blocks followed by added blocks, blocks are paired in order when
+they have the same type and similar text: word-level similarity ≥ 0.4
+(`2 × common words / (words A + words B)`). Paired blocks get a word diff; unpaired
+blocks are shown whole as removed or added. Below 0.4 a word diff is unreadable, so
+"removed + added" is shown instead.
+
+### 3. Words inside a paired block
+
+The inline tokens of each block (`marked.Lexer.lexInline`) are flattened into **atoms**:
+words and whitespace of text tokens, and whole code spans, links, images and line breaks.
+Each atom carries its formatting stack (`strong`, `em`, `del`, link href). Atoms are
+compared by text + formatting; `diffArrays` gives equal, removed and added atoms.
+
+Each atom is rendered with its own formatting wrappers, inside `<del>` or `<ins>` when
+changed. The markup stays balanced whatever the diff is. A word that only changed its
+formatting shows as removed + added.
+
+Code blocks in a pair get a line diff inside the `<pre>`. Table rows in a pair get a word
+diff per cell when the cell count is equal, else removed + added.
+
+### Rendering
+
+- Removed block: red left bar and muted red background, content struck through.
+- Added block: green left bar and muted green background.
+- Changed block: no bar color of its own; inline `<del>` (red, struck through) and
+  `<ins>` (green).
+- Lists and tables are rebuilt from their item and row blocks, so a removed list item shows
+  in its place in its list, and a removed row in its table.
+- Each change (a removed/added run or a changed block) is one stop for `‹ n of m ›`.
+
+The block diff and atom diff are pure functions in
+`src/renderer/src/components/viewer/mdDiff.ts`, unit-tested: insert/delete/modify of
+paragraphs, list items at several depths, table rows, code lines, formatting-only changes,
+the 0.4 threshold, and balanced HTML for every case.
+
+Rendering of a single block uses the document Markdown renderer
+(`documentMarkdown.ts` from the rendered preview spec): same sanitizer, Mermaid, colorized
+code, relative images through `aide-preview://`. A changed Mermaid block is shown as two
+diagrams, before (removed) and after (added).
+
+---
+
+## Comments
+
+### Adding
+
+1. The user selects text in the document (rendered or Source view). A small **Comment**
+   button appears next to the selection.
+2. Clicking it adds a card at the bottom of the panel with the quote and an empty text
+   field that has focus. `Ctrl+Enter` or a click outside finishes the card.
+3. The card shows the quote (cut to 3 lines, full on hover), the source line range, the
+   text, and delete. The text stays editable.
+
+Nothing is drawn in the document. Hovering a card scrolls to the blocks of its lines and
+outlines them until the pointer leaves; a quote from removed text finds its removed block.
+
+### Source line range
+
+Every rendered block element carries `data-lines="12-14"` (lines of the displayed version).
+A selection maps to the union of the ranges of the blocks it touches. In Source view and in
+text files, lines come from the line elements directly. A quote taken from removed text has
+no current lines and is labeled `in removed text`.
+
+Comments are kept per file: when `view_show` moves the window to another file, the cards
+of earlier files stay in the panel, each group under its path.
+
+An empty card (a quote with no text) is sent as it is: the quote alone says "look here".
+
+### Free text and Send
+
+Below the cards there is a free text field. **Send (n)** is enabled when there is at least
+one card or free text and the reply tab is open.
+
+Send composes one message, pastes it into the reply tab and submits it at once
+(`ptyManager.submitPastedInput`, made public: bracketed paste, then the tool's submit
+sequence after the CLI has rendered the paste). If the agent is busy, the CLI queues the
+message.
+
+```
+Comments on docs/x.md (shown 14:02):
+
+1. Lines 12-14:
+> the quoted text, as selected
+Comment text.
+
+2. In removed text:
+> quoted text
+Comment text.
+
+Comments on docs/y.md (shown 13:40):
+...
+
+<free text>
+```
+
+After a successful send the cards and the free text are cleared, and the panel says `Sent`. If the reply tab is
+closed, Send stays disabled with `Agent tab closed`, and the comments are kept.
+
+Unsent comments survive hiding the window and new shows. They are lost when the AIDE window
+closes; closing AIDE with unsent comments asks for confirmation.
+
+---
+
+## Files
+
+**New**
+
+- `src/shared/viewer/`: `mdDiff.ts` (block + word diff, rendering), `lineDiff.ts`,
+  `range.ts`, `compose.ts` (the Send message), `types.ts` (IPC payloads); tests
+  `mdDiff.test.ts`, `viewerPure.test.ts`
+- `src/main/viewer/viewerService.ts`: snapshots per project and path, the window, reply tab,
+  live updates of the displayed path (FS observer), IPC `viewer:*`
+- `src/main/viewer/showPrep.ts` (pure: base/shown with range, change count) + test
+- `src/main/viewer/viewerFiles.ts`: containment, kinds, reading, `git show HEAD`
+- `src/main/windows/fileViewer.ts`: window creation, parent binding, bounds
+- `src/main/pipeline/mcp/viewTools.ts`: `view_show`
+- `src/preload/fileViewer.ts`: `FileViewerAPI` (interface + object)
+- `src/renderer/src/windows/FileViewerApp.tsx` (`?window=file-viewer`, the shared renderer
+  entry), `src/renderer/src/components/viewer/`: `DocumentView.tsx`, `CommentsPanel.tsx`,
+  `selection.ts`, `viewer.css`
+
+**Modified**
+
+- `src/main/pty/ptyManager.ts`: `submitText` (multi-line paste and submit)
+- `src/main/windows/editor.ts`: attach/detach the project's viewer, reply tab closed,
+  confirm unsent comments on close
+- `src/main/config/projectConfig.ts`: `viewerBounds`
+- `src/preload/editor.ts`, `src/renderer/src/env.d.ts`, `EditorApp.tsx`: `onViewerOpenFile`
+- `src/renderer/src/components/history/markdown.ts`: `colorize` exported
+- `electron.vite.config.ts`: the preload entry; `package.json`: `diff`
+
+---
+
+## Dependency on the rendered preview
+
+The viewer renders Markdown with its own `marked` instance in `mdDiff.ts` (document
+options: no `breaks`) and the transcript colorizer for code. Not there yet, and owed to the
+rendered preview: relative images in Markdown (the renderer CSP allows only `data:`, so
+they show their `alt` text until `aide-preview://` exists) and Mermaid diagrams (shown as
+code). When the rendered preview lands, the viewer switches its block rendering to the
+shared document renderer.
+
+## Phases
+
+Each phase ends with `npm run typecheck`, `npm test`, `npm run build`, a visual test by the
+user, and a commit.
+
+1. **Done.** Window with parent binding, `view_show` with range, snapshots, Live, rendered
+   block/word diff, Source toggle, change navigation, comments and Send, text files with
+   line diff, images with Before/After.
+2. **Open.** Images and Mermaid in Markdown, with the rendered preview.
+
+## Open questions
+
+1. **Keep snapshots across restarts?** In memory now. If a review spans an AIDE restart,
+   store `ShownState` under `.aide/users/<user>/viewer/`.
+2. **Several reply tabs.** Two agents showing files to the same window: the last caller
+   wins today. If this happens in practice, group cards by reply tab and send each group to
+   its own tab.

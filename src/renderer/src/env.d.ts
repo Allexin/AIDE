@@ -191,6 +191,7 @@ interface EditorAPI {
   onFileIndexUpdated: (cb: () => void) => () => void
   onGitStatusUpdated: (cb: (status: GitStatusResult) => void) => () => void
   onFsChanged: (cb: (event: { path: string }) => void) => () => void
+  onViewerOpenFile: (cb: (file: { absolute: string; relPath: string }) => void) => () => void
 
   // Editor file operations
   readFile: (filePath: string) => { content: string; mtime: number; size: number; isBinary?: boolean } | { error: string }
@@ -411,6 +412,16 @@ interface HistoryViewerData {
   entries: HistoryEntry[]
 }
 
+interface FileViewerAPI {
+  getState: () => Promise<import('../../shared/viewer/types').ViewerShowPayload | null>
+  onShow: (cb: (payload: import('../../shared/viewer/types').ViewerShowPayload) => void) => () => void
+  onLive: (cb: (payload: import('../../shared/viewer/types').ViewerLivePayload) => void) => () => void
+  onReply: (cb: (reply: import('../../shared/viewer/types').ViewerReplyTab) => void) => () => void
+  send: (text: string) => Promise<import('../../shared/viewer/types').ViewerSendResult>
+  setPending: (count: number) => void
+  openInEditor: (relPath: string) => void
+}
+
 interface HistoryViewerAPI {
   getData: () => Promise<HistoryViewerData>
   onNewEntries: (cb: (entries: HistoryEntry[]) => void) => () => void
@@ -570,5 +581,6 @@ declare interface Window {
   settingsApi: SettingsAPI
   cliToolsApi: CliToolsAPI
   historyViewerApi: HistoryViewerAPI
+  fileViewerApi: FileViewerAPI
   remoteConnectApi?: RemoteConnectAPI
 }

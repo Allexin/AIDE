@@ -94,7 +94,7 @@ export function languageForPath(path: string): string {
   return match ? match[1].toLowerCase() : ''
 }
 
-async function colorize(code: string, language: string): Promise<string | null> {
+export async function colorize(code: string, language: string): Promise<string | null> {
   const requested = language.toLowerCase()
   if (!requested || code.length > MAX_HIGHLIGHT_CHARS) return null
   const monaco = await loadMonaco()

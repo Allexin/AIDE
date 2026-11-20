@@ -9,6 +9,7 @@ import { ENGINE_CHANGES, ENGINE_VERSION, outdatedMachine } from '../engine/compa
 import type { PlanService } from '../plan/planService'
 import { buildPlanTools } from './planTools'
 import { buildTaskTools, withTrackerTail } from './taskTools'
+import { buildViewTools, type ViewToolEnvironment } from './viewTools'
 import type { TaskService } from '../../tasks/taskService'
 import { ALL_FEATURES_ON, PLAN_RUN_OFF_TEXT, toolFeature, type FeatureSet } from '../../../shared/features'
 import { TRACKER_NO_PLAN_CLAUSE, TRACKER_PLAN_CLAUSE } from '../../tasks/taskSnapshot'
@@ -50,6 +51,8 @@ export interface ToolEnvironment {
   cacheTtl?: (projectPath: string, tabId: string | null) => '5m' | '1h' | null
   /** The feature switches of the project asking (src/shared/features.ts); all on when absent. */
   features?: FeatureSet
+  /** The file viewer (`view_show`). */
+  viewShow?: ViewToolEnvironment['show']
 }
 
 export const ORCHESTRATOR_RULES = [
@@ -98,7 +101,8 @@ export function serverInstructions(workInstruction: string = AIDE_WORK_INSTRUCTI
   const intro = [
     "AIDE's MCP server: tools of the AIDE editor that has this project open.",
     ...(features.pipelines ? ['Pipeline orchestration (pipeline_* tools): AIDE runs pipeline machines — multi-step agent work with checks, review loops and commits — deterministically, and you orchestrate them.'] : []),
-    ...(features.plans ? [`Plans (plan_* tools): when the user asks for a plan, or work needs several tasks tracked over sessions, make it an AIDE plan, whatever way of planning your client has; plan_guide says how. AIDE shows its progress${features.pipelines ? ' and can walk it task by task' : ''}.`] : [])
+    ...(features.plans ? [`Plans (plan_* tools): when the user asks for a plan, or work needs several tasks tracked over sessions, make it an AIDE plan, whatever way of planning your client has; plan_guide says how. AIDE shows its progress${features.pipelines ? ' and can walk it task by task' : ''}.`] : []),
+    'File viewer (view_show): when the user should read or review a file you wrote, show it — AIDE marks your changes since the last show, and comments of the user come back as a message.'
   ].join(' ')
   const guides = [
     ...(features.pipelines ? ['pipeline_guide (writing machines)'] : []),
@@ -493,7 +497,8 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
         return waitText(await waitForEvent(context, null, since, waitSeconds(seconds, DEFAULT_WAIT_SEC)), env(), context.projectPath, context.tabId)
       }
     })),
-    ...buildTaskTools(() => ({ tasks: env().tasks, guide: env().taskGuide, liveTab: env().liveTab }))
+    ...buildTaskTools(() => ({ tasks: env().tasks, guide: env().taskGuide, liveTab: env().liveTab })),
+    ...buildViewTools(() => ({ show: env().viewShow }))
   )
   const onTailError = (err: unknown): void => { logEvent('task-tail-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn') }
   // Feature switches (docs/task-tracker-implementation.md §10): the tools of a feature that is

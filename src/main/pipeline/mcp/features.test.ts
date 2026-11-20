@@ -125,7 +125,7 @@ describe('feature switches in the MCP server', () => {
     const mcp = server((projectPath) => projectPath === 'a' ? { pipelines: false, plans: false, tracker: false } : ALL_FEATURES_ON)
     const a = await session(mcp, 'a')
     const b = await session(mcp, 'b')
-    expect(a.tools).toEqual(['toolbar_guide'])
+    expect(a.tools).toEqual(['toolbar_guide', 'view_show'])
     expect(b.tools.length).toBeGreaterThan(20)
     expect(b.instructions).toContain(TRACKER_PART)
   })

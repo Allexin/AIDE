@@ -22,6 +22,7 @@ import { rebuildMenu, removeEditorWindow } from '../menu'
 import type { StartupTerminalOptions } from '../pty/ptyManager'
 import { getProjectUserPath } from '../config/projectUserData'
 import { attachPipelineProject, taskService } from '../pipeline'
+import { viewerService } from '../viewer/viewerService'
 
 
 /** Drop the task bindings of closed tabs; a failure to write them is recorded, never thrown into a close. */
@@ -123,6 +124,7 @@ export function openProjectAndTrack(
   // Create PTY manager for this window
   const ptyMgr = new PtyManager(editorWin, projectPath, options.terminal ?? {}, !options.noGlobalState)
   ptyRegistry.set(editorWin, ptyMgr)
+  viewerService.attachProject(projectPath, editorWin, ptyMgr)
 
   // Create thinking watcher and wire it to PTY manager session lifecycle
   const thinkingWatcher = new ThinkingWatcher(editorWin)
@@ -137,6 +139,7 @@ export function openProjectAndTrack(
     thinkingWatcher.stopWatching(tabId)
     // A closed tab works on no task any more (task tracker §6).
     unbindTaskTabs(projectPath, [tabId])
+    viewerService.tabClosed(projectPath, tabId)
   }
 
   // Start filesystem watcher after the window is ready to receive IPC events
@@ -154,7 +157,29 @@ export function openProjectAndTrack(
 
 
   // Intercept close to check for running toolbar processes
+  // Unsent comments in the file viewer are asked about first (docs/file-viewer-spec.md).
+  let viewerCommentsConfirmed = false
   editorWin.on('close', (event) => {
+    const pending = viewerCommentsConfirmed ? 0 : viewerService.pendingComments(projectPath)
+    if (pending > 0) {
+      event.preventDefault()
+      void dialog
+        .showMessageBox(editorWin, {
+          type: 'question',
+          title: 'AIDE',
+          message: `${pending} comment${pending !== 1 ? 's are' : ' is'} not sent from the viewer.`,
+          detail: 'Close the project and lose them?',
+          buttons: ['Close', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1
+        })
+        .then(({ response }) => {
+          if (response !== 0 || editorWin.isDestroyed()) return
+          viewerCommentsConfirmed = true
+          editorWin.close()
+        })
+      return
+    }
     const count = getRunningCount(editorWin)
     if (count > 0) {
       event.preventDefault()
@@ -184,6 +209,7 @@ export function openProjectAndTrack(
     // The window's tabs close with it, so they work on no task any more.
     unbindTaskTabs(projectPath, ptyMgr.getTabs().map((tab) => tab.tabId))
     detachPipeline()
+    viewerService.detachProject(projectPath)
     // Save active sessions before disposing (must be before disposeAll clears tabs)
     const sessions = ptyMgr.getActiveSessions()
     const toSave = sessions.map((s) => ({
