@@ -5,12 +5,14 @@ import type { PtyManager } from '../pty/ptyManager'
 import { createFileViewerWindow } from '../windows/fileViewer'
 import { describeRange, sliceRange, type ViewRange } from '../../shared/viewer/range'
 import { countChanges, prepareShow } from './showPrep'
-import type { ViewerKind, ViewerLivePayload, ViewerReplyTab, ViewerSendResult, ViewerShowPayload } from '../../shared/viewer/types'
+import type { ViewerKind, ViewerLivePayload, ViewerPageChanged, ViewerReplyTab, ViewerSendResult, ViewerShowPayload } from '../../shared/viewer/types'
 import { gitShowHead, readForView, resolveProjectFile, viewerKind } from './viewerFiles'
 import type { Mark } from '../../shared/viewer/marks'
 import { getProjectUserPath } from '../config/projectUserData'
+import { getAppConfig } from '../config/appConfig'
 import { mkdirSync, writeFileSync } from 'fs'
 import { dirname, relative, sep } from 'path'
+import { addPreviewServedObserver, previewUrl, registerPreviewRoot, revokePreviewRoot, type PreviewTokens } from './previewProtocol'
 
 /**
  * The file viewer (docs/file-viewer-spec.md): snapshots per shown file, the window of each
@@ -46,7 +48,14 @@ interface ProjectViewer {
   lastShow: ViewerShowPayload | null
   replyTabId: string | null
   pending: number
+  tokens: PreviewTokens
+  /** Files the displayed HTML page loaded (folded paths): a change to one reloads it. */
+  pageFiles: Set<string>
+  pageTimer: ReturnType<typeof setTimeout> | null
 }
+
+/** Coalesces a burst of writes (a build, an agent writing several files) into one page reload. */
+const PAGE_RELOAD_DEBOUNCE_MS = 200
 
 const fold = (p: string): string => (process.platform === 'win32' ? p.replace(/\//g, '\\').toLowerCase() : p)
 
@@ -67,6 +76,10 @@ class ViewerService {
     if (this.installed) return
     this.installed = true
     addFsChangeObserver((projectPath, fullPath) => this.onFsChange(projectPath, fullPath))
+    addPreviewServedObserver((projectPath, absolute) => {
+      const p = this.projects.get(fold(projectPath))
+      if (p?.displayed?.kind === 'html') p.pageFiles.add(fold(absolute))
+    })
 
     const byWindow = (event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): ProjectViewer | undefined => {
       const win = BrowserWindow.fromWebContents(event.sender)
@@ -120,13 +133,18 @@ class ViewerService {
 
   attachProject(projectPath: string, editorWin: BrowserWindow, pty: PtyManager): void {
     this.projects.set(fold(projectPath), {
-      projectPath, editorWin, pty, win: null, shown: new Map(), displayed: null, lastShow: null, replyTabId: null, pending: 0
+      projectPath, editorWin, pty, win: null, shown: new Map(), displayed: null, lastShow: null, replyTabId: null, pending: 0,
+      tokens: registerPreviewRoot(projectPath), pageFiles: new Set(), pageTimer: null
     })
   }
 
   detachProject(projectPath: string): void {
     const p = this.projects.get(fold(projectPath))
     if (p?.win && !p.win.isDestroyed()) p.win.destroy()
+    if (p) {
+      revokePreviewRoot(p.tokens)
+      if (p.pageTimer) clearTimeout(p.pageTimer)
+    }
     this.projects.delete(fold(projectPath))
   }
 
@@ -159,6 +177,8 @@ class ViewerService {
       baseFull = await gitShowHead(p.projectPath, relPath, kind)
       if (baseFull === null) throw new Error('git show HEAD failed for this file.')
     }
+    // A page is shown whole: a range would cut its source, not the page.
+    if (args.range && kind === 'html') throw new Error('"range" does not work on HTML pages.')
     const range = kind === 'image' ? null : (args.range ?? null)
     const prepared = prepareShow(kind, current, baseFull, range)
     const shownAt = Date.now()
@@ -166,6 +186,7 @@ class ViewerService {
     if (tabId && p.pty.getTabs().some((t) => t.tabId === tabId)) p.replyTabId = tabId
     else p.replyTabId = null
     p.displayed = { relPath, absolute, kind, range }
+    p.pageFiles = new Set([fold(absolute)])
 
     const payload: ViewerShowPayload = {
       seq: ++this.seq,
@@ -177,7 +198,9 @@ class ViewerService {
       shownAt,
       anchor: args.anchor ?? null,
       reply: this.replyState(p),
-      marks: args.marks === undefined ? null : args.marks === true ? [] : args.marks
+      marks: args.marks === undefined ? null : args.marks === true ? [] : args.marks,
+      page: kind === 'html' ? { offline: previewUrl(p.tokens.offline, relPath), network: previewUrl(p.tokens.network, relPath) } : null,
+      pageNetwork: getAppConfig().privacy.viewerPagesNetwork
     }
     delete (payload as { note?: string }).note
     p.lastShow = payload
@@ -225,10 +248,19 @@ class ViewerService {
     if (p.win && !p.win.isDestroyed()) p.win.webContents.send(channel, payload)
   }
 
+  private schedulePageReload(p: ProjectViewer): void {
+    if (p.pageTimer) clearTimeout(p.pageTimer)
+    p.pageTimer = setTimeout(() => {
+      p.pageTimer = null
+      if (p.lastShow) this.send(p, 'viewer:page-changed', { seq: p.lastShow.seq } satisfies ViewerPageChanged)
+    }, PAGE_RELOAD_DEBOUNCE_MS)
+  }
+
   private onFsChange(projectPath: string, fullPath: string): void {
     const p = this.projects.get(fold(projectPath))
     const d = p?.displayed
     if (!p || !d || !p.win || p.win.isDestroyed() || !p.lastShow) return
+    if (d.kind === 'html' && p.pageFiles.has(fold(fullPath))) this.schedulePageReload(p)
     if (fold(fullPath) !== fold(d.absolute)) return
     const seq = p.lastShow.seq
     let live: ViewerLivePayload

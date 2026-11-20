@@ -23,6 +23,8 @@ export interface AccountToolEntry {
 
 export interface PrivacyConfig {
   maskEmails: boolean
+  viewerPagesStayInProject: boolean
+  viewerPagesNetwork: boolean
 }
 
 export interface UpdatesConfig {

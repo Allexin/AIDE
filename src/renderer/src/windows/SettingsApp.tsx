@@ -9,6 +9,8 @@ interface ReasoningConfig {
 
 interface PrivacyConfig {
   maskEmails: boolean
+  viewerPagesStayInProject: boolean
+  viewerPagesNetwork: boolean
 }
 
 interface UpdatesConfig {
@@ -263,7 +265,7 @@ function ToolSettingsSection({ entry, onChange }: {
 export default function SettingsApp(): React.ReactElement {
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [reasoning, setReasoning] = useState<ReasoningConfig>({ showPanel: false })
-  const [privacy, setPrivacy] = useState<PrivacyConfig>({ maskEmails: false })
+  const [privacy, setPrivacy] = useState<PrivacyConfig>({ maskEmails: false, viewerPagesStayInProject: false, viewerPagesNetwork: true })
   const [updates, setUpdates] = useState<UpdatesConfig>({ notifyFrequency: 'daily' })
   const [sessions, setSessions] = useState<SessionsConfig>({ maxSessionsInPicker: 20, maxRecentProjects: 20 })
   const [remote, setRemote] = useState<RemoteConfig>({ enabled: false, remoteHost: '', buttonSize: 'medium', buttonRows: [] })
@@ -402,6 +404,30 @@ export default function SettingsApp(): React.ReactElement {
               <p style={{ margin: 0, fontSize: 11, color: '#777', lineHeight: 1.5 }}>
                 Shows ***@****.*** instead of account emails in AIDE and on the remote pages.<br />
                 The Account Manager still shows them. Output of the CLIs in terminals is not changed.
+              </p>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', margin: '12px 0 8px' }}>
+                <input
+                  type="checkbox"
+                  checked={privacy.viewerPagesStayInProject}
+                  onChange={(e) => setPrivacy({ ...privacy, viewerPagesStayInProject: e.target.checked })}
+                />
+                Keep HTML pages in the viewer inside the project
+              </label>
+              <p style={{ margin: 0, fontSize: 11, color: '#777', lineHeight: 1.5 }}>
+                Pages the agent shows in the viewer cannot open websites in their inner frames (embedded maps, videos). Links still open in the browser.<br />
+                What a page loads is limited by its Network button either way.
+              </p>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', margin: '12px 0 8px' }}>
+                <input
+                  type="checkbox"
+                  checked={privacy.viewerPagesNetwork}
+                  onChange={(e) => setPrivacy({ ...privacy, viewerPagesNetwork: e.target.checked })}
+                />
+                Let HTML pages in the viewer use the network
+              </label>
+              <p style={{ margin: 0, fontSize: 11, color: '#777', lineHeight: 1.5 }}>
+                Where the Network button of a page starts: on, pages load libraries and images from the internet (https);<br />
+                off, only files of the project, until you press the button. The button still switches it for the page shown.
               </p>
             </fieldset>
 

@@ -23,6 +23,7 @@ export function viewerKind(path: string): ViewerKind {
   const ext = extname(path).toLowerCase()
   if (ext === '.md' || ext === '.markdown') return 'markdown'
   if (IMAGE_TYPES[ext]) return 'image'
+  if (ext === '.html' || ext === '.htm') return 'html'
   return 'text'
 }
 

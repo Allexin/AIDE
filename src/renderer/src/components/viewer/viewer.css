@@ -49,12 +49,15 @@
 .vw-toggle button { border-radius: 0; }
 .vw-toggle button:first-child { border-radius: 3px 0 0 3px; }
 .vw-toggle button:last-child { border-radius: 0 3px 3px 0; border-left: none; }
+.vw-header button.vw-net.on { background: #6b4a12; border-color: #a8741c; color: #fff; }
 .vw-toggle button.on, .vd-image-bar button.on { background: #0e639c; border-color: #1177bb; color: #fff; }
 
 .vw-empty { padding: 40px; color: #777; text-align: center; }
 
 /* global.css turns selection off for the whole app; the document is for selecting and commenting. */
 .vd-scroll { flex: 1; overflow: auto; position: relative; user-select: text; }
+/* An HTML page: white like a browser tab, since pages without a background expect it. */
+.vp-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; display: block; }
 .vc-quote { user-select: text; }
 
 .vw-comment-btn {

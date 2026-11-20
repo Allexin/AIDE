@@ -417,6 +417,7 @@ interface FileViewerAPI {
   onShow: (cb: (payload: import('../../shared/viewer/types').ViewerShowPayload) => void) => () => void
   onLive: (cb: (payload: import('../../shared/viewer/types').ViewerLivePayload) => void) => () => void
   onReply: (cb: (reply: import('../../shared/viewer/types').ViewerReplyTab) => void) => () => void
+  onPageChanged: (cb: (payload: import('../../shared/viewer/types').ViewerPageChanged) => void) => () => void
   send: (text: string) => Promise<import('../../shared/viewer/types').ViewerSendResult>
   setPending: (count: number) => void
   openInEditor: (relPath: string) => void
@@ -526,8 +527,8 @@ interface SessionsConfig {
 interface SettingsAPI {
   getReasoningConfig: () => Promise<{ showPanel: boolean }>
   saveReasoningConfig: (config: { showPanel: boolean }) => Promise<void>
-  getPrivacyConfig: () => Promise<{ maskEmails: boolean }>
-  savePrivacyConfig: (config: { maskEmails: boolean }) => Promise<void>
+  getPrivacyConfig: () => Promise<{ maskEmails: boolean; viewerPagesStayInProject: boolean; viewerPagesNetwork: boolean }>
+  savePrivacyConfig: (config: { maskEmails: boolean; viewerPagesStayInProject: boolean; viewerPagesNetwork: boolean }) => Promise<void>
   getWorkInstruction: () => Promise<{ aide: string; override: string | null }>
   saveWorkInstruction: (override: string | null) => Promise<void>
   getToolSettings: () => Promise<Array<{ toolId: string; name: string; fields: SettingsField[]; values: Record<string, unknown> }>>

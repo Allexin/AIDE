@@ -44,6 +44,11 @@ export default function FileViewerApp(): React.ReactElement {
   const [agentMarks, setAgentMarks] = useState<Mark[]>([])
   const [tool, setTool] = useState<MarkTool>('rect')
   const [selectedMark, setSelectedMark] = useState<string | null>(null)
+  /** HTML pages: network allowed for this show, the reload counter, a change held back by Live off. */
+  const [network, setNetwork] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [pageStale, setPageStale] = useState(false)
+  const frameRef = useRef<HTMLIFrameElement>(null)
   const markViewRef = useRef<MarkViewHandle>(null)
   const docRef = useRef<HTMLDivElement>(null)
   const liveOnRef = useRef(liveOn)
@@ -66,6 +71,9 @@ export default function FileViewerApp(): React.ReactElement {
     setTool(payload.marks && payload.marks.length ? 'select' : 'rect')
     setReply(payload.reply)
     setNotice(null)
+    setNetwork(payload.pageNetwork)
+    setPageStale(false)
+    setReloadKey((k) => k + 1)
     pendingScroll.current = { anchor: payload.anchor }
   }, [])
 
@@ -78,7 +86,12 @@ export default function FileViewerApp(): React.ReactElement {
       if (liveOnRef.current) setAppliedLive(live)
     })
     const offReply = api.onReply(setReply)
-    return () => { offShow(); offLive(); offReply() }
+    const offPage = api.onPageChanged((changed) => {
+      if (changed.seq !== seqRef.current) return
+      if (liveOnRef.current) setReloadKey((k) => k + 1)
+      else setPageStale(true)
+    })
+    return () => { offShow(); offLive(); offReply(); offPage() }
   }, [applyShow])
 
   useEffect(() => {
@@ -116,6 +129,10 @@ export default function FileViewerApp(): React.ReactElement {
   const toggleLive = (on: boolean): void => {
     setLiveOn(on)
     if (on) setAppliedLive(latestLive)
+    if (on && pageStale) {
+      setPageStale(false)
+      setReloadKey((k) => k + 1)
+    }
   }
 
   // What is on screen: the live file when it moved on from the show, else what was shown.
@@ -168,6 +185,21 @@ export default function FileViewerApp(): React.ReactElement {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [goTo, stop])
+
+  // A page sends text to the comments: parent.postMessage({ aide: 'send', text }, '*').
+  useEffect(() => {
+    const onMessage = (e: MessageEvent): void => {
+      const frame = frameRef.current
+      if (!frame || e.source !== frame.contentWindow || !show) return
+      const data = e.data as { aide?: unknown; text?: unknown } | null
+      if (!data || typeof data !== 'object' || data.aide !== 'send' || typeof data.text !== 'string' || !data.text.trim()) return
+      const comment: ViewerComment = { id: newId(), path: show.relPath, shownAt: show.shownAt, quote: data.text.slice(0, 20000), lines: null, text: '', from: 'page' }
+      setComments((list) => [...list, comment])
+      setCollapsed(false)
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [show])
 
   // ── Comments ──
   const onDocMouseUp = (): void => {
@@ -235,9 +267,11 @@ export default function FileViewerApp(): React.ReactElement {
     }
   }
 
-  const frozenChanged = !liveOn && latestLive !== null && latestLive !== appliedLive
+  const pageView = show?.kind === 'html' && view === 'rendered' && show.page !== null
+  const frozenChanged = (!liveOn && latestLive !== null && latestLive !== appliedLive) || pageStale
   const problem = appliedLive?.content === null ? appliedLive.problem : null
   const status = !show ? ''
+    : pageView ? (liveMode ? 'Live: source changed since shown' : show.base === null ? 'No base' : show.base === show.shown ? 'No changes since the previous show' : 'Changed since the previous show: see Source')
     : seen ? (spec?.base === null ? 'Seen' : 'Live: changes since seen')
     : liveMode ? 'Live: changes since shown'
     : show.base === null ? 'No base' : stops === 0 ? 'No changes since the previous show' : 'Changes since the previous show'
@@ -252,23 +286,32 @@ export default function FileViewerApp(): React.ReactElement {
           {show && <span className={`vw-status${liveMode ? ' live' : ''}`}>{status}</span>}
           {frozenChanged && <span className="vw-frozen">File changed</span>}
           {problem && <span className="vw-problem">{problem}</span>}
-          {show && (
+          {show && !pageView && (
             <span className="vw-nav">
               <button disabled={stops === 0} onClick={() => goTo(stop - 1)} title="Previous change (Shift+F7)">‹</button>
               <span>{stops === 0 ? '0 of 0' : `${stop} of ${stops}`}</span>
               <button disabled={stops === 0} onClick={() => goTo(stop + 1)} title="Next change (F7)">›</button>
             </span>
           )}
-          {show && <button disabled={stops === 0} onClick={markSeen} title="Clear the marks: changes from now on are marked against what you see now">Seen</button>}
-          <label className="vw-live" title="Show removed text. Uncheck to see only what is in the file now.">
+          {show && !pageView && <button disabled={stops === 0} onClick={markSeen} title="Clear the marks: changes from now on are marked against what you see now">Seen</button>}
+          {pageView && (
+            <>
+              <button className={network ? 'vw-net on' : 'vw-net'} onClick={() => setNetwork((n) => !n)}
+                title={network ? 'The page may load from the internet (https). Click to turn it off.' : 'The page loads only files of the project. Click to let it load from the internet (https), e.g. libraries from a CDN.'}>
+                Network: {network ? 'on' : 'off'}
+              </button>
+              <button onClick={() => { setPageStale(false); setReloadKey((k) => k + 1) }} title="Reload the page">Reload</button>
+            </>
+          )}
+          {!pageView && <label className="vw-live" title="Show removed text. Uncheck to see only what is in the file now.">
             <input type="checkbox" checked={showRemoved} onChange={(e) => setShowRemoved(e.target.checked)} /> Removed
-          </label>
-          <label className="vw-live" title="Update the view while the file changes. Uncheck to freeze it, e.g. to copy text.">
+          </label>}
+          <label className="vw-live" title={pageView ? 'Reload the page when a file it loaded changes. Uncheck to keep it as it is.' : 'Update the view while the file changes. Uncheck to freeze it, e.g. to copy text.'}>
             <input type="checkbox" checked={liveOn} onChange={(e) => toggleLive(e.target.checked)} /> Live
           </label>
-          {show?.kind === 'markdown' && (
+          {(show?.kind === 'markdown' || show?.kind === 'html') && (
             <span className="vw-toggle">
-              <button className={view === 'rendered' ? 'on' : ''} onClick={() => setView('rendered')}>Rendered</button>
+              <button className={view === 'rendered' ? 'on' : ''} onClick={() => setView('rendered')}>{show.kind === 'html' ? 'Page' : 'Rendered'}</button>
               <button className={view === 'source' ? 'on' : ''} onClick={() => setView('source')}>Source</button>
             </span>
           )}
@@ -285,6 +328,9 @@ export default function FileViewerApp(): React.ReactElement {
         {spec && marks !== null
           ? <MarkView ref={markViewRef} src={spec.current} alt={spec.relPath} marks={marks} tool={tool} selectedId={selectedMark}
               onChange={setMarks} onSelect={setSelectedMark} />
+          : pageView && show?.page
+            ? <iframe key={`${reloadKey}-${network ? 'net' : 'off'}`} ref={frameRef} className="vp-frame" title={show.relPath}
+                sandbox="allow-scripts" allow="autoplay; fullscreen" src={network ? show.page.network : show.page.offline} />
           : spec
             ? <DocumentView ref={docRef} spec={spec} onMouseUp={onDocMouseUp} onMouseDown={() => setSelection(null)} />
             : <div className="vw-empty">The agent has not shown a file yet.</div>}
@@ -320,6 +366,7 @@ export default function FileViewerApp(): React.ReactElement {
         onMarkText={(id, text) => setMarks((list) => list && list.map((m) => (m.id !== id ? m : m.type === 'text' ? { ...m, text } : { ...m, note: text || undefined })))}
         onMarkDelete={(id) => { setMarks((list) => list && list.filter((m) => m.id !== id)); setSelectedMark((s) => (s === id ? null : s)) }}
         onMarkSelect={setSelectedMark}
+        pageView={pageView}
       />
     </div>
   )

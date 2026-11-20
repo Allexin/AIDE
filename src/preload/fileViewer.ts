@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ViewerLivePayload, ViewerReplyTab, ViewerSendResult, ViewerShowPayload } from '../shared/viewer/types'
+import type { ViewerLivePayload, ViewerPageChanged, ViewerReplyTab, ViewerSendResult, ViewerShowPayload } from '../shared/viewer/types'
 
 /** Bridge of the file viewer window (docs/file-viewer-spec.md). */
 interface FileViewerAPI {
@@ -7,6 +7,7 @@ interface FileViewerAPI {
   onShow: (cb: (payload: ViewerShowPayload) => void) => () => void
   onLive: (cb: (payload: ViewerLivePayload) => void) => () => void
   onReply: (cb: (reply: ViewerReplyTab) => void) => () => void
+  onPageChanged: (cb: (payload: ViewerPageChanged) => void) => () => void
   send: (text: string) => Promise<ViewerSendResult>
   setPending: (count: number) => void
   openInEditor: (relPath: string) => void
@@ -24,6 +25,7 @@ const fileViewerApi: FileViewerAPI = {
   onShow: (cb) => listen('viewer:show', cb),
   onLive: (cb) => listen('viewer:live', cb),
   onReply: (cb) => listen('viewer:reply', cb),
+  onPageChanged: (cb) => listen('viewer:page-changed', cb),
   send: (text) => ipcRenderer.invoke('viewer:send', text),
   setPending: (count) => ipcRenderer.send('viewer:pending', count),
   openInEditor: (relPath) => ipcRenderer.send('viewer:open-in-editor', relPath),

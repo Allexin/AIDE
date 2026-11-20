@@ -27,6 +27,8 @@ interface Props {
   onMarkText: (id: string, text: string) => void
   onMarkDelete: (id: string) => void
   onMarkSelect: (id: string | null) => void
+  /** An HTML page is on screen: its text cannot be selected for comments. */
+  pageView: boolean
 }
 
 const MARK_LABEL: Record<Mark['type'], string> = { text: 'Text', arrow: 'Arrow', line: 'Line', rect: 'Rectangle', ellipse: 'Ellipse' }
@@ -69,6 +71,7 @@ function MarkCard({ mark, selected, onText, onDelete, onSelect }: {
 }
 
 function linesLabel(c: ViewerComment): string {
+  if (c.from === 'page') return 'from the page'
   if (!c.lines) return 'in removed text'
   return c.lines[0] === c.lines[1] ? `L${c.lines[0]}` : `L${c.lines[0]}–${c.lines[1]}`
 }
@@ -139,7 +142,7 @@ export function CommentsPanel(props: Props): React.ReactElement {
             ))}
           </div>
         )}
-        {comments.length === 0 && props.marks === null && <div className="vc-empty">Select text in the document and press Comment.</div>}
+        {comments.length === 0 && props.marks === null && <div className="vc-empty">{props.pageView ? 'What the page sends shows up here. Write anything else below.' : 'Select text in the document and press Comment.'}</div>}
         {files.map((path) => (
           <div key={path} className="vc-file">
             {files.length > 1 && <div className="vc-file-name">{path}</div>}

@@ -31,7 +31,6 @@ what changed. To point at a place, the user describes it in words in the termina
 - Editing in the viewer. It is read-only; **Open in editor** opens the file in the editor.
 - Comments stored in the document or in files. Comments live in the viewer until they are
   sent or deleted.
-- A rendered view of HTML pages. HTML files are shown as source text (see File kinds).
 - Image diff beyond a before/after toggle.
 - Editing images. Marks on images (see Marks on images) are an annotation layer that goes
   back to the agent; the image file is never changed by the viewer.
@@ -190,13 +189,14 @@ wrote or changed; call it after you finish a set of edits, not after each edit.
 
 ## File kinds
 
-The viewer uses `previewKind(path)` from the rendered preview spec.
+The kind comes from the extension (`viewerKind` in `src/main/viewer/viewerFiles.ts`).
 
 | Kind | Display | Diff |
 |---|---|---|
 | `markdown` | Rendered (default) or Source | Block + word diff (below); Source: line diff |
 | `image`, `svg` | Image, fit to window, click for 1:1 | Badge `Changed since last show` + **Before / After** toggle |
-| `html`, `null` (text) | Source with syntax colors | Line diff |
+| `html` (`.html`, `.htm`) | The page (default) or Source; see HTML pages | Source: line diff |
+| text | Source with syntax colors | Line diff |
 | binary, not an image | Refused by the tool: `Cannot show a binary file` |  |
 
 Image bases are kept as bytes in the snapshot (images over 20 MB: no base kept, no
@@ -416,6 +416,91 @@ work for the close confirmation.
 
 ---
 
+## HTML pages
+
+Agents often show their work as a page: a voice review with audio players, a report with
+charts, a prototype. The viewer runs the page itself, so the user does not have to open a
+browser, and what the user wants to say about it comes back to the agent like comments.
+
+### Loading: `aide-preview://`
+
+`aide-preview://<token>/<project-relative path>` serves project files to pages
+(`src/main/viewer/previewProtocol.ts`, the pure part in `previewFiles.ts`). It is a
+privileged scheme registered before the app is ready (standard, secure, fetch, CORS,
+streaming) and handled once when it is ready.
+
+- **Tokens.** Each open project gets two random 128-bit tokens when its viewer is attached
+  and loses them when the project closes: the offline token and the network token. An
+  unknown token is `404`. A token names one project, so a page reads the files of its
+  project and nothing else on disk.
+- **Containment.** The URL path is decoded and checked lexically first, so an absolute or
+  UNC path never reaches the disk or the network (a `\\host\share` lookup would otherwise
+  connect to that host). Then the real path must be inside the project's real path
+  (`resolveProjectFile`, case-insensitive on Windows), which refuses links and junctions
+  that point out. Outside → `403` and the diagnostics event `preview-denied`; missing, a
+  directory, a bad escape → `404`. Dot paths (`.aide/…`) are served: pages are often there.
+- **Responses.** `Content-Type` by extension (pages, scripts, styles, fonts, images, audio,
+  video, wasm), `Cache-Control: no-store` (always the file on disk now),
+  `Access-Control-Allow-Origin: *` (the page has an opaque origin, so module scripts and
+  `fetch` are cross-origin), and byte ranges (`206`, `416`) so audio and video seek.
+- **CSP of pages.** HTML responses carry
+  `default-src aide-preview: data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'`,
+  and under the network token also `https: wss:`.
+
+### The page
+
+The page view is an iframe with `sandbox="allow-scripts"` and no `allow-same-origin`: the
+page gets an opaque origin and cannot reach the viewer, its bridge, storage or cookies; no
+popups, no top navigation, no forms. Preload scripts do not run in frames.
+
+A link that navigates the page frame itself to a website or `mailto:` opens in the browser
+and the page stays: a site in the frame would leave no way back. The window CSP lists
+`https: http:` in `frame-src` only so that such a navigation reaches `will-frame-navigate`:
+Chromium checks `frame-src` before Electron sees the navigation, and a blocked one leaves a
+blank frame. Frames inside the page (an embedded map or video) may navigate anywhere
+by default; what they load is limited by the page CSP, so by the Network button. The
+setting **Keep HTML pages in the viewer inside the project** (Settings → General → Privacy,
+`privacy.viewerPagesStayInProject`, off by default) makes the viewer window refuse
+navigation of any frame to anything but `aide-preview:`, `about:`, `data:` and `blob:`
+(`will-frame-navigate`). It is read on each navigation, so it applies without a restart.
+What a page loads (scripts, images, `fetch`) is limited by the Network button either way.
+
+Header of the page view:
+
+- **Page / Source**: the page, or its source with the line diff against the base.
+  `range` is refused for pages: a page is shown whole.
+- **Network: off / on**: off loads the page under the offline token, on under the network
+  token. A page cannot switch the network on itself, because it never learns the network
+  token while it is off. Each show starts from the setting **Let HTML pages in the viewer
+  use the network** (Settings → General → Privacy, `privacy.viewerPagesNetwork`, on by
+  default): who does not want traffic from merely opening a page turns it off and presses
+  the button when a page needs it.
+- **Reload**: reloads the page.
+- **Live**: the page reloads when a file it loaded changes. The protocol reports every file
+  it serves; the viewer keeps the set of files the displayed page loaded (the page itself,
+  its CSS, scripts, data it fetched, media) and reloads on a change to one of them,
+  coalesced over 200 ms. A change to an unrelated file in the folder does not reload it.
+  With Live off the header says `File changed` and turning Live on reloads.
+  The FS watcher skips dot paths (`.aide`, `.git`, …), so a page there and the files it
+  loads from there never reload it; Reload still works. Such folders are not a place for
+  pages to review: the tool description tells agents to put them elsewhere.
+- Change navigation, Seen and Removed apply to Source only.
+
+### Channel back to the agent
+
+The page cannot be selected for comments (it is another document). Instead it sends text:
+
+```js
+parent.postMessage({ aide: 'send', text: 'Take 2 is better: the pause after "but" works.' }, '*')
+```
+
+Each message becomes a card `from the page` in the comments panel, with the text as its
+quote and a note field for the user. Messages from anything but the page's frame are
+ignored; the text is cut at 20 000 characters. Nothing is sent by the page alone: the user
+presses Send as for other comments. In the message the card reads `N. From the page:`.
+
+---
+
 ## Files
 
 **New**
@@ -427,7 +512,10 @@ work for the close confirmation.
   live updates of the displayed path (FS observer), IPC `viewer:*`
 - `src/main/viewer/showPrep.ts` (pure: base/shown with range, change count) + test
 - `src/main/viewer/viewerFiles.ts`: containment, kinds, reading, `git show HEAD`
-- `src/main/windows/fileViewer.ts`: window creation, parent binding, bounds
+- `src/main/windows/fileViewer.ts`: window creation, parent binding, bounds, frame
+  navigation guard
+- `src/main/viewer/previewProtocol.ts`: `aide-preview://` (tokens, serving, served-file
+  observer); `previewFiles.ts` (pure: path resolution, ranges, types, CSP) + test
 - `src/main/pipeline/mcp/viewTools.ts`: `view_show`
 - `src/preload/fileViewer.ts`: `FileViewerAPI` (interface + object)
 - `src/renderer/src/windows/FileViewerApp.tsx` (`?window=file-viewer`, the shared renderer
@@ -440,20 +528,21 @@ work for the close confirmation.
 - `src/main/windows/editor.ts`: attach/detach the project's viewer, reply tab closed,
   confirm unsent comments on close
 - `src/main/config/projectConfig.ts`: `viewerBounds`
+- `src/main/index.ts`: scheme registration before ready, protocol handler
+- `src/renderer/index.html`: CSP allows `aide-preview:` images, media and frames (and
+  `http(s)` frames, see The page)
 - `src/preload/editor.ts`, `src/renderer/src/env.d.ts`, `EditorApp.tsx`: `onViewerOpenFile`
 - `src/renderer/src/components/history/markdown.ts`: `colorize` exported
 - `electron.vite.config.ts`: the preload entry; `package.json`: `diff`
 
 ---
 
-## Dependency on the rendered preview
+## Images and Mermaid in Markdown
 
 The viewer renders Markdown with its own `marked` instance in `mdDiff.ts` (document
-options: no `breaks`) and the transcript colorizer for code. Not there yet, and owed to the
-rendered preview: relative images in Markdown (the renderer CSP allows only `data:`, so
-they show their `alt` text until `aide-preview://` exists) and Mermaid diagrams (shown as
-code). When the rendered preview lands, the viewer switches its block rendering to the
-shared document renderer.
+options: no `breaks`) and the transcript colorizer for code. Not there yet: relative images
+in Markdown (to be loaded through `aide-preview://`, which the window CSP already allows)
+and Mermaid diagrams (shown as code). Task `viewer-mermaid-images`.
 
 ## Phases
 
@@ -463,7 +552,10 @@ user, and a commit.
 1. **Done.** Window with parent binding, `view_show` with range, snapshots, Live, rendered
    block/word diff, Source toggle, change navigation, comments and Send, text files with
    line diff, images with Before/After.
-2. **Open.** Images and Mermaid in Markdown, with the rendered preview.
+2. **Done.** Marks on images.
+3. **Done.** HTML pages: `aide-preview://`, the sandboxed page, network toggle, reload on
+   changes of loaded files, the channel back to the agent.
+4. **Open.** Images and Mermaid in Markdown.
 
 ## Open questions
 

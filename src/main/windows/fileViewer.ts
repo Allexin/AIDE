@@ -3,6 +3,7 @@ import { basename, join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { rendererDevUrl } from '../devEnv'
 import { readProjectSettings, writeProjectSettings, type ViewerBounds } from '../config/projectConfig'
+import { getAppConfig } from '../config/appConfig'
 
 /**
  * The file viewer window (docs/file-viewer-spec.md, "Window"): owned by its editor window,
@@ -56,6 +57,20 @@ export function createFileViewerWindow(parent: BrowserWindow, projectPath: strin
   win.webContents.on('will-navigate', (event, url) => {
     event.preventDefault()
     if (/^(https?|mailto):/i.test(url)) void shell.openExternal(url)
+  })
+  // Pages in the viewer (docs/file-viewer-spec.md, "The page"). The page frame itself stays
+  // on the page: a link to a website opens in the browser, like links in Markdown. Frames
+  // inside the page (maps, videos) go anywhere unless the setting keeps pages inside the
+  // project (the CSP limits what a page loads, not where its frames go).
+  win.webContents.on('will-frame-navigate', (event) => {
+    if (event.isMainFrame || /^(aide-preview|about|data|blob):/i.test(event.url)) return
+    const parent = event.frame?.parent
+    if (!parent || parent.frameTreeNodeId === win.webContents.mainFrame.frameTreeNodeId) {
+      event.preventDefault()
+      if (/^(https?|mailto):/i.test(event.url)) void shell.openExternal(event.url)
+      return
+    }
+    if (getAppConfig().privacy.viewerPagesStayInProject) event.preventDefault()
   })
 
   const saveBounds = (): void => {

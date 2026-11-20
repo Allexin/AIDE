@@ -49,6 +49,10 @@ export interface ReasoningConfig {
 
 export interface PrivacyConfig {
   maskEmails: boolean // hide account emails everywhere but the Account Manager
+  /** Frames of HTML pages in the viewer may not navigate to websites (docs/file-viewer-spec.md). */
+  viewerPagesStayInProject: boolean
+  /** The Network button of an HTML page in the viewer starts on: the page may load from https. */
+  viewerPagesNetwork: boolean
 }
 
 export interface AgentsConfig {
@@ -117,7 +121,9 @@ const DEFAULTS: AppConfig = {
     showPanel: false
   },
   privacy: {
-    maskEmails: false
+    maskEmails: false,
+    viewerPagesStayInProject: false,
+    viewerPagesNetwork: true
   },
   agents: {
     workInstructionOverride: null

@@ -10,6 +10,8 @@ export interface ViewerComment {
   /** File lines of the current version; null for a quote from removed text. */
   lines: [number, number] | null
   text: string
+  /** 'page': text an HTML page sent (parent.postMessage({ aide: 'send', text })), not a selection. */
+  from?: 'page'
 }
 
 function clock(ms: number): string {
@@ -21,7 +23,9 @@ function quoted(text: string): string {
   return text.trim().split(/\r?\n/).map((line) => `> ${line}`).join('\n')
 }
 
-function where(lines: [number, number] | null): string {
+function where(c: ViewerComment): string {
+  if (c.from === 'page') return 'From the page'
+  const lines = c.lines
   if (!lines) return 'In removed text'
   return lines[0] === lines[1] ? `Line ${lines[0]}` : `Lines ${lines[0]}-${lines[1]}`
 }
@@ -35,7 +39,7 @@ export function composeMessage(comments: ViewerComment[], freeText: string, mark
   for (const path of files) {
     const own = comments.filter((c) => c.path === path)
     const shownAt = Math.max(...own.map((c) => c.shownAt))
-    const body = own.map((c, i) => `${i + 1}. ${where(c.lines)}:\n${quoted(c.quote)}\n${c.text.trim()}`.trimEnd())
+    const body = own.map((c, i) => `${i + 1}. ${where(c)}:\n${quoted(c.quote)}\n${c.text.trim()}`.trimEnd())
     parts.push(`Comments on ${path} (shown ${clock(shownAt)}):\n\n${body.join('\n\n')}`)
   }
   if (freeText.trim()) parts.push(freeText.trim())

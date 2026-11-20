@@ -53,14 +53,16 @@ export function buildViewTools(env: () => ViewToolEnvironment): ToolDefinition[]
     {
       name: 'view_show',
       description:
-        'Show the user a project file (Markdown rendered, images, text) in AIDE\'s viewer window, with the changes since you last showed it marked. ' +
+        'Show the user a project file (Markdown rendered, images, HTML pages, text) in AIDE\'s viewer window, with the changes since you last showed it marked. ' +
         'Call it when the user should read or review something you wrote, once you have finished a set of edits — not after each edit: each call is the base of the next diff. ' +
         'range shows only a part of a large file, for example one chapter: from is a line number or the text of the first line shown (a heading, a marker comment); ' +
         'to is the last line number, or the text of the line where the part ends (that line is not shown). Text bounds follow your edits. ' +
         'The user comments on fragments in the viewer; the comments arrive in this session as one message, with file line numbers. ' +
         'Images: marks: true asks the user to mark the image up (text, arrow, line, rectangle, ellipse); marks: [...] also draws your own marks. ' +
         'Marks come back with coordinates in image pixels (viewBox units for SVG), the notes of the user, the marks as JSON you can pass back, and for raster images a PNG with the marks drawn. ' +
-        'A new show drops all marks. Returns at once.',
+        'A new show drops all marks. ' +
+        'HTML pages run in a sandbox and load files of the project (CSS, scripts, audio, video); the user may keep the network off, so prefer libraries bundled into the project to a CDN. ' +
+        'The page reloads when a file it loaded changes, except in dot folders (.aide, .git), which are not watched: put pages to review elsewhere in the project. A page sends text to the user\'s comments with parent.postMessage({ aide: "send", text }, "*"), e.g. from its own buttons; it reaches you when the user presses Send. Returns at once.',
       inputSchema: {
         type: 'object',
         properties: {

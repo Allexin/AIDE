@@ -3,7 +3,7 @@ import type { Mark } from './marks'
 
 /** What crosses between main and the viewer window (docs/file-viewer-spec.md). */
 
-export type ViewerKind = 'markdown' | 'image' | 'text'
+export type ViewerKind = 'markdown' | 'image' | 'html' | 'text'
 
 export interface ViewerReplyTab {
   available: boolean
@@ -28,6 +28,10 @@ export interface ViewerShowPayload {
   reply: ViewerReplyTab
   /** Marks mode (images only): null — view only; a list — the user may mark, starting from the agent's marks. */
   marks: Mark[] | null
+  /** HTML pages: the page under the offline and the network token of aide-preview://. */
+  page: { offline: string; network: string } | null
+  /** Where the Network button of a page starts (the setting privacy.viewerPagesNetwork). */
+  pageNetwork: boolean
 }
 
 /** The displayed file changed on disk: live diff is shown → content. */
@@ -38,6 +42,11 @@ export interface ViewerLivePayload {
   content: string | null
   startLine: number
   problem?: string
+}
+
+/** A file an HTML page loaded changed: the page reloads (when Live is on). */
+export interface ViewerPageChanged {
+  seq: number
 }
 
 export interface ViewerSendResult {

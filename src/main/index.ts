@@ -17,11 +17,15 @@ import { ptyRegistry } from './pty/registry'
 import { startHookServer } from './hooks/hookServer'
 import { startPipelineServer, stopPipelineServer } from './pipeline'
 import { viewerService } from './viewer/viewerService'
+import { installPreviewProtocol, registerPreviewScheme } from './viewer/previewProtocol'
 import { getCommandLineArgumentsHelp, hasCommandLineHelpArg, resolveStartupArgs } from './startupArgs'
 import { flush as flushSessionMetaCache } from './pty/cliTools/sessionMetaCache'
 
 // Started before anything else so that a crash during startup is still recorded.
 initDiagnostics()
+
+// Privileged schemes must be registered before the app is ready.
+registerPreviewScheme()
 
 // Recorded after diagnostics is up: a dev launch strips launcher-injected env
 // vars so child processes see the same environment a packaged build gives them.
@@ -70,6 +74,7 @@ if (hasCommandLineHelpArg(userArgs)) {
   viewerService.setRemoteLockCheck((tabId) => remoteServer.isTabLocked(tabId))
 
   setupIpcHandlers(openProjects, remoteServer)
+  installPreviewProtocol()
   viewerService.install()
   initUpdater()
   setupMenu(openProjects, (path) => openProjectAndTrack(path, openProjects, () => remoteServer.refreshProjects()))

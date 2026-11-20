@@ -37,6 +37,7 @@ guess about when something finishes.
 - `toolbar/toolbarWatcher` — toolbar config reload.
 - CLI scanners (`codexScanner`, `devinScanner`, `openCodeScanner`, `cursorAgentStoreScanner`) — re-scan after watch events.
 - `cliTools/sessionMetaCache` — persisting the cache to disk.
+- `viewer/viewerService` page reload (200 ms) — writes to the files an HTML page in the viewer loaded.
 - Renderer file filter (`FileTree`) — search as you type.
 
 ## Polling as a fallback for unreliable change notification
