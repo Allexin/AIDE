@@ -32,6 +32,8 @@ export interface ViewerShowPayload {
   page: { offline: string; network: string } | null
   /** Where the Network button of a page starts (the setting privacy.viewerPagesNetwork). */
   pageNetwork: boolean
+  /** aide-preview:// URL of the shown file's folder (ends with /): relative images of Markdown resolve against it. */
+  assetBase: string
 }
 
 /** The displayed file changed on disk: live diff is shown → content. */
@@ -44,7 +46,7 @@ export interface ViewerLivePayload {
   problem?: string
 }
 
-/** A file an HTML page loaded changed: the page reloads (when Live is on). */
+/** A file the shown document loaded (a page's CSS or script, an image of Markdown) changed: it reloads (when Live is on). */
 export interface ViewerPageChanged {
   seq: number
 }

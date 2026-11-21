@@ -533,6 +533,8 @@ presses Send as for other comments. In the message the card reads `N. From the p
   `http(s)` frames, see The page)
 - `src/preload/editor.ts`, `src/renderer/src/env.d.ts`, `EditorApp.tsx`: `onViewerOpenFile`
 - `src/renderer/src/components/history/markdown.ts`: `colorize` exported
+- `src/shared/viewer/assets.ts` (image URLs) + test; `components/viewer/mermaid.ts`;
+  `package.json`: `mermaid`
 - `electron.vite.config.ts`: the preload entry; `package.json`: `diff`
 
 ---
@@ -540,9 +542,29 @@ presses Send as for other comments. In the message the card reads `N. From the p
 ## Images and Mermaid in Markdown
 
 The viewer renders Markdown with its own `marked` instance in `mdDiff.ts` (document
-options: no `breaks`) and the transcript colorizer for code. Not there yet: relative images
-in Markdown (to be loaded through `aide-preview://`, which the window CSP already allows)
-and Mermaid diagrams (shown as code). Task `viewer-mermaid-images`.
+options: no `breaks`) and the transcript colorizer for code.
+
+**Images.** The show carries `assetBase`, the `aide-preview://` URL (offline token) of the
+shown file's folder. While sanitizing, a DOMPurify hook rewrites each `img[src]`
+(`resolveAsset`, `src/shared/viewer/assets.ts`): a relative path resolves against the
+folder, a root-relative one (`/docs/a.png`) against the project root, as on GitHub; URLs
+with a scheme stay. Remote `http(s)` images are blocked by the window CSP (`img-src` has no
+`https:`) and show their `alt` text: opening a document causes no network traffic. Images
+load through the protocol, so they are files the document loaded: when one changes on disk,
+the viewer bumps a version that goes into the image URLs (`?v=N`) and they load again
+(Live off: `File changed`, as for pages). An image inside a changed paragraph is an atom of
+the word diff: a changed `src` shows the old one struck and the new one inserted.
+
+**Mermaid.** A ```` ```mermaid ```` fence renders as `<pre class="md-mermaid">` with its
+source; the viewer then draws it (`components/viewer/mermaid.ts`). Mermaid is a dynamic
+`import('mermaid')`, its own chunk, loaded on the first diagram, initialized with
+`securityLevel: 'strict'` and the dark theme. Renders run one at a time and are cached by
+source, so a live edit re-renders only the changed diagram. The SVG is sanitized with
+DOMPurify (SVG and HTML profiles, `foreignObject` for labels) before it replaces the
+source. A diagram that does not parse keeps its source with a line `Mermaid: <error>` under
+it; the rest of the document renders. A changed diagram (paired by the block diff) shows
+**Before** and **After** side by side; Removed off hides Before. Source view shows the line
+diff of the fence.
 
 ## Phases
 
@@ -555,7 +577,7 @@ user, and a commit.
 2. **Done.** Marks on images.
 3. **Done.** HTML pages: `aide-preview://`, the sandboxed page, network toggle, reload on
    changes of loaded files, the channel back to the agent.
-4. **Open.** Images and Mermaid in Markdown.
+4. **Done.** Images and Mermaid in Markdown.
 
 ## Open questions
 

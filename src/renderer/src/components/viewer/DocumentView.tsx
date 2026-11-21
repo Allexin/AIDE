@@ -4,6 +4,8 @@ import { diffMarkdown } from '../../../../shared/viewer/mdDiff'
 import { diffLines } from '../../../../shared/viewer/lineDiff'
 import type { ViewerKind } from '../../../../shared/viewer/types'
 import { colorize, languageForPath } from '../history/markdown'
+import { renderMermaid } from './mermaid'
+import { resolveAsset } from '../../../../shared/viewer/assets'
 
 /** The document area of the file viewer: rendered Markdown, source lines or an image, with changes marked. */
 
@@ -15,6 +17,10 @@ export interface DisplaySpec {
   baseStartLine: number
   currentStartLine: number
   view: 'rendered' | 'source'
+  /** aide-preview:// URL of the file's folder: relative images resolve against it. */
+  assetBase: string
+  /** Bumped when a loaded image changes: part of image URLs, so they load again. */
+  assetVersion: number
 }
 
 const PURIFY = {
@@ -26,8 +32,20 @@ function MarkdownBody({ spec }: { spec: DisplaySpec }): React.ReactElement {
   const ref = useRef<HTMLDivElement>(null)
   const html = useMemo(() => {
     const rendered = diffMarkdown(spec.base, spec.current, { baseLineOffset: spec.baseStartLine, currentLineOffset: spec.currentStartLine })
-    return DOMPurify.sanitize(rendered.html, PURIFY) as string
-  }, [spec.base, spec.current, spec.baseStartLine, spec.currentStartLine])
+    // Images load from the project; remote ones are blocked by the window CSP.
+    const hook = (node: Element): void => {
+      if (node.tagName === 'IMG') {
+        const src = node.getAttribute('src')
+        if (src) node.setAttribute('src', resolveAsset(src, spec.assetBase, spec.assetVersion))
+      }
+    }
+    DOMPurify.addHook('afterSanitizeAttributes', hook)
+    try {
+      return DOMPurify.sanitize(rendered.html, PURIFY) as string
+    } finally {
+      DOMPurify.removeHook('afterSanitizeAttributes')
+    }
+  }, [spec.base, spec.current, spec.baseStartLine, spec.currentStartLine, spec.assetBase, spec.assetVersion])
 
   // Colorize plain code blocks once the HTML is in place; changed code keeps its line marks.
   useEffect(() => {
@@ -39,6 +57,25 @@ function MarkdownBody({ spec }: { spec: DisplaySpec }): React.ReactElement {
       if (!code) continue
       void colorize(code.textContent ?? '', pre.getAttribute('data-lang') ?? '').then((colored) => {
         if (alive && colored !== null) code.innerHTML = colored
+      })
+    }
+    // Diagrams: the picture in place of the source; a broken one keeps its source and says why.
+    for (const pre of Array.from(root.querySelectorAll('pre.md-mermaid'))) {
+      const source = pre.querySelector('code')?.textContent ?? ''
+      if (!source.trim()) continue
+      void renderMermaid(source).then((result) => {
+        if (!alive || !pre.isConnected) return
+        if ('svg' in result) {
+          const box = document.createElement('div')
+          box.className = 'md-mermaid-svg'
+          box.innerHTML = result.svg
+          pre.replaceWith(box)
+        } else {
+          const note = document.createElement('div')
+          note.className = 'md-mermaid-error'
+          note.textContent = `Mermaid: ${result.error}`
+          pre.after(note)
+        }
       })
     }
     return () => { alive = false }

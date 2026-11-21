@@ -53,11 +53,21 @@ export function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
+function codeLang(lang: string | undefined): string {
+  return (lang ?? '').trim().split(/\s+/)[0] ?? ''
+}
+
+/** A Mermaid diagram: its source, rendered into a diagram by the viewer (src/renderer/.../viewer/mermaid.ts). */
+function mermaidHtml(text: string): string {
+  return `<pre class="md-mermaid"><code>${escapeHtml(text)}</code></pre>`
+}
+
 const md = new Marked({ gfm: true, breaks: false, async: false })
 md.use({
   renderer: {
     code({ text, lang }: { text: string; lang?: string }): string {
-      const language = (lang ?? '').trim().split(/\s+/)[0] ?? ''
+      const language = codeLang(lang)
+      if (language.toLowerCase() === 'mermaid') return mermaidHtml(text)
       return `<pre class="md-code" data-lang="${escapeHtml(language)}"><code>${escapeHtml(text)}</code></pre>`
     }
   }
@@ -415,7 +425,14 @@ function changedInner(base: Block, current: Block): string {
         return open + atomDiffHtml(base.cells?.[i]?.tokens ?? [], cell.tokens) + close
       }).join('')
     case 'code': {
-      const lang = String((current.token as Tokens.Code).lang ?? '').trim().split(/\s+/)[0] ?? ''
+      const lang = codeLang((current.token as Tokens.Code).lang)
+      if (lang.toLowerCase() === 'mermaid' && codeLang((base.token as Tokens.Code).lang).toLowerCase() === 'mermaid') {
+        // A changed diagram: both pictures; Source shows the line diff.
+        return '<div class="md-mermaid-pair">' +
+          `<div class="md-mermaid-before"><div class="md-mermaid-label">Before</div>${mermaidHtml(String((base.token as Tokens.Code).text))}</div>` +
+          `<div class="md-mermaid-after"><div class="md-mermaid-label">After</div>${mermaidHtml(String((current.token as Tokens.Code).text))}</div>` +
+          '</div>'
+      }
       const a = String((base.token as Tokens.Code).text).split('\n')
       const b = String((current.token as Tokens.Code).text).split('\n')
       let body = ''

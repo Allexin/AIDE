@@ -49,8 +49,8 @@ interface ProjectViewer {
   replyTabId: string | null
   pending: number
   tokens: PreviewTokens
-  /** Files the displayed HTML page loaded (folded paths): a change to one reloads it. */
-  pageFiles: Set<string>
+  /** Files the displayed document loaded through aide-preview:// (folded paths): a change to one reloads them. */
+  loadedFiles: Set<string>
   pageTimer: ReturnType<typeof setTimeout> | null
 }
 
@@ -78,7 +78,7 @@ class ViewerService {
     addFsChangeObserver((projectPath, fullPath) => this.onFsChange(projectPath, fullPath))
     addPreviewServedObserver((projectPath, absolute) => {
       const p = this.projects.get(fold(projectPath))
-      if (p?.displayed?.kind === 'html') p.pageFiles.add(fold(absolute))
+      if (p?.displayed) p.loadedFiles.add(fold(absolute))
     })
 
     const byWindow = (event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): ProjectViewer | undefined => {
@@ -134,7 +134,7 @@ class ViewerService {
   attachProject(projectPath: string, editorWin: BrowserWindow, pty: PtyManager): void {
     this.projects.set(fold(projectPath), {
       projectPath, editorWin, pty, win: null, shown: new Map(), displayed: null, lastShow: null, replyTabId: null, pending: 0,
-      tokens: registerPreviewRoot(projectPath), pageFiles: new Set(), pageTimer: null
+      tokens: registerPreviewRoot(projectPath), loadedFiles: new Set(), pageTimer: null
     })
   }
 
@@ -186,7 +186,7 @@ class ViewerService {
     if (tabId && p.pty.getTabs().some((t) => t.tabId === tabId)) p.replyTabId = tabId
     else p.replyTabId = null
     p.displayed = { relPath, absolute, kind, range }
-    p.pageFiles = new Set([fold(absolute)])
+    p.loadedFiles = new Set([fold(absolute)])
 
     const payload: ViewerShowPayload = {
       seq: ++this.seq,
@@ -200,7 +200,8 @@ class ViewerService {
       reply: this.replyState(p),
       marks: args.marks === undefined ? null : args.marks === true ? [] : args.marks,
       page: kind === 'html' ? { offline: previewUrl(p.tokens.offline, relPath), network: previewUrl(p.tokens.network, relPath) } : null,
-      pageNetwork: getAppConfig().privacy.viewerPagesNetwork
+      pageNetwork: getAppConfig().privacy.viewerPagesNetwork,
+      assetBase: previewUrl(p.tokens.offline, relPath.includes('/') ? relPath.slice(0, relPath.lastIndexOf('/') + 1) : '')
     }
     delete (payload as { note?: string }).note
     p.lastShow = payload
@@ -260,7 +261,10 @@ class ViewerService {
     const p = this.projects.get(fold(projectPath))
     const d = p?.displayed
     if (!p || !d || !p.win || p.win.isDestroyed() || !p.lastShow) return
-    if (d.kind === 'html' && p.pageFiles.has(fold(fullPath))) this.schedulePageReload(p)
+    // A page reloads on any file it loaded, itself included; Markdown re-renders on its own
+    // text through viewer:live and reloads only the images.
+    const changed = fold(fullPath)
+    if (p.loadedFiles.has(changed) && (d.kind === 'html' || changed !== fold(d.absolute))) this.schedulePageReload(p)
     if (fold(fullPath) !== fold(d.absolute)) return
     const seq = p.lastShow.seq
     let live: ViewerLivePayload

@@ -57,6 +57,19 @@
 /* global.css turns selection off for the whole app; the document is for selecting and commenting. */
 .vd-scroll { flex: 1; overflow: auto; position: relative; user-select: text; }
 /* An HTML page: white like a browser tab, since pages without a background expect it. */
+/* Markdown: images fit the text column; diagrams sit on their own panel. */
+.vd-doc img { max-width: 100%; }
+.md-mermaid-svg { margin: 8px 0; padding: 12px; background: #252526; border-radius: 4px; overflow-x: auto; text-align: center; }
+.md-mermaid-svg svg { max-width: 100%; height: auto; }
+pre.md-mermaid { margin: 8px 0; padding: 10px 12px; background: #252526; border-radius: 4px; white-space: pre-wrap; color: #9cdcfe; }
+.md-mermaid-error { margin: -4px 0 8px; font-size: 12px; color: #f48771; }
+.md-mermaid-pair { display: flex; gap: 12px; flex-wrap: wrap; }
+.md-mermaid-pair > div { flex: 1 1 280px; min-width: 0; }
+.md-mermaid-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #999; margin-top: 4px; }
+.md-mermaid-before .md-mermaid-svg, .md-mermaid-before pre.md-mermaid { outline: 1px solid rgba(244, 135, 113, 0.5); opacity: 0.8; }
+.md-mermaid-after .md-mermaid-svg, .md-mermaid-after pre.md-mermaid { outline: 1px solid rgba(137, 209, 133, 0.6); }
+.vw-hide-removed .md-mermaid-before { display: none; }
+
 .vp-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; display: block; }
 .vc-quote { user-select: text; }
 

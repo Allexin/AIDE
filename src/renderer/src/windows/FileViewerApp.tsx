@@ -140,13 +140,13 @@ export default function FileViewerApp(): React.ReactElement {
   const current = show ? (liveMode && appliedLive?.content != null ? { text: appliedLive.content, startLine: appliedLive.startLine } : { text: show.shown, startLine: show.shownStartLine }) : null
   const spec: DisplaySpec | null = useMemo(() => {
     if (!show || !current) return null
-    const common = { kind: show.kind, relPath: show.relPath, view, current: current.text, currentStartLine: current.startLine }
+    const common = { kind: show.kind, relPath: show.relPath, view, current: current.text, currentStartLine: current.startLine, assetBase: show.assetBase, assetVersion: reloadKey }
     if (seen) {
       return { ...common, base: seen.content === current.text ? null : seen.content, baseStartLine: seen.startLine }
     }
     if (liveMode) return { ...common, base: show.shown, baseStartLine: show.shownStartLine }
     return { ...common, base: show.base, baseStartLine: show.baseStartLine }
-  }, [show, current?.text, current?.startLine, seen, liveMode, view]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [show, current?.text, current?.startLine, seen, liveMode, view, reloadKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const markSeen = (): void => {
     if (current) setSeen({ content: current.text, startLine: current.startLine })

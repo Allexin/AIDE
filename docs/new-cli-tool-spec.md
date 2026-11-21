@@ -1,6 +1,6 @@
 # Adding a New CLI Tool to AIDE
 
-This document is a complete guide for implementing a new AI CLI Tool (e.g. Aider, Gemini CLI, Codex, etc.) from scratch. Following it, you can add support for any tool without modifying existing AIDE logic.
+This document is a complete guide for implementing a new AI CLI Tool (e.g. Antigravity, Aider, Gemini CLI, Codex, etc.) in AIDE. Following it, you can integrate both interactive terminal sessions and all AIDE capabilities (AIDE's MCP server, deterministic hook binding, history/thinking/remote viewers, accounts & account pool, and headless pipeline/plan execution).
 
 ---
 
@@ -9,12 +9,13 @@ This document is a complete guide for implementing a new AI CLI Tool (e.g. Aider
 1. [System Architecture](#1-system-architecture)
 2. [CliTool Interface — Complete Reference](#2-clitool-interface--complete-reference)
 3. [Minimal Implementation](#3-minimal-implementation)
-4. [Session Storage on Disk](#4-session-storage-on-disk)
+4. [Session Storage on Disk & SQLite](#4-session-storage-on-disk--sqlite)
 5. [Full Implementation — Every Method](#5-full-implementation--every-method)
-6. [Registering the Tool](#6-registering-the-tool)
-7. [Settings](#7-settings)
-8. [Accounts](#8-accounts)
-9. [Implementation Checklist](#9-implementation-checklist)
+6. [Headless Execution (Pipelines & Plans)](#6-headless-execution-pipelines--plans)
+7. [Registering the Tool & Touchpoints](#7-registering-the-tool--touchpoints)
+8. [Settings](#8-settings)
+9. [Accounts, Usage & Pipeline Account Pool](#9-accounts-usage--pipeline-account-pool)
+10. [Implementation Checklist](#10-implementation-checklist)
 
 ---
 
@@ -22,7 +23,13 @@ This document is a complete guide for implementing a new AI CLI Tool (e.g. Aider
 
 ### How it works
 
-Each CLI Tool is an object implementing the `CliTool` interface (`src/main/pty/cliTools/types.ts`). AIDE manages these objects through a single registry (`registry.ts`). Users activate tools via the UI (Tools → Manage CLI Tools), after which AIDE uses them to create PTY sessions in terminal tabs.
+Each CLI Tool is an object implementing the `CliTool` interface (`src/main/pty/cliTools/types.ts`). AIDE manages tools through a single registry (`src/main/pty/cliTools/registry.ts`). Users activate tools via **Tools → Manage CLI Tools**, after which AIDE uses them for:
+
+- **Interactive PTY tabs** (`PtyManager`) — new sessions, resuming saved sessions, prompt injection, file context insertion, completion signals, and Strategist event relay.
+- **Session Picker, History Viewer, Thinking Panel, and Remote Access** — scanning sessions, previews, full structured transcripts with CLI-neutral `ToolView`, live updates, and reasoning blocks.
+- **AIDE's MCP server (`aide`)** — injected per launch via `prepareLaunch` so agents in tabs can drive plans, pipelines, the task tracker, and the file viewer without mutating CLI configs.
+- **Accounts & Pipeline Account Pool** — saving/switching credentials, status bar usage display, and automatic account rotation on pipeline usage limits.
+- **Headless execution** (`CliTool.headless`) — non-interactive pipeline steps and plan Orchestrator calls.
 
 ### New session lifecycle
 
@@ -32,140 +39,183 @@ User clicks "New Session"
     ▼
 PtyManager.createNewSessionTab(toolId)
     │
-    ├─ tool.prepareProject(projectPath)   // one-time setup (if needed)
+    ├─ tool.prepareProject(projectPath)            // one-time setup (e.g. trust config)
     │
-    ├─ tool.prepareLaunch(ctx)            // args/env for this launch: hooks, AIDE's MCP server
+    ├─ tool.prepareLaunch(ctx)                     // per-launch args/env: hooks (ctx.hook) + AIDE MCP (ctx.mcpServers)
     │
-    ├─ spawn PowerShell PTY
+    ├─ tool.registerSignalHandler(tabId, handler)  // wire 'completeAndWait' → tabActivity.markIdle + UI sound
     │
-    ├─ write tool.newSessionCommand() + prepareLaunch args   // start the CLI in the PTY
+    ├─ spawn shell PTY via defaultShell(command)   // env: AIDE_TAB_ID, PWD, getEnvOverrides(), prepareLaunch.env
+    │                                              // command: newSessionCommand() + prepareLaunch.args
+    ├─ tool.checkStartupHealth(accumulated)        // monitor readiness ('ok' | 'dead' | 'pending')
     │
-    ├─ tool.checkStartupHealth(output)    // monitor readiness
+    ├─ tool.onPtyActivity(tabId)                   // called on every PTY data chunk
     │
-    └─ tool.watchForNewSessions()         // wait for a session file on disk
-           │
-           └─ sessionId → tab.sessionId assigned
+    └─ session binding:
+         ├─ HookServer POST /hook (deterministic, via prepareLaunch ctx.hook)
+         └─ OR tool.watchForNewSessions() (sole waiting tab fast path)
+                │
+                └─ sessionId → tab.sessionId assigned → ThinkingWatcher.startWatching(...)
 ```
 
 ### Session resume lifecycle
 
 ```
-Project opened, saved sessions exist
+Project opened (saved sessions exist) or user picks a session in Session Picker
     │
     ▼
-PtyManager.createInitialTabs(saved[])
+PtyManager.createInitialTabs / resumeSessionTab
     │
-    └─ for each saved[i]:
-         tool = getToolById(saved[i].toolId)
+    └─ for each entry:
+         tool = getToolById(entry.toolId)
          │
          ├─ tool.prepareProject(projectPath)
          │
-         ├─ spawn PowerShell PTY
+         ├─ tool.prepareLaunch(ctx)                // hooks + AIDE MCP also injected on resume
          │
-         └─ write tool.resumeCommand(saved[i].sessionId)
+         ├─ spawn shell PTY with resumeCommand(sessionId) + prepareLaunch.args
+         │
+         ├─ onSessionAssigned(tabId, sessionId, tool)
+         │
+         └─ tool.checkStartupHealth(accumulated)   // if 'dead' on restore, closes tab (or opens fresh tab if all dead)
 ```
+
+On tab close or window dispose, `PtyManager` calls `tool.deregisterTab?.(tabId)` and unregisters the tab from `HookServer` and `tabActivity`.
 
 ### File structure
 
 ```
 src/main/pty/cliTools/
-  types.ts              — CliTool interface, SettingsField, UsageInfo, HistoryEntry
-  registry.ts           — tool registry, getDefaultTool()
-  claudeCode.ts         — reference implementation (Claude Code)
-  claudeCodeScanner.ts  — disk session scanner (Claude Code-specific)
-  qwenCode.ts           — second reference implementation (Qwen Code)
-  qwenCodeScanner.ts    — disk session scanner (Qwen Code-specific)
-  plainShell.ts         — built-in fallback (plain terminal)
-  cliLogger.ts          — logging utility
+  types.ts                    — CliTool, CliSession, LaunchContext, LaunchMcpServer, ToolView, HistoryEntry, UsageInfo
+  registry.ts                 — cliToolRegistry, getRegisteredTools(), getToolById(), getDefaultTool()
+  launchFiles.ts              — tabLaunchPath(), writeLaunchFile(), removeLaunchPath(), shellLiteral()
+  startupHealth.ts            — tuiReadyForInput() helper for full-screen ConPTY TUIs
+  toolViews.ts                — per-CLI native tool call → neutral ToolView mappers
+  sessionMetaCache.ts         — persistent mtime/size-validated transcript metadata cache
+  cliLogger.ts                — logging utility (routes to Log Panel UI)
+  plainShell.ts               — built-in fallback (plain terminal)
 
-  yourTool.ts           ← NEW FILE (your implementation)
-  yourToolScanner.ts    ← optional, if you need a separate parser file
+  claudeCode.ts / claudeCodeScanner.ts / claudeHooks.ts
+  codex.ts / codexScanner.ts / codexUsage.ts
+  cursorAgent.ts / cursorAgentScanner.ts / cursorAgentStoreScanner.ts
+  devin.ts / devinScanner.ts / devinHooks.ts / devinMcp.ts
+  openCode.ts / openCodeScanner.ts / openCodeAuth.ts / openCodeParts.ts
+  qwenCode.ts / qwenCodeScanner.ts (legacy)
+
+  yourTool.ts                 ← NEW FILE (your implementation)
+  yourToolScanner.ts          ← optional, separate session/history parser
+
+src/main/pipeline/headless/
+  types.ts                    — HeadlessCapability, HeadlessRunOptions, HeadlessResult, ResultTool
+  index.ts                    — startHeadless(tool, options)
+  common.ts                   — resolveExecutable(), classifyFailure(), processError(), promptWithRoleAndSchema(), parseFinalJson()
+  claudeHeadless.ts / codexHeadless.ts / cursorHeadless.ts / devinHeadless.ts / openCodeHeadless.ts
+
+  yourToolHeadless.ts         ← NEW FILE (if the CLI supports headless execution)
+  yourTool.live.test.ts       ← optional opt-in live test (AIDE_LIVE_<TOOL>=1)
 ```
 
-`claudeCode.ts`, `qwenCode.ts`, `openCode.ts`, and `devin.ts` are complete reference implementations — read them before starting. They illustrate four distinct patterns:
-- **Claude Code** — OAuth-based auth, cloud API usage tracking, JSONL session files
-- **Qwen Code** — local file-based usage counting, JSONL session files
-- **OpenCode** — no account system (`hasAccountSystem() → false`), SQLite-based session storage
-- **Devin** — read-only SQLite scanning of the global `sessions.db` (sessions, live `message_nodes` history, `prompt_history`), Claude-format lifecycle hooks via a merged `--config` file for deterministic tab binding, workspace trust via `trusted_workspaces.json`
+Reference implementations illustrate the main patterns:
+- **Claude Code** (`claudeCode.ts`, `claudeHeadless.ts`) — JSONL sessions, per-tab `--settings` hooks + `--mcp-config`, OSC title `✳` completion signal, OAuth account switching (`accountSwitchNeedsRestart() → false`), shared SQLite usage cache, native headless `--json-schema`.
+- **Codex** (`codex.ts`, `codexHeadless.ts`) — global flat JSONL directory with `sessionMetaCache.ts`, `-c` TOML MCP overrides via `shellLiteral()`, `tuiReadyForInput`, shared app-server daemon handling on account switch, headless `--output-schema` with strict schemas.
+- **OpenCode 2** (`openCode.ts`, `openCodeHeadless.ts`) — `installProblem()` version gate (requires 2.x), SQLite session storage, `OPENCODE_CONFIG_CONTENT` env-based MCP injection, PTY inactivity completion timer, `refreshAccountState()` / `accountHint()`, headless `ResultTool` (`submit_result` MCP endpoint).
+- **Cursor Agent** (`cursorAgent.ts`, `cursorHeadless.ts`) — SQLite `store.db` + JSONL fallback, per-tab `--plugin-dir` MCP injection, isolated `CURSOR_CONFIG_DIR` per permission profile with shared `chats` junction for headless.
+- **Devin** (`devin.ts`, `devinHeadless.ts`) — read-only SQLite scanning (`sessions.db`), Claude-format hooks via merged `--config`, project-local `.devin/mcp_config.local.json` MCP fallback (with `.git/info/exclude`), ATIF export in headless mode.
 
 ---
 
 ## 2. CliTool Interface — Complete Reference
 
-Full interface (`src/main/pty/cliTools/types.ts`):
+Full interface in `src/main/pty/cliTools/types.ts`:
 
-### Required fields
+### Required fields & methods
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | `string` | Stable machine identifier. Stored in `aide-state.json` and `.aide/settings.json`. **Never change after publishing.** Examples: `'aider'`, `'gemini-cli'` |
-| `name` | `string` | Human-readable name shown in the UI. Examples: `'Aider'`, `'Gemini CLI'` |
-
-### Required methods
-
-| Method | Signature | Description |
-|--------|-----------|-------------|
-| `isInstalled` | `() => Promise<boolean>` | Checks that the CLI binary is present on the system. Called when the user activates the tool in the UI. **Do not cache.** |
-| `newSessionCommand` | `() => string` | Command written to PTY stdin to start a new session. Example: `'aider'`. |
-| `resumeCommand` | `(sessionId: string) => string` | Command to resume an existing session by its ID. |
-| `scanSessions` | `(projectPath: string) => Promise<CliSession[]>` | Scans disk and returns existing sessions for the project. Sort newest first. |
-| `watchForNewSessions` | `(projectPath, onNew) => () => void` | Subscribes to new session files appearing on disk. Returns an unsubscribe function. |
+| Member | Signature / Type | Description |
+|--------|------------------|-------------|
+| `id` | `readonly string` | Stable machine identifier. Stored in `aide-state.json`, project settings, account storage, and pipeline definitions. **Never change after publishing.** Examples: `'antigravity'`, `'claude-code'`, `'codex'`. |
+| `name` | `readonly string` | Human-readable name shown in the UI. Examples: `'Google Antigravity'`, `'Claude Code'`. |
+| `isInstalled` | `() => Promise<boolean>` | Checks that the CLI binary is present and usable. Called when activating the tool. **Do not cache.** Prefer `findExecutable()` from `src/main/platform`. |
+| `newSessionCommand` | `() => string` | Shell command passed to `defaultShell(command)` to start a new session. |
+| `resumeCommand` | `(sessionId: string) => string` | Shell command to resume an existing session by its ID. Validate/quote `sessionId` defensively. |
+| `scanSessions` | `(projectPath: string) => Promise<CliSession[]>` | Scans disk/DB and returns existing sessions for the project, sorted newest first. |
+| `watchForNewSessions` | `(projectPath, onNew) => () => void` | Watches for new sessions appearing for the project. Returns an unsubscribe function. |
+| `hasAccountSystem` | `() => boolean` | **Required.** Return `false` only when the CLI has its own built-in account switching or credential management is technically impossible. Return `true` otherwise. See [section 9](#9-accounts-usage--pipeline-account-pool). |
 
 ### Optional fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `installUrl` | `string` | Link to installation instructions. Shown in CLI Tools Manager next to the Activate button. |
-| `aideMcp` | `{ supported: boolean; note?: string }` | Whether the CLI takes AIDE's MCP server through `prepareLaunch`. Adds the per-CLI setting *Give AIDE's MCP server to this CLI* (on by default); `supported: false` shows it disabled with `note` as the reason. See [AIDE's MCP server](#preparelaunch). |
+| `installUrl` | `readonly string` | Link to installation instructions. Shown in CLI Tools Manager. |
+| `aideMcp` | `readonly { supported: boolean; note?: string }` | Declares whether the CLI accepts AIDE's MCP server via `prepareLaunch`. Automatically adds the per-CLI setting *Give AIDE's MCP server to this CLI* (on by default; disabled with `note` when `supported: false`). See [`prepareLaunch`](#preparelaunch-and-aidemcp). |
+| `headless` | `readonly HeadlessCapability` | Non-interactive execution adapter for pipeline nodes and plan Orchestrator calls. See [section 6](#6-headless-execution-pipelines--plans). |
 
-### Optional methods — startup and runtime
+### Optional methods — installation, launch & startup
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `prepareProject` | `(projectPath) => Promise<void>` | One-time setup before the first session. Example: write a config file so the CLI skips permission prompts. |
-| `checkStartupHealth` | `(accumulated, elapsedMs) => 'ok' \| 'dead' \| 'pending'` | Inspects accumulated PTY output. Return `'ok'` when the CLI is ready, `'dead'` on a fatal error. |
-| `getEnvOverrides` | `() => Record<string, string>` | Environment variables merged into the PTY environment at every spawn. |
-| `prepareLaunch` | `(ctx: LaunchContext) => { args?, env? }` | What AIDE adds to each launch: the hook wiring (`ctx.hook`) and AIDE's MCP server (`ctx.mcpServers`). See [`prepareLaunch`](#preparelaunch). |
-| `resolveOwnerPid` | `(candidatePids: number[]) => Promise<number \| null>` | When multiple tabs exist, determines which PTY spawned the new session file. |
-| `watchSessionLabel` | `(projectPath, sessionId, onLabel) => () => void` | Streams title updates for a running session. Returns unsubscribe. |
-| `detectTitleEvent` | `(prevTitle, newTitle) => string \| null` | Returns an event name when an OSC title transition is notable. |
-| `contextInsert` | `(relPath: string) => string \| null` | Returns the text to paste into the terminal when adding a file to AI context. If `null`, the menu item is hidden. |
-| `getSessionPreview` | `(projectPath, sessionId) => Promise<[{role, text}]>` | Last few messages for the hover preview in Session Picker. |
-| `getSessionHistory` | `(projectPath, sessionId) => Promise<HistoryEntry[]>` | Full conversation history for the History Viewer (☰ button in Session Picker). |
-| `subscribeToSessionHistory` | `(projectPath, sessionId, onEntry) => () => void` | Live subscription to new history entries. |
-| `getSessionFilePath` | `(projectPath, sessionId) => string \| null` | Path to the session data file. Used by `ThinkingWatcher`. |
-| `parseThinkingBlocks` | `(line: string) => string[]` | Parses a JSONL line and returns thinking block texts. |
+| `installProblem` | `() => Promise<string \| null>` | Returns a human-readable reason why the CLI cannot be used (e.g. unsupported version), or `null` when usable. Used by CLI Tools Manager and `pipeline_smoke`; without it, a false `isInstalled()` reports `"Not found in PATH"`. |
+| `prepareProject` | `(projectPath: string) => Promise<void>` | One-time setup before starting/resuming sessions (e.g. marking workspace trusted to skip confirmation prompts). |
+| `prepareLaunch` | `(ctx: LaunchContext) => LaunchAdditions` | Returns extra `{ args?, env? }` for each launch: hook server wiring (`ctx.hook`) and AIDE's MCP servers (`ctx.mcpServers`). Called before every new and resumed tab spawn. |
+| `getEnvOverrides` | `() => Record<string, string>` | Synchronous env vars merged into both PTY shells and headless runs (e.g. proxy + `NO_PROXY`). Reads in-memory config only. |
+| `checkStartupHealth` | `(accumulated: string) => 'ok' \| 'dead' \| 'pending'` | Inspects accumulated PTY output. Return `'ok'` when ready for input, `'dead'` on fatal/invalid-session error, `'pending'` otherwise. **Never decide by elapsed time.** |
+| `interactiveSubmitSequence` | `() => string` | Terminal key sequence sent to submit a pasted prompt (default `'\r'`). Used by prompt injection, File Viewer Send, and Pipeline `EventRelay`. |
+| `exitCommand` | `() => string` | Optional convention for the interactive command that exits the CLI (e.g. `'/exit'`). Currently has no core caller. |
+
+### Optional methods — runtime signals, activity & tab lifecycle
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `registerSignalHandler` | `(tabId: string, handler: (event: string) => void) => void` | Called by `PtyManager` on spawn. Store the callback to emit tab events (notably `'completeAndWait'`, which triggers completion sounds and marks the tab idle for Pipeline `EventRelay`). |
+| `detectTitleEvent` | `(tabId: string, prevTitle: string \| null, newTitle: string) => void` | Called on every OSC title change. Emit events via the registered signal handler. |
+| `onPtyActivity` | `(tabId: string) => void` | Called on every PTY data chunk. Used by CLIs without idle OSC titles to run an inactivity timer that emits `'completeAndWait'`. |
+| `deregisterTab` | `(tabId: string) => void` | Called when a PTY tab closes or disposes. Clean up signal handlers, inactivity timers, and per-tab launch files. |
+| `contextInsert` | `(relPath: string) => string \| null` | Text pasted into the terminal for "Add to context" (desktop file tree and Remote Access). Return `null` to hide the menu item. |
+
+### Optional methods — sessions, history & thinking
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `getSessionPreview` | `(projectPath, sessionId) => Promise<Array<{ role: 'user' \| 'assistant'; text: string }>>` | Last few messages for the Session Picker hover preview. |
+| `getSessionHistory` | `(projectPath, sessionId) => Promise<HistoryEntry[]>` | Full conversation history for History Viewer, Remote Access, and history-based Thinking Panel. |
+| `subscribeToSessionHistory` | `(projectPath, sessionId, onEntry) => () => void` | Live subscription to new `HistoryEntry` items (used by History Viewer, Remote Access, and history-based Thinking Panel). |
+| `getSessionFilePath` | `(projectPath, sessionId) => string \| null` | Path to an appendable session file for file-based `ThinkingWatcher`. Return `null` for DB-backed or non-appendable stores. |
+| `parseThinkingBlocks` | `(line: string) => string[]` | Parses one JSONL line from `getSessionFilePath()` and returns thinking block texts. |
+| `watchSessionLabel` | `(projectPath, sessionId, onLabel) => () => void` | Optional stream of title updates for a running session. Currently has no core caller. |
+| `resolveOwnerPid` | `(candidatePids: number[]) => Promise<number \| null>` | **Legacy / optional.** No longer called by `PtyManager.assignNewSession` (replaced by deterministic hooks). |
 
 ### Optional methods — settings
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `settingsFields` | `() => SettingsField[]` | Field descriptors rendered in the Settings UI. |
-| `getSettings` | `() => Promise<Record<string, unknown>>` | Loads current setting values. |
-| `updateSettings` | `(values) => Promise<void>` | Persists updated setting values. |
+| `settingsFields` | `() => SettingsField[]` | Per-tool field descriptors rendered in Settings → CLI Settings. |
+| `getSettings` | `() => Promise<Record<string, unknown>>` | Loads current tool setting values. |
+| `updateSettings` | `(values: Record<string, unknown>) => Promise<void>` | Persists updated tool setting values. |
 
-### Optional methods — accounts
+### Optional methods — accounts & usage
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `hasAccountSystem` | `() => boolean` | Required. Return `false` only for tools with built-in account switching or where credential management is technically impossible. Return `true` for all others. See [section 8](#8-accounts). |
-| `isLoggedIn` | `() => Promise<boolean>` | Checks whether the user is authenticated. |
-| `getLoginIdentifier` | `() => Promise<string \| null>` | Returns the email or username of the current user. |
+| `isLoggedIn` | `() => Promise<boolean>` | Whether the user is currently authenticated. |
+| `getLoginIdentifier` | `() => Promise<string \| null>` | Current account email, username, or label (shown in Account Manager, Settings, and status bar). |
 | `exportCredentials` | `() => Promise<Record<string, unknown> \| null>` | Exports current credentials as a serialisable object. |
-| `importCredentials` | `(credentials) => Promise<void>` | Restores previously exported credentials. |
-| `clearCredentials` | `() => Promise<void>` | Deletes local credentials (does not revoke tokens server-side). |
-| `getUsageInfo` | `() => Promise<UsageInfo \| null>` | Returns usage data for the status bar. |
+| `importCredentials` | `(credentials: Record<string, unknown>) => Promise<void>` | Restores previously exported credentials. |
+| `clearCredentials` | `() => Promise<void>` | Clears local credentials without revoking tokens server-side. |
+| `accountHint` | `() => Promise<string \| null>` | Optional note shown in Account Manager explaining edge cases (e.g. why there is nothing to save even though the CLI works). |
+| `refreshAccountState` | `() => Promise<void>` | Refreshes cached/derived account state when Account Manager displays the tool. |
+| `accountSwitchNeedsRestart` | `() => boolean` | Whether open PTY tabs must be restarted after `importCredentials`/`clearCredentials`. Defaults to `true` when omitted; return `false` if live sessions re-read credentials on their own. |
+| `getUsageInfo` | `(cacheMaxAgeMs?: number) => Promise<UsageInfo \| null>` | Returns quota/usage data for the desktop status bar and Remote Access. |
 
 ---
 
 ## 3. Minimal Implementation
 
-The minimum required set for a fully working tool — only mandatory members. Example for a hypothetical `mytool`:
+The minimum compilable set of required members for a working interactive tool:
 
 ```typescript
 // src/main/pty/cliTools/myTool.ts
-import { execFile } from 'child_process'
-import type { CliTool, CliSession } from './types'
+import { findExecutable } from '../../platform'
+import { getToolConfig, updateToolConfig } from '../../config/appConfig'
+import type { CliTool, CliSession, SettingsField } from './types'
 
 const TOOL_ID = 'my-tool'
 const TOOL_NAME = 'My Tool'
@@ -173,14 +223,10 @@ const TOOL_NAME = 'My Tool'
 export const myTool: CliTool = {
   id: TOOL_ID,
   name: TOOL_NAME,
-
   installUrl: 'https://example.com/install',
 
   async isInstalled(): Promise<boolean> {
-    return new Promise((resolve) => {
-      // Use 'where' (Windows) to find the binary in PATH
-      execFile('where', ['mytool'], { timeout: 3000 }, (err) => resolve(!err))
-    })
+    return findExecutable('mytool')
   },
 
   newSessionCommand(): string {
@@ -188,32 +234,69 @@ export const myTool: CliTool = {
   },
 
   resumeCommand(sessionId: string): string {
+    if (!sessionId || /[^a-zA-Z0-9_-]/.test(sessionId)) {
+      throw new Error('Invalid session ID')
+    }
     return `mytool --resume ${sessionId}`
   },
 
   async scanSessions(_projectPath: string): Promise<CliSession[]> {
-    // If the tool does not store sessions on disk — return []
     return []
   },
 
   watchForNewSessions(_projectPath: string, _onNew: (session: CliSession) => void): () => void {
-    // If sessions are not stored — return a no-op
     return () => {}
+  },
+
+  hasAccountSystem(): boolean {
+    return false
+  },
+
+  settingsFields(): SettingsField[] {
+    return [
+      {
+        key: 'proxy',
+        label: 'Proxy address',
+        description: 'Leave empty to use no proxy (e.g. http://127.0.0.1:1080)',
+        type: 'string',
+        default: ''
+      }
+    ]
+  },
+
+  async getSettings(): Promise<Record<string, unknown>> {
+    return getToolConfig(TOOL_ID)
+  },
+
+  async updateSettings(values: Record<string, unknown>): Promise<void> {
+    updateToolConfig(TOOL_ID, values)
+  },
+
+  getEnvOverrides(): Record<string, string> {
+    const proxy = ((getToolConfig(TOOL_ID).proxy as string) ?? '').trim()
+    if (!proxy) return {}
+    const bypass = 'localhost,127.0.0.1,::1'
+    return {
+      HTTP_PROXY: proxy,
+      HTTPS_PROXY: proxy,
+      http_proxy: proxy,
+      https_proxy: proxy,
+      NO_PROXY: bypass,
+      no_proxy: bypass
+    }
   }
 }
 ```
 
-After creating the file — **register** it in `registry.ts` (see [section 6](#6-registering-the-tool)).
+Then register `myTool` in `src/main/pty/cliTools/registry.ts` (see [section 7](#7-registering-the-tool--touchpoints)).
+
+> **Windows PATH note:** If a CLI installs to a known per-user folder (e.g. `%LOCALAPPDATA%\<tool>\bin\...`), check that path directly in addition to `findExecutable()` so a running AIDE instance finds newly installed binaries without restarting.
 
 ---
 
-## 4. Session Storage on Disk
+## 4. Session Storage on Disk & SQLite
 
-Most CLIs store sessions as files. Below are implementation patterns for two scenarios.
-
-### Scenario A: tool does NOT store sessions (stateless)
-
-If the CLI has no concept of "sessions" or resumable conversations:
+### Scenario A: tool does NOT expose sessions on disk
 
 ```typescript
 async scanSessions(_projectPath: string): Promise<CliSession[]> {
@@ -225,14 +308,11 @@ watchForNewSessions(_projectPath, _onNew) {
 },
 
 resumeCommand(_sessionId: string): string {
-  // Ignore sessionId — always start fresh
   return 'mytool'
 }
 ```
 
-### Scenario B: tool stores sessions in files
-
-Typical pattern: files at `~/.mytool/sessions/<sessionId>.json` or similar.
+### Scenario B: per-project session files (JSON / JSONL)
 
 ```typescript
 import { existsSync, readdirSync, statSync, watch } from 'fs'
@@ -240,7 +320,6 @@ import { join } from 'path'
 import { homedir } from 'os'
 
 function getSessionsDir(projectPath: string): string {
-  // Project-specific directory
   const encoded = projectPath.replace(/[:\\\/]/g, '-')
   return join(homedir(), '.mytool', 'sessions', encoded)
 }
@@ -249,43 +328,36 @@ async scanSessions(projectPath: string): Promise<CliSession[]> {
   const dir = getSessionsDir(projectPath)
   if (!existsSync(dir)) return []
 
-  const files = readdirSync(dir).filter(f => f.endsWith('.json'))
+  const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl'))
   const sessions: CliSession[] = []
 
   for (const file of files) {
     const filePath = join(dir, file)
     const stat = statSync(filePath)
-    const sessionId = file.replace('.json', '')
-
     sessions.push({
-      sessionId,
-      slug: TOOL_NAME,           // fallback title until an OSC title arrives
-      // firstMessage: '...',    // optional: first user message (line 1 in Session Picker)
+      sessionId: file.replace(/\.jsonl$/, ''),
+      slug: TOOL_NAME,
       lastModified: stat.mtime
     })
   }
 
-  // Sort: newest first
   return sessions.sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime())
 },
 
 watchForNewSessions(projectPath: string, onNew: (session: CliSession) => void): () => void {
   const dir = getSessionsDir(projectPath)
+  if (!existsSync(dir)) return () => {}
 
-  // Directory may not exist yet before the first session
-  if (!existsSync(dir)) {
-    // Return no-op; AIDE will call scanSessions again later
-    return () => {}
-  }
+  // Build baseline synchronously before attaching the watcher so a session
+  // created right after spawn is never absorbed into an async baseline scan.
+  const known = new Set(readdirSync(dir).filter((f) => f.endsWith('.jsonl')))
 
-  const watcher = watch(dir, (event, filename) => {
-    if (event !== 'rename' || !filename?.endsWith('.json')) return
-    const filePath = join(dir, filename)
-    if (!existsSync(filePath)) return // file was deleted, not created
-
-    const sessionId = filename.replace('.json', '')
+  const watcher = watch(dir, (_event, filename) => {
+    if (!filename || !filename.endsWith('.jsonl') || known.has(filename)) return
+    if (!existsSync(join(dir, filename))) return
+    known.add(filename)
     onNew({
-      sessionId,
+      sessionId: filename.replace(/\.jsonl$/, ''),
       slug: TOOL_NAME,
       lastModified: new Date()
     })
@@ -295,452 +367,333 @@ watchForNewSessions(projectPath: string, onNew: (session: CliSession) => void): 
 }
 ```
 
-### CliSession type
+### Scenario C: global flat directory or SQLite database
+
+- **Global flat directory (all projects mixed together, e.g. Codex):** reading every file's header on cold start is slow. Use `src/main/pty/cliTools/sessionMetaCache.ts` (`getCachedMeta`, `setCachedMeta`, `pruneCache`) keyed by namespace + absolute file path and validated against `mtimeMs` and `size`. Pass `scopePrefix` to `pruneCache` if your scanner only enumerates one project directory; omit it only when scanning the entire global store.
+- **SQLite database (e.g. Devin `sessions.db`, OpenCode `opencode.db`, Cursor `store.db`):** open read-only with `better-sqlite3` (`new Database(dbPath, { readonly: true, fileMustExist: true })`) and always close in `finally`. Seed `knownIds` synchronously before watching the DB/WAL files for changes.
+
+### `CliSession` type & Session Picker display
 
 ```typescript
 interface CliSession {
   sessionId: string        // unique ID (passed to resumeCommand)
-  slug: string             // initial tab title; for Claude Code — last user message
-  summary?: string         // AI-generated title (optional)
-  firstMessage?: string    // first user message in the session (optional)
-  lastModified: Date       // used for sorting
+  slug: string             // fallback / last-message label
+  summary?: string         // optional AI-generated title
+  firstMessage?: string    // optional first user message (primary line in Session Picker)
+  lastModified: Date       // used for newest-first sorting
 }
 ```
 
-#### Session Picker display
-
-Session Picker renders each session in three lines:
-
-| Line | Source | Description |
-|------|--------|-------------|
-| 1 (primary) | `firstMessage ?? slug` | First user message — identifies the session topic |
-| 2 (small) | `slug` (if ≠ `firstMessage`) | Last user message — shows where you left off |
-| 3 (smaller) | `toolName` | Name of the CLI tool for this session |
-
-If `firstMessage` is not set, line 1 shows `slug` and line 2 is hidden.
+Session Picker renders each row in three lines:
+1. Primary: `firstMessage ?? slug`
+2. Secondary (small): `slug` (hidden if equal to `firstMessage` or if `firstMessage` is absent)
+3. Footer (smaller): `toolName`
 
 ---
 
 ## 5. Full Implementation — Every Method
 
-### `prepareProject`
+### `installProblem`
 
-Called **once** before the first session for a project (and again on session resume). Used to:
-- Write a config file so the CLI skips confirmation dialogs
-- Create required directories
+Use when binary presence alone is not enough (e.g. minimum version check, missing runtime). Called by CLI Tools Manager during activation and by `pipeline_smoke`:
 
 ```typescript
-async prepareProject(projectPath: string): Promise<void> {
-  const configPath = join(homedir(), '.mytool', 'trustedProjects.json')
-  let config: Record<string, boolean> = {}
+async installProblem(): Promise<string | null> {
+  const exe = resolveMyToolExecutable()
+  if (!exe) return 'Not found in PATH'
+  const version = await readMyToolVersion(exe)
+  if (!version) return `Could not read the version of ${exe}`
+  if (version.major < 2) return `My Tool ${version.raw} is installed; AIDE requires v2+`
+  return null
+},
 
-  if (existsSync(configPath)) {
-    try { config = JSON.parse(readFileSync(configPath, 'utf-8')) } catch {}
-  }
-
-  if (config[projectPath] !== true) {
-    config[projectPath] = true
-    writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
-  }
+async isInstalled(): Promise<boolean> {
+  return (await this.installProblem!()) === null
 }
 ```
+
+### `prepareProject`
+
+Called once before spawning new or resumed tabs for a project. Use it to pre-trust the workspace or prepare required directories so the CLI does not stall on interactive confirmation dialogs. Prefer atomic writes (write to temp sibling + `renameSync`) when modifying files the CLI itself may read concurrently.
+
+### `prepareLaunch` and `aideMcp`
+
+Called before every PTY spawn (both new and resumed tabs). Returns `{ args?, env? }` appended to the launch command and merged into the PTY environment.
+
+`ctx: LaunchContext` provides:
+- `tabId: string` — AIDE's tab ID (also injected automatically as `AIDE_TAB_ID` in PTY env).
+- `projectPath: string` — project root (also injected automatically as `PWD` in PTY env).
+- `hook: { port: number; token: string } | null` — AIDE's app-wide `HookServer` (`src/main/hooks/hookServer.ts`) for deterministic `tabId → { sessionId, transcriptPath }` binding.
+- `mcpServers: LaunchMcpServer[]` — stdio MCP servers AIDE gives this launch (`name`, `command`, `args`, `env`, `tabEnv` with `AIDE_TAB_ID`/`AIDE_PROJECT`, and `toolTimeoutSec`, currently `3100` s because `pipeline_wait` can block up to 50 min). Empty when the user disabled *Give AIDE's MCP server to this CLI* or AIDE's server is down.
+
+#### Wiring AIDE's MCP server
+
+1. Declare `aideMcp: { supported: true }` (or `{ supported: false, note: 'Why not supported' }`) on `CliTool`. AIDE automatically adds the per-CLI checkbox in Settings (`aideMcpField` in `src/main/aideMcp/launch.ts`).
+2. Pass `ctx.mcpServers` using a per-launch mechanism whenever the CLI supports one — **never mutate the user's global CLI config**:
+   - Per-tab JSON file + flag (Claude Code `--mcp-config "<file>"`, Cursor `--plugin-dir "<dir>"`), using `tabLaunchPath` / `writeLaunchFile` from `launchFiles.ts` and removing it in `deregisterTab` via `removeLaunchPath`.
+   - Command-line config overrides (Codex `-c ...`), using `shellLiteral()` from `launchFiles.ts` (note: Windows PowerShell 5.1 mangles embedded double quotes).
+   - Launch environment variable (OpenCode `OPENCODE_CONFIG_CONTENT`, merged over any existing value).
+   - Only if the CLI has no per-launch MCP mechanism at all: a non-committed project-local file (Devin `.devin/mcp_config.local.json`), keeping user entries, omitting `tabEnv` (relying on inherited `AIDE_TAB_ID`), adding to `.git/info/exclude`, removing AIDE's entry when `ctx.mcpServers` is empty, and explaining this in `aideMcp.note`.
+3. Merge `{ ...server.env, ...server.tabEnv }` for per-tab configs; omit `tabEnv` only for configs shared across tabs.
+4. Add unit tests in `src/main/pty/cliTools/launchMcp.test.ts` and update `docs/aide-mcp-launch.md` after verifying live that AIDE's server loads without approval prompts and receives `AIDE_TAB_ID`.
+
+#### Wiring deterministic hooks (`ctx.hook`)
+
+When the CLI supports lifecycle hooks (such as `SessionStart` and `Stop`), wire them in `prepareLaunch` so they POST stdin JSON (`{ session_id, transcript_path }`) to:
+
+```
+http://127.0.0.1:<ctx.hook.port>/hook?tab=<encodeURIComponent(ctx.tabId)>&event=<event>&token=<ctx.hook.token>
+```
+
+Use the OS-bundled `curl` (`%SystemRoot%\System32\curl.exe` on Windows, `/usr/bin/curl` on POSIX) with `-s -m 2 -X POST "<url>" --data-binary @-` so hooks never block a turn and never depend on Node or PowerShell env expansion. See `claudeHooks.ts` and `devinHooks.ts` for reference, and remove per-tab hook files in `deregisterTab`.
 
 ### `checkStartupHealth`
 
-Inspects accumulated PTY output. AIDE calls this method periodically while the status is `'pending'`.
+Inspects accumulated PTY output and returns `'ok'`, `'dead'`, or `'pending'`:
 
 ```typescript
-checkStartupHealth(accumulated: string, elapsedMs: number): 'ok' | 'dead' | 'pending' {
-  // Detect fatal error from output
-  if (accumulated.includes('command not found')) return 'dead'
-  if (accumulated.includes('Error: ')) return 'dead'
+import { tuiReadyForInput } from './startupHealth'
 
-  // Detect readiness from output
-  if (accumulated.includes('> ')) return 'ok'          // prompt appeared
-  if (accumulated.includes('My Tool v')) return 'ok'   // banner parsed
+checkStartupHealth(accumulated: string): 'ok' | 'dead' | 'pending' {
+  if (
+    accumulated.includes('command not found') ||
+    accumulated.includes('is not recognized') ||
+    accumulated.includes('No conversation found')
+  ) {
+    return 'dead'
+  }
 
-  // Timeout — assume ready after 15 seconds
-  if (elapsedMs > 15000) return 'ok'
-
-  return 'pending'
+  // For full-screen TUIs on ConPTY: wait for alternate screen + cursor shown.
+  // (Or check a specific CLI readiness banner/prompt.)
+  return tuiReadyForInput(accumulated) ? 'ok' : 'pending'
 }
 ```
 
-**Important:** Return `'dead'` only on clear error signals. When in doubt, return `'pending'` until the timeout.
+**Important rules:**
+- **Never decide readiness by elapsed time.** `PtyManager` enforces the 15 s upper bound itself and reports `'unknown'` (not `'ok'`) if no verdict arrives — prompts are not blindly pasted into an unready shell.
+- Do **not** treat any bare CSI escape sequence (`\x1b[`) as ready on Windows ConPTY; PowerShell emits CSI sequences before the CLI even launches. Prefer `tuiReadyForInput(accumulated)` (`\x1b[?1049h` followed by `\x1b[?25h`) or a CLI-specific banner/prompt marker.
+- `checkStartupHealth` drives three features: dead-session cleanup on restore, `createNewSessionWithPrompt`, and `submitWhenReady` (used by Pipeline `EventRelay`).
 
-### `prepareLaunch`
+### `interactiveSubmitSequence` (and `exitCommand`)
 
-Called before every spawn of a tab. Returns extra arguments (leading space
-included) appended to the command line and extra environment variables for the
-PTY. `ctx` carries:
+When AIDE sends text to a running tab (`createNewSessionWithPrompt`, File Viewer "Send", Pipeline `EventRelay`), `PtyManager.submitPastedInput` writes bracketed paste (`\x1b[200~<text>\x1b[201~`), waits for the next PTY output chunk (so the TUI renders the paste before Enter arrives), and then writes `tool.interactiveSubmitSequence?.() ?? '\r'`. Override `interactiveSubmitSequence()` if the CLI's keyboard protocol requires a different submit sequence.
 
-- `hook` — AIDE's hook server (`port`, `token`) for deterministic session
-  binding, or `null`.
-- `mcpServers` — the stdio MCP servers AIDE gives this launch: `name`,
-  `command`, `args`, `env`, `tabEnv` (`AIDE_TAB_ID`, `AIDE_PROJECT`) and
-  `toolTimeoutSec`. Empty when the user turned the setting off or AIDE's server
-  is down. Pass them the way your CLI takes MCP servers for one launch (a flag
-  with a config file, config overrides, an environment variable, a plugin
-  directory) — never by editing the user's config. Merge `env` and `tabEnv`,
-  unless the servers go into a file shared by several tabs.
+`exitCommand()` is an optional convention returning the slash command that exits the CLI cleanly (e.g. `'/exit'`).
 
-Declare `aideMcp: { supported: true }` when you do. How each built-in CLI does
-it, with what was verified live, is in `docs/aide-mcp-launch.md`.
+### Tab signals, idle detection, and `deregisterTab`
+
+`PtyManager` wires `registerSignalHandler(tabId, handler)` at spawn time. Emitting `'completeAndWait'` does **two critical things**:
+1. Marks the tab idle in `tabActivity` (`src/main/pty/tabActivity.ts`), allowing **Pipeline / Plan `EventRelay`** to deliver missed Strategist events into the tab.
+2. Emits `terminal:tab-event` to the renderer (completion sound / UI indicator).
+
+Choose the best mechanism your CLI supports:
+
+- **Option A — OSC title transition (`detectTitleEvent`)** (preferred when the CLI updates its terminal title on busy ↔ idle, like Claude Code `✳` or Codex braille spinners):
 
 ```typescript
-aideMcp: { supported: true },
+const signalByTab = new Map<string, (event: string) => void>()
 
-prepareLaunch(ctx: LaunchContext): LaunchAdditions {
-  if (ctx.mcpServers.length === 0) return {}
-  const path = writeLaunchFile(tabLaunchPath('mytool-mcp', ctx.tabId, '.json'), myMcpConfig(ctx.mcpServers))
-  return { args: ` --mcp-config "${path}"` }
+detectTitleEvent(tabId: string, prevTitle: string | null, newTitle: string): void {
+  if (prevTitle === null) return
+  if (isBusyTitle(prevTitle) && !isBusyTitle(newTitle)) {
+    signalByTab.get(tabId)?.('completeAndWait')
+  }
+},
+
+registerSignalHandler(tabId: string, handler: (event: string) => void): void {
+  signalByTab.set(tabId, handler)
+},
+
+deregisterTab(tabId: string): void {
+  signalByTab.delete(tabId)
+  // Also remove any per-tab launch files created in prepareLaunch
 }
 ```
 
-Per-tab files go through `launchFiles.ts` (`tabLaunchPath`, `writeLaunchFile`)
-and are removed in `deregisterTab` (`removeLaunchPath`).
+- **Option B — PTY silence timer (`onPtyActivity`)** (fallback when the CLI emits no idle OSC titles, as in Devin, OpenCode, and Cursor — resets a 5 s countdown on every PTY chunk and emits `'completeAndWait'` once when it reaches 0; clear the interval in `deregisterTab`).
 
 ### `getEnvOverrides`
 
-Returns environment variables merged into the PTY environment at every spawn.
+Called synchronously at PTY spawn time **and** by `startHeadless()` for pipeline runs. Always set `NO_PROXY` / `no_proxy` alongside `HTTP_PROXY` / `HTTPS_PROXY` so local AIDE servers (MCP, pipeline, hooks) bypass the proxy:
 
 ```typescript
 getEnvOverrides(): Record<string, string> {
-  const proxy = getToolConfig(TOOL_ID).proxy as string
+  const proxy = ((getToolConfig(TOOL_ID).proxy as string) ?? '').trim()
   if (!proxy) return {}
+  const bypass = 'localhost,127.0.0.1,::1'
   return {
     HTTP_PROXY: proxy,
     HTTPS_PROXY: proxy,
     http_proxy: proxy,
-    https_proxy: proxy
+    https_proxy: proxy,
+    NO_PROXY: bypass,
+    no_proxy: bypass
   }
 }
 ```
-
-### `resolveOwnerPid`
-
-Only needed when multiple tabs can simultaneously wait for a new session. Determines which PTY process spawned the new session file.
-
-```typescript
-async resolveOwnerPid(candidatePids: number[]): Promise<number | null> {
-  if (candidatePids.length === 0) return null
-
-  const json = await new Promise<string>((resolve, reject) => {
-    execFile(
-      'powershell.exe',
-      ['-NoProfile', '-Command',
-       'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress'],
-      { timeout: 5000 },
-      (err, stdout) => err ? reject(err) : resolve(stdout.trim())
-    )
-  })
-
-  const parsed = JSON.parse(json)
-  const allProcs: Array<{ ProcessId: number; ParentProcessId: number; Name: string }> =
-    Array.isArray(parsed) ? parsed : [parsed]
-
-  const parentMap = new Map(allProcs.map(p => [p.ProcessId, p.ParentProcessId]))
-  const pidSet = new Set(candidatePids)
-
-  const findAncestor = (startPid: number): number | null => {
-    let pid = startPid
-    const visited = new Set<number>()
-    while (pid && !visited.has(pid)) {
-      if (pidSet.has(pid)) return pid
-      visited.add(pid)
-      pid = parentMap.get(pid) ?? 0
-    }
-    return null
-  }
-
-  const matches: Array<{ pid: number; ancestor: number }> = []
-  for (const proc of allProcs) {
-    if (!(proc.Name ?? '').toLowerCase().startsWith('mytool')) continue
-    const ancestor = findAncestor(proc.ParentProcessId)
-    if (ancestor !== null) matches.push({ pid: proc.ProcessId, ancestor })
-  }
-
-  if (matches.length === 0) return null
-
-  // Pick the highest PID (most recently started) so each new session file
-  // is matched to the tab that just launched it.
-  matches.sort((a, b) => b.pid - a.pid)
-  return matches[0].ancestor
-}
-```
-
-### `detectTitleEvent`
-
-Called on every OSC title change. Used for sound notifications and completion indicators.
-
-```typescript
-detectTitleEvent(prevTitle: string | null, newTitle: string): string | null {
-  // prevTitle === null means first assignment at startup — ignore
-  if (prevTitle === null) return null
-
-  // Example: tool shows "✓ Ready" when it finishes
-  if (!prevTitle.startsWith('✓') && newTitle.startsWith('✓')) {
-    return 'completeAndWait'   // standard event name — triggers toolbar sound
-  }
-  return null
-}
-```
-
-**Standard event names:** `'completeAndWait'` triggers the toolbar completion sound. Any other string is logged but not handled specially.
 
 ### `contextInsert`
 
-Returns the text to paste into the terminal when the user picks "Add to context" from the file tree.
+Returns the text inserted into the terminal when the user picks **Add to context** in the desktop file tree or Remote Access (e.g. `` `@${relPath}` ``). Return `null` if unsupported.
+
+### `getSessionPreview`, `getSessionHistory`, `subscribeToSessionHistory`, and `ToolView`
+
+- `getSessionPreview` — lightweight last few messages for the Session Picker hover card.
+- `getSessionHistory` — full structured `HistoryEntry[]` consumed by History Viewer, Remote Access history pages, and history-based Thinking Panel.
+- `subscribeToSessionHistory` — live stream of new `HistoryEntry` items (offset-based file watch or DB/WAL watch) consumed by History Viewer, Remote Access WebSocket subscriptions, and history-based Thinking Panel.
+
+#### CLI-neutral `ToolView` (`src/main/pty/cliTools/toolViews.ts`)
+
+Every `tool_use` block in `HistoryEntry` (from both interactive session scanners and headless adapters) can attach an optional `view?: ToolView` so the History Viewer, Pipeline transcript viewer, and Remote page render edits, patches, reads, shell commands, and searches cleanly without knowing CLI-specific tool names:
 
 ```typescript
-contextInsert(relPath: string): string | null {
-  // Claude Code: "@src/file.ts"
-  // Aider:       "/add src/file.ts"
-  // Return null if the tool does not support this — the menu item is hidden
-  return `/add ${relPath}`
-}
+export type ToolView =
+  | { kind: 'edit'; path: string; edits: Array<{ oldText: string; newText: string }> }
+  | { kind: 'patch'; paths: string[]; patch: string }
+  | { kind: 'write'; path: string; content: string }
+  | { kind: 'read'; path: string; range?: string }
+  | { kind: 'shell'; command: string }
+  | { kind: 'search'; pattern: string; path?: string }
+  | { kind: 'script'; language: string; code: string; summary: string }
 ```
 
-### `getSessionPreview`
+Add a mapper function `<tool>ToolView(name, input)` in `src/main/pty/cliTools/toolViews.ts` and cover it in `src/main/pty/cliTools/toolViews.test.ts`. Unrecognised tools return `undefined` and fall back to generic rendering. When a CLI supports both interactive history and headless streaming, factor block normalization into a shared helper (as `openCodeParts.ts` does) so both paths render identically.
 
-Returns the last few messages for the hover preview in Session Picker.
+### Logging (`cliLogger.ts`)
 
-```typescript
-async getSessionPreview(
-  projectPath: string,
-  sessionId: string
-): Promise<Array<{ role: 'user' | 'assistant'; text: string }>> {
-  const filePath = join(getSessionsDir(projectPath), `${sessionId}.json`)
-  if (!existsSync(filePath)) return []
+Never use `console.log`/`warn`/`error` inside a CLI tool module. Use `cliLog(channel, message)` from `src/main/pty/cliTools/cliLogger.ts`, which automatically masks emails (when privacy masking is on) and broadcasts to the Log Panel UI and Remote Access log stream.
 
-  try {
-    const data = JSON.parse(readFileSync(filePath, 'utf-8'))
-    return (data.messages ?? []).slice(-3).map((m: { role: string; content: string }) => ({
-      role: m.role as 'user' | 'assistant',
-      text: m.content.slice(0, 200)
-    }))
-  } catch {
-    return []
-  }
-}
-```
+### Thinking Panel (`getSessionFilePath`, `parseThinkingBlocks`, or history stream)
 
-### `getSessionHistory`
+`ThinkingWatcher` (`src/main/thinking/thinkingWatcher.ts`) supports two modes:
 
-Returns the **full conversation history** for the History Viewer — a separate window opened via ☰ in Session Picker.
+1. **Appendable JSONL file mode** (Claude Code, Codex, Qwen): implement `getSessionFilePath(projectPath, sessionId)` and `parseThinkingBlocks(line)`. If the tool uses hooks, `ThinkingWatcher` automatically prefers the authoritative `transcript_path` from the hook payload over `getSessionFilePath()`.
+2. **History-stream mode** (SQLite or non-appendable transcripts — Cursor, Devin, OpenCode): thinking blocks arrive as `{ type: 'thinking', thinking: string }` inside `getSessionHistory` and `subscribeToSessionHistory`.
+   - **Important:** `ThinkingWatcher.startWatching` (`src/main/thinking/thinkingWatcher.ts`) currently checks an explicit list of tool IDs (`cursor-agent`, `devin`, `open-code`) for `viaHistory`. If your tool streams thinking via history entries instead of an appendable JSONL file, add your tool ID there (or generalize the condition when `filePath` is absent / non-JSONL).
 
-Difference from `getSessionPreview`: preview reads the last ~64 KB for a quick hover card; history reads the entire file and returns structured blocks supporting `tool_use`, `tool_result`, and `thinking`.
+### `resolveOwnerPid` (legacy)
 
-```typescript
-async getSessionHistory(
-  projectPath: string,
-  sessionId: string
-): Promise<HistoryEntry[]> {
-  // HistoryEntry = { role: 'user' | 'assistant'; blocks: HistoryBlock[] }
-  // HistoryBlock = text | tool_use | tool_result | thinking
-  return readSessionHistory(getSessionsDir(projectPath), sessionId)
-}
-```
-
-If the tool does not support history viewing — simply omit this method. The ☰ button will still appear, but History Viewer will open empty.
-
-**Architecture:** each tool implements its own JSONL parser in a separate file (`claudeCodeScanner.ts`, `qwenCodeScanner.ts`). History Viewer delegates file reading to the tool via `subscribeToSessionHistory`, making the system tool-agnostic.
-
-### `getSessionFilePath`
-
-Path to the session file. Used by `ThinkingWatcher` to track AI thinking state.
-
-```typescript
-getSessionFilePath(projectPath: string, sessionId: string): string | null {
-  return join(getSessionsDir(projectPath), `${sessionId}.jsonl`)
-  // Return null if the tool does not use file-based storage
-}
-```
-
-### `subscribeToSessionHistory`
-
-Live subscription to new history entries. Called by History Viewer after `did-finish-load` to avoid race conditions with IPC listeners.
-
-```typescript
-subscribeToSessionHistory(
-  projectPath: string,
-  sessionId: string,
-  onEntry: (entry: HistoryEntry) => void
-): () => void {
-  const filePath = join(getSessionsDir(projectPath), `${sessionId}.jsonl`)
-  if (!existsSync(filePath)) return () => {}
-
-  let stopped = false
-  let watcher: FSWatcher | null = null
-
-  // Track file size to read only new data
-  let offset = 0
-  try {
-    const fd = openSync(filePath, 'r')
-    offset = fstatSync(fd).size
-    closeSync(fd)
-  } catch { /* ignore */ }
-
-  const readNewEntries = () => {
-    if (stopped || !existsSync(filePath)) return
-
-    let fd: number
-    try {
-      fd = openSync(filePath, 'r')
-    } catch {
-      return
-    }
-
-    try {
-      const fileSize = fstatSync(fd)
-      if (fileSize.size <= offset) return
-
-      const len = fileSize.size - offset
-      const buf = Buffer.alloc(len)
-      readSync(fd, buf, 0, len, offset)
-      offset = fileSize.size
-
-      const text = buf.toString('utf-8')
-      for (const line of text.split('\n')) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
-        const entry = parseHistoryLine(trimmed)  // tool-specific parser
-        if (entry && !stopped) onEntry(entry)
-      }
-    } finally {
-      closeSync(fd)
-    }
-  }
-
-  try {
-    watcher = watch(filePath, () => readNewEntries())
-  } catch { /* ignore */ }
-
-  return () => {
-    stopped = true
-    watcher?.close()
-  }
-}
-```
-
-**Notes:**
-- Use offset-based reading to avoid duplicating already-read entries
-- Return a cleanup function that sets `stopped = true` and closes the watcher
-- Call `onEntry` for each new entry — History Viewer appends them to the UI
-- If the tool does not support live updates — simply omit this method
-
-### `parseThinkingBlocks`
-
-Parses a single JSONL line and returns an array of thinking block texts. Each tool knows its own data format.
-
-**For Claude Code** (format: `message.content[]` with `type: 'thinking'`):
-
-```typescript
-parseThinkingBlocks(line: string): string[] {
-  try {
-    const obj = JSON.parse(line)
-    if (obj.type !== 'assistant') return []
-    const content = obj?.message?.content
-    if (!Array.isArray(content)) return []
-    return content
-      .filter((b: unknown) =>
-        typeof b === 'object' && b !== null &&
-        (b as { type?: string }).type === 'thinking' &&
-        typeof (b as { thinking?: unknown }).thinking === 'string' &&
-        (b as { thinking: string }).thinking.length > 0
-      )
-      .map((b: unknown) => (b as { thinking: string }).thinking)
-  } catch {
-    return []
-  }
-}
-```
-
-**For Qwen Code** (format: `message.parts[]` with `thought: true`):
-
-```typescript
-parseThinkingBlocks(line: string): string[] {
-  try {
-    const obj = JSON.parse(line)
-    if (obj.type !== 'user' && obj.type !== 'assistant') return []
-    const parts = obj?.message?.parts
-    if (!Array.isArray(parts)) return []
-    return parts
-      .filter((p: unknown) =>
-        typeof p === 'object' && p !== null &&
-        (p as { thought?: boolean }).thought === true &&
-        typeof (p as { text?: string }).text === 'string' &&
-        (p as { text: string }).text.length > 0
-      )
-      .map((p: unknown) => (p as { text: string }).text)
-  } catch {
-    return []
-  }
-}
-```
-
-**How it is used:** `ThinkingWatcher` calls this method when reading new lines from the session file. If the method is not implemented — thinking blocks will not be displayed, but nothing else breaks.
+`PtyManager.assignNewSession` no longer walks the OS process tree — concurrent tab binding is handled by deterministic hooks (`HookServer`). You do not need to implement `resolveOwnerPid` for new tools. (If you ever need process-tree lookup, use the cross-platform `listProcesses()` + `resolveOwnerPidFromSnapshot()` in `src/main/platform` rather than raw PowerShell.)
 
 ---
 
-## 6. Registering the Tool
+## 6. Headless Execution (Pipelines & Plans)
 
-The only place where the new tool needs to be registered:
+To let a CLI run pipeline `agent` steps and plan Orchestrator calls, attach `headless: HeadlessCapability` (`src/main/pipeline/headless/types.ts`) to your `CliTool`.
 
-**`src/main/pty/cliTools/registry.ts`**
+`pipelineManager` automatically discovers every registered tool with `tool.headless` set (`src/main/pipeline/index.ts`), and `startHeadless(tool, options)` (`src/main/pipeline/headless/index.ts`) automatically:
+- Merges `process.env`, `options.env`, and `tool.getEnvOverrides()` (including the per-CLI proxy and `NO_PROXY`), matching PTY sessions.
+- Sets `options.stateDir` to `<userData>/headless/<tool.id>` for adapters that maintain persistent config homes.
+
+### Adapter contract (`src/main/pipeline/headless/<tool>Headless.ts`)
+
+Implement `HeadlessCapability`:
+
+```typescript
+export interface HeadlessCapability {
+  run(options: HeadlessRunOptions): HeadlessRun
+  /** Set true if the adapter accepts the final answer via options.resultTool (MCP submit_result). */
+  readonly resultTool?: boolean
+}
+```
+
+Key requirements for every headless adapter:
+
+1. **Resolve the executable without a shell:** `runProcess()` spawns directly (`shell: false`). Use `resolveExecutable(name, options.env)` from `src/main/pipeline/headless/common.ts` (and check known per-user install paths if needed). On Windows, `.cmd`/`.bat`/`.ps1` shims cannot be spawned without a shell — resolve the real `.exe` or `node.exe + script` directly (see `openCodeHeadless.ts` and `cursorHeadless.ts`). Always honour `options.executable` so unit tests can inject a fake CLI.
+2. **Isolate from user MCP servers, rules, and connectors:** pipeline steps must run with only their role prompt and workspace context — never the user's personal MCP servers or IDE connectors (which can contradict role instructions).
+3. **Enforce `options.permissions`:**
+   - `'read-only'`: allow file reads and read-only git inspection (`git status`, `git diff`, `git log`, `git show`); **enforce** denial of file edits/writes and arbitrary shell commands (prompt-only instructions are not sufficient).
+   - `'write'`: non-interactive workspace read/write/shell access without confirmation prompts.
+4. **System prompt (`options.systemAppend`) & prompt (`options.prompt`):** use a native append-system-prompt flag when available (never a flag that *replaces* the CLI's base system prompt); otherwise prepend role instructions to the prompt via `promptWithRoleAndSchema()`.
+5. **Structured output (`options.outputSchema`):** use the strongest mechanism the CLI supports:
+   - **Native JSON Schema mode** (best — Claude `--json-schema`, Codex `--output-schema`): return parsed JSON in `HeadlessResult.structured`.
+   - **AIDE `ResultTool`** (`resultTool: true` — OpenCode 2): when `options.outputSchema` is set and AIDE's pipeline server is up, AIDE opens a per-visit remote HTTP MCP endpoint and passes `options.resultTool` (`{ serverName, url, headers, submitted() }`). Wire it into the run's isolated config and instruct the agent to call `submit_result`; the endpoint validates against the schema so the agent can self-correct in the same turn. Fall back to `promptWithRoleAndSchema` + `parseFinalJson` when `resultTool` is absent.
+   - **Prompt instruction fallback** (Cursor, Devin): append the schema via `promptWithRoleAndSchema()` and parse the final message with `parseFinalJson()`.
+6. **Session ID & Resume:** call `options.onSessionId?.(id)` as soon as the session ID is known, return it in `HeadlessResult.sessionId`, and support `options.resumeSessionId` (ideally across both `'read-only'` and `'write'` profiles).
+7. **Live transcript streaming:** parse the CLI's JSON event stream in `onStdoutLine` and emit normalized `HistoryEntry` objects via `options.onEntry?.(entry)`, attaching `ToolView` from `toolViews.ts`.
+8. **Model & Effort (`options.model`, `options.effort`):**
+   - Pass `options.model` when given (and be careful that config-isolation flags do not silently drop the user's default model/effort).
+   - If the CLI supports `effort`, add your tool ID and accepted effort values to **`EFFORTS` in `src/main/pipeline/engine/validate.ts`** (`string[]` for a fixed list, `null` for model-dependent variants). Without an entry in `EFFORTS`, `validateMachine()` rejects `"effort"` for your CLI.
+   - If your CLI has JSON Schema restrictions (like Codex's strict-schema requirement), add validation in `validate.ts` too.
+9. **Error classification (`HeadlessErrorCode`):**
+   - Use `processError()`, `classifyFailure()`, and `isClassifiedFailure()` from `common.ts`.
+   - Map quota/rate limits to `code: 'limit'` (this triggers the **Pipeline Account Pool**!). Preserve reset time text (e.g. `"try again in N minutes"` or ISO timestamp) in the error message when the CLI reports it, so AIDE can schedule automatic resume.
+   - Map transient overload/network errors to `code: 'unavailable'` (the engine retries these automatically).
+10. **Cost & warnings:** populate `costUsd` if available (else `null`) and non-fatal `warnings[]`.
+11. **Cancellation & timeouts:** forward `options.timeoutMs` and `options.label` to `runProcess()`, and wire `cancel: () => handle.cancel()`.
+12. **Tests & docs:**
+    - Add unit tests in `src/main/pipeline/headless/` testing arg building, config isolation, event/transcript parsing, error classification, and fake-process runs.
+    - Add an opt-in live test (`<tool>.live.test.ts`, gated by `AIDE_LIVE_<TOOL>=1`) verifying: (a) read-only + structured output + `ToolView`, (b) session resume preserving context, (c) read-only blocks writes while write allows them, and (d) cleanup of test sessions/temp dirs.
+    - Verify with `pipeline_smoke` (`src/main/pipeline/smoke.ts`) and document verified live facts in `docs/headless-cli-matrix.md` and `resources/docs/pipeline-authoring.md`.
+
+---
+
+## 7. Registering the Tool & Touchpoints
+
+### Primary registration: `src/main/pty/cliTools/registry.ts`
 
 ```typescript
 import type { CliTool } from './types'
 import { claudeCodeTool } from './claudeCode'
 import { qwenCodeTool } from './qwenCode'
+import { openCodeTool } from './openCode'
+import { cursorAgentTool } from './cursorAgent'
+import { codexTool } from './codex'
+import { devinTool } from './devin'
+import { antigravityTool } from './antigravity'
 import { myTool } from './myTool'           // ← add import
 import { plainShellTool } from './plainShell'
 
-/** AI CLI tools that users can activate (shown in settings, require install). */
 const cliToolRegistry: CliTool[] = [
-  claudeCodeTool,
-  qwenCodeTool,
-  myTool,           // ← add to array
+  claudeCodeTool, qwenCodeTool, openCodeTool, cursorAgentTool,
+  codexTool, devinTool, antigravityTool, myTool
 ]
-
-/** Always-available built-in tools (not user-activatable, used as fallback). */
-const builtinTools: CliTool[] = [plainShellTool]
-
-export function getRegisteredTools(): CliTool[] {
-  return cliToolRegistry
-}
-
-export function getToolById(id: string): CliTool | undefined {
-  return [...cliToolRegistry, ...builtinTools].find((t) => t.id === id)
-}
-
-export function getDefaultTool(activatedTools: string[]): CliTool {
-  const first = cliToolRegistry.find((t) => activatedTools.includes(t.id))
-  return first ?? plainShellTool
-}
 ```
 
-After registering, the tool appears in CLI Tools Manager (Tools → Manage CLI Tools) and becomes available for activation.
+Once registered, the tool automatically appears in:
+- **CLI Tools Manager** (Tools → Manage CLI Tools)
+- **New Session** dropdown and Remote Access tool picker (once activated)
+- **Settings → CLI Settings** (once activated)
+- **Account Manager** and **Load Account** menu (once activated, if `hasAccountSystem() === true`)
+- **Pipeline headless CLI list** (if `headless` is defined)
+
+### Additional touchpoints (only when applicable)
+
+| File | When to update |
+|------|----------------|
+| `src/main/pipeline/engine/validate.ts` | Add tool ID to `EFFORTS` if headless supports `effort` (or add schema checks if the CLI restricts JSON Schema). |
+| `src/main/pipeline/engine/machineSchema.ts` | Update schema descriptions listing headless CLI IDs and effort values. |
+| `src/main/thinking/thinkingWatcher.ts` | Update `viaHistory` if the tool streams thinking via `getSessionHistory`/`subscribeToSessionHistory` instead of an appendable JSONL file. |
+| `src/main/pty/cliTools/toolViews.ts` | Add `<tool>ToolView()` mapper for CLI-neutral transcript rendering (+ `toolViews.test.ts`). |
+| `src/main/pty/cliTools/launchMcp.test.ts` | Add unit tests for `prepareLaunch` MCP injection. |
+| `docs/aide-mcp-launch.md` | Document how AIDE's MCP server is passed and what was verified live. |
+| `docs/headless-cli-matrix.md` | Add a column + live-verified notes for the headless adapter. |
+| `resources/docs/pipeline-authoring.md` | Document headless capabilities (effort, structured output, isolation) for pipeline authors. |
+| `docs/account-pool.md` | Update if the CLI participates in the Pipeline Account Pool with special notes. |
 
 ---
 
-## 7. Settings
+## 8. Settings
 
-If the tool has configurable parameters, implement three methods: `settingsFields`, `getSettings`, `updateSettings`. AIDE will render a section in the Settings UI automatically.
+Implement `settingsFields`, `getSettings`, and `updateSettings` to render a tool section under **Settings → CLI Settings**.
+
+### Automatic common settings
+
+AIDE automatically appends two common settings to every activated tool in `src/main/ipc/index.ts` (`tool-settings:get-all` / `tool-settings:update`):
+1. **`aideMcpServer`** (*Give AIDE's MCP server to this CLI*) — added automatically whenever `tool.aideMcp` is declared (`aideMcpField()` in `src/main/aideMcp/launch.ts`).
+2. **`pipelineEventMessages`** (*Send pipeline events to the orchestrator as messages*) — added automatically to every activated tool (`EVENT_MESSAGES_FIELD` in `src/main/pipeline/eventRelay.ts`).
+
+AIDE strips these keys before calling `tool.updateSettings(own)` and merges them back afterward, so `tool.updateSettings` only needs to persist its own fields via `updateToolConfig(TOOL_ID, values)`.
 
 ### Storage
 
-Use the built-in tool configuration system:
-
 ```typescript
-// src/main/config/appConfig.ts — already exists
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 
 const TOOL_ID = 'my-tool'
 
 async getSettings(): Promise<Record<string, unknown>> {
-  return getToolConfig(TOOL_ID)
-  // Data is stored in aide-config.json (Electron userData) under tools['my-tool']
+  return getToolConfig(TOOL_ID) // stored in aide-config.json under tools['my-tool']
 },
 
 async updateSettings(values: Record<string, unknown>): Promise<void> {
@@ -748,267 +701,150 @@ async updateSettings(values: Record<string, unknown>): Promise<void> {
 }
 ```
 
-### Field descriptors
+### Field descriptors (`src/shared/settingsTypes.ts`)
 
 ```typescript
-import type { SettingsField } from './types'
-
-settingsFields(): SettingsField[] {
-  return [
-    {
-      key: 'apiKey',
-      label: 'API Key',
-      description: 'Your My Tool API key from https://example.com/settings',
-      type: 'password',          // hides the value in the UI
-    },
-    {
-      key: 'model',
-      label: 'Model',
-      type: 'select',
-      options: [
-        { value: 'model-fast', label: 'Fast (cheaper)' },
-        { value: 'model-smart', label: 'Smart (more capable)' },
-      ],
-      default: 'model-fast'
-    },
-    {
-      key: 'proxy',
-      label: 'Proxy address',
-      description: 'Leave empty to use no proxy (e.g. http://127.0.0.1:1080)',
-      type: 'string',
-      default: ''
-    },
-    {
-      key: 'verbose',
-      label: 'Verbose output',
-      type: 'boolean',
-      default: false
-    },
-    {
-      key: 'maxTokens',
-      label: 'Max tokens',
-      type: 'number',
-      default: 4096,
-      // Only show this field when model is 'model-smart'
-      visibleWhen: { key: 'model', value: 'model-smart' }
-    }
-  ]
+export interface SettingsField {
+  key: string
+  label: string
+  description?: string
+  type: 'string' | 'boolean' | 'number' | 'password' | 'select'
+  options?: Array<{ value: string; label: string }>
+  default?: unknown
+  /** Shown greyed out and non-editable (explain why in description). */
+  disabled?: boolean
+  /** Only render when sibling key equals value. */
+  visibleWhen?: { key: string; value: unknown }
 }
 ```
-
-### Field types (`SettingsField.type`)
 
 | Type | Rendered as | Notes |
 |------|-------------|-------|
 | `'string'` | Text input | |
 | `'password'` | Password input | Value is masked |
-| `'boolean'` | Checkbox | `disabled: true` shows it greyed out; say why in `description` |
+| `'boolean'` | Checkbox | Supports `disabled: true` (currently applied to checkboxes only) |
 | `'number'` | Number input | |
 | `'select'` | Dropdown | Requires `options` |
 
-### `visibleWhen`
-
-The optional `visibleWhen` property conditionally shows a field based on another field's value:
-
-```typescript
-{
-  key: 'advancedOption',
-  label: 'Advanced option',
-  type: 'string',
-  visibleWhen: { key: 'mode', value: 'advanced' }
-  // This field is only rendered when the 'mode' field equals 'advanced'
-}
-```
-
-### Using settings in `getEnvOverrides`
-
-```typescript
-getEnvOverrides(): Record<string, string> {
-  const config = getToolConfig(TOOL_ID)
-  const env: Record<string, string> = {}
-
-  const apiKey = config.apiKey as string
-  if (apiKey) env['MYTOOL_API_KEY'] = apiKey
-
-  const proxy = config.proxy as string
-  if (proxy) {
-    env['HTTP_PROXY'] = proxy
-    env['HTTPS_PROXY'] = proxy
-  }
-
-  return env
-}
-```
-
 ---
 
-## 8. Accounts
+## 9. Accounts, Usage & Pipeline Account Pool
 
 ### When to implement vs. when to skip
 
-**Implement account management** when the CLI stores credentials in files that AIDE can read and write, and there is no built-in, convenient account-switching mechanism in the CLI itself. This covers the majority of tools.
+`hasAccountSystem(): boolean` is **required** on `CliTool`.
 
-**Set `hasAccountSystem() { return false }`** in exactly two cases:
-1. The CLI already has **its own built-in account switching** (e.g. OpenCode's `/auth` menu), making AIDE-level credential management redundant or conflicting.
-2. It is **technically impossible** to implement credential export/import for this tool (e.g. the CLI uses OS-level credential stores that cannot be accessed programmatically).
+**Implement account management (`return true`)** whenever the CLI stores credentials in files/DBs that AIDE can read and write, and there is no built-in, convenient account-switching mechanism in the CLI itself.
 
-In all other cases where the CLI uses credentials, account management **must** be implemented — even if the implementation is minimal. Do not use `hasAccountSystem() → false` as a shortcut for skipping work.
+**Return `false`** only when:
+1. The CLI already has its own built-in account switching that makes AIDE-level management redundant or conflicting, OR
+2. Credential export/import is technically impossible (e.g. opaque OS-only credentials or inaccessible auth flow).
 
 When `hasAccountSystem()` returns `false`:
-- The tool is excluded from the Accounts section in Settings.
-- The tool is excluded from the "Load Account" submenu in the application menu.
-- `getLoginIdentifier` is still called — its result is shown in the status bar as a static label (e.g. tool name or current model), without "not saved" warnings.
+- The tool is hidden from Account Manager, Settings → Accounts, and the "Load Account" menu.
+- `getLoginIdentifier()` is still called for the status bar (static label, no "not saved" warning).
+
+### Core account methods
+
+- `isLoggedIn()` — whether valid credentials exist locally.
+- `getLoginIdentifier()` — email, username, or label of the active login (used for UI display and for matching the active login to saved accounts in `accountSwitch.ts`).
+- `exportCredentials()` — returns a JSON-serialisable snapshot of current credentials, or `null` if not logged in.
+- `importCredentials(credentials)` — restores a saved snapshot (stop/restart any shared CLI auth daemon first if needed, as Codex does).
+- `clearCredentials()` — deletes local credentials without revoking tokens server-side.
+
+### Extended account lifecycle methods
+
+- **`accountSwitchNeedsRestart?(): boolean`** — defaults to `true` when omitted. Controls whether AIDE offers to restart open PTY tabs after an interactive account switch (`offerRestartAfterAccountChange` in `src/main/pty/registry.ts`) and whether `AccountPool` automatically restarts tabs after a pool rotation (`src/main/pipeline/accountPool.ts`). Return `false` if live sessions re-read credentials from disk on their own (e.g. Claude Code).
+- **`accountHint?(): Promise<string | null>`** — optional explanatory text shown in Account Manager (e.g. OpenCode explains when API keys live in `opencode.json` rather than stored credentials).
+- **`refreshAccountState?(): Promise<void>`** — called by Account Manager whenever it opens or switches to this tool, so derived/cached auth state is up to date.
+
+### Pipeline Account Pool
+
+Any CLI with `hasAccountSystem() === true`, `importCredentials`, and a `headless` adapter participates automatically in the **Pipeline Account Pool** (`docs/account-pool.md`):
+- When a headless step returns `error.code === 'limit'`, AIDE marks the active saved account exhausted (until the parsed reset time, if present), saves any rotated tokens back to its record (matching by `getLoginIdentifier()`), loads the next checked pool account, restarts tabs if `accountSwitchNeedsRestart() !== false`, and resumes the pipeline run automatically.
+
+### Usage info (`getUsageInfo`)
+
+```typescript
+async getUsageInfo(cacheMaxAgeMs = 20 * 60_000): Promise<UsageInfo | null>
+```
+
+`UsageInfo`:
+- `summary: string` — short status bar text (e.g. `"37% / 26%"`)
+- `tooltip: string` — detailed hover text
+- `level: 'normal' | 'warn' | 'critical'` — color hint
+- `fetchedAt: number` — epoch ms when fetched
+- `hasLimit?: boolean` — set `false` when there is no quota limit so callers skip warning colors
+
+**Recommendations:**
+- Respect `cacheMaxAgeMs` (`usage:get-info` passes `5 * 60_000` when the editor window is focused and `20 * 60_000` when unfocused) and implement exponential backoff on HTTP 429.
+- Use `Electron.session.fromPartition(...)` with `setProxy()` so usage requests honour the tool's proxy setting.
+- For multi-window / multi-instance coordination, use the shared SQLite usage cache and refresh lease helpers in `src/main/config/accountStorage.ts` (`getSubscriptionUsageCache`, `setSubscriptionUsageCache`, `tryAcquireSubscriptionUsageRefresh`, `releaseSubscriptionUsageRefresh`), as in `claudeCode.ts` and `cursorAgent.ts`.
 
 ---
 
-### Minimum set
-
-For basic auth status display:
-
-```typescript
-async isLoggedIn(): Promise<boolean> {
-  const configPath = join(homedir(), '.mytool', 'auth.json')
-  if (!existsSync(configPath)) return false
-  try {
-    const auth = JSON.parse(readFileSync(configPath, 'utf-8'))
-    return !!auth.token
-  } catch {
-    return false
-  }
-},
-
-async getLoginIdentifier(): Promise<string | null> {
-  const configPath = join(homedir(), '.mytool', 'auth.json')
-  if (!existsSync(configPath)) return null
-  try {
-    const auth = JSON.parse(readFileSync(configPath, 'utf-8'))
-    return auth.email ?? auth.username ?? null
-  } catch {
-    return null
-  }
-}
-```
-
-### Full implementation with account switching
-
-AIDE supports saving multiple accounts. Three methods are required:
-
-```typescript
-/** Keys from auth.json to persist as credentials */
-const CREDENTIAL_KEYS = ['token', 'email', 'userId'] as const
-const AUTH_PATH = join(homedir(), '.mytool', 'auth.json')
-
-async exportCredentials(): Promise<Record<string, unknown> | null> {
-  if (!existsSync(AUTH_PATH)) return null
-  try {
-    const auth = JSON.parse(readFileSync(AUTH_PATH, 'utf-8'))
-    if (!auth.token) return null
-    const creds: Record<string, unknown> = {}
-    for (const key of CREDENTIAL_KEYS) {
-      if (auth[key] !== undefined) creds[key] = auth[key]
-    }
-    return creds
-  } catch {
-    return null
-  }
-},
-
-async importCredentials(credentials: Record<string, unknown>): Promise<void> {
-  let auth: Record<string, unknown> = {}
-  if (existsSync(AUTH_PATH)) {
-    try { auth = JSON.parse(readFileSync(AUTH_PATH, 'utf-8')) } catch {}
-  }
-  for (const key of CREDENTIAL_KEYS) {
-    if (credentials[key] !== undefined) auth[key] = credentials[key]
-  }
-  writeFileSync(AUTH_PATH, JSON.stringify(auth, null, 2), 'utf-8')
-},
-
-async clearCredentials(): Promise<void> {
-  if (!existsSync(AUTH_PATH)) return
-  try {
-    const auth = JSON.parse(readFileSync(AUTH_PATH, 'utf-8'))
-    for (const key of CREDENTIAL_KEYS) delete auth[key]
-    writeFileSync(AUTH_PATH, JSON.stringify(auth, null, 2), 'utf-8')
-  } catch {}
-}
-```
-
-### Usage info (status bar)
-
-If the tool exposes an API for usage information:
-
-```typescript
-async getUsageInfo(): Promise<UsageInfo | null> {
-  const configPath = join(homedir(), '.mytool', 'auth.json')
-  if (!existsSync(configPath)) return null
-
-  try {
-    const auth = JSON.parse(readFileSync(configPath, 'utf-8'))
-    const res = await fetch('https://api.example.com/usage', {
-      headers: { Authorization: `Bearer ${auth.token}` }
-    })
-    if (!res.ok) return null
-
-    const data = await res.json() as { used: number; limit: number }
-    const percent = Math.round((data.used / data.limit) * 100)
-    const level: UsageInfo['level'] = percent >= 90 ? 'critical' : percent >= 70 ? 'warn' : 'normal'
-
-    return {
-      summary: `${percent}%`,
-      tooltip: `Used: ${data.used} / ${data.limit}`,
-      level,
-      fetchedAt: Date.now()
-    }
-  } catch {
-    return null
-  }
-}
-```
-
-**Recommendation:** add caching (similar to `claudeCode.ts`) and backoff on 429 errors — this method is called frequently. See `claudeCode.ts` for a complete caching + backoff implementation using a local JSON file and `Electron.session` for proxy-aware requests.
-
----
-
-## 9. Implementation Checklist
+## 10. Implementation Checklist
 
 ### Required minimum
 
 - [ ] Created `src/main/pty/cliTools/yourTool.ts`
-- [ ] Implemented all required members: `id`, `name`, `isInstalled`, `newSessionCommand`, `resumeCommand`, `scanSessions`, `watchForNewSessions`
-- [ ] Tool added to `cliToolRegistry` in `registry.ts`
-- [ ] `npm run typecheck` passes with no errors
+- [ ] Implemented all required members: `id`, `name`, `isInstalled` (using `findExecutable`), `newSessionCommand`, `resumeCommand`, `scanSessions`, `watchForNewSessions`, `hasAccountSystem`
+- [ ] Registered tool in `cliToolRegistry` (`src/main/pty/cliTools/registry.ts`)
+- [ ] `npm run typecheck` and `npm test` pass
 
-### Recommended
+### Interactive UX & startup
 
-- [ ] Added `installUrl` — link to installation instructions
-- [ ] Implemented `checkStartupHealth` — so AIDE knows when the CLI is ready
-- [ ] Implemented `prepareProject` — if the CLI requires confirmations on first run
-- [ ] Implemented `contextInsert` — for adding files to context via right-click
+- [ ] Added `installUrl` (and `installProblem` if version/runtime validation is needed)
+- [ ] Implemented `prepareProject` if workspace trust / first-run setup is needed
+- [ ] Implemented `checkStartupHealth` without any elapsed-time heuristics (use `tuiReadyForInput` for full-screen TUIs)
+- [ ] Implemented `interactiveSubmitSequence` (if different from `'\r'`) and `exitCommand`
+- [ ] Implemented `contextInsert` for desktop file tree and Remote Access
+- [ ] Added `proxy` setting and `getEnvOverrides()` with `HTTP_PROXY`/`HTTPS_PROXY` **and** `NO_PROXY`/`no_proxy` (`localhost,127.0.0.1,::1`)
 
-### For tools with sessions on disk
+### Completion signals & Strategist EventRelay
 
-- [ ] `scanSessions` returns real data
-- [ ] `watchForNewSessions` reacts to new files appearing
-- [ ] `resumeCommand` correctly builds the command from `sessionId`
-- [ ] `getSessionFilePath` returns the path to the file (for `ThinkingWatcher`)
+- [ ] Implemented `registerSignalHandler` and `deregisterTab`
+- [ ] Emit `'completeAndWait'` via `detectTitleEvent` (OSC title) or `onPtyActivity` (inactivity timer) so toolbar sounds and `tabActivity` / Pipeline `EventRelay` work
 
-### For tools with history viewing
+### AIDE MCP server & deterministic hooks
 
-- [ ] Implemented `getSessionHistory` — returns full `HistoryEntry[]`
-- [ ] Implemented `subscribeToSessionHistory` — for live updates in History Viewer
-- [ ] Created a separate scanner file (e.g. `yourToolScanner.ts`) with JSONL parsers
-- [ ] Implemented `parseThinkingBlocks` — for thinking display in ThinkingWatcher
-- [ ] `HistoryEntry` includes all block types: `text`, `thinking`, `tool_use`, `tool_result`
+- [ ] Declared `aideMcp: { supported: true | false, note? }`
+- [ ] Implemented `prepareLaunch(ctx)` to inject `ctx.mcpServers` (without mutating global user config) and wire `ctx.hook` (if the CLI supports lifecycle hooks)
+- [ ] Cleaned up per-tab launch files in `deregisterTab(tabId)`
+- [ ] Added unit test in `src/main/pty/cliTools/launchMcp.test.ts`
+- [ ] Verified live that AIDE's MCP server loads without approval prompt and receives `AIDE_TAB_ID`; updated `docs/aide-mcp-launch.md`
 
-### For tools with settings
+### Sessions, History Viewer, Remote Access & Thinking Panel
 
-- [ ] Implemented `settingsFields`, `getSettings`, `updateSettings`
-- [ ] Settings are used in `getEnvOverrides` or `prepareProject`
-- [ ] Used `visibleWhen` where fields depend on each other
+- [ ] `scanSessions` returns sorted `CliSession[]` (`firstMessage`, `slug`, `summary`, `lastModified`); uses `sessionMetaCache.ts` if scanning a global flat directory
+- [ ] `watchForNewSessions` builds its baseline synchronously before attaching watchers
+- [ ] Implemented `getSessionPreview`, `getSessionHistory`, and `subscribeToSessionHistory`
+- [ ] Added `<tool>ToolView` in `src/main/pty/cliTools/toolViews.ts` and tests in `toolViews.test.ts`
+- [ ] Thinking Panel wired via either:
+  - `getSessionFilePath` + `parseThinkingBlocks` (appendable JSONL), OR
+  - `thinking` blocks in `getSessionHistory` / `subscribeToSessionHistory` + `viaHistory` in `src/main/thinking/thinkingWatcher.ts`
 
-### For tools with authentication
+### Headless execution (Pipelines & Plans)
 
-- [ ] Implemented `isLoggedIn`, `getLoginIdentifier`
-- [ ] Implemented `exportCredentials`, `importCredentials`, `clearCredentials` (for account switching)
-- [ ] Implemented `getUsageInfo` with caching and 429 backoff
+- [ ] Implemented `src/main/pipeline/headless/yourToolHeadless.ts` and attached `headless` to `CliTool`
+- [ ] Resolves native executable directly (no `.cmd`/`.bat` shell required); honours `options.executable`
+- [ ] Isolates runs from user MCP servers, rules, and connectors
+- [ ] Enforces `read-only` (reads + git inspection only, writes/arbitrary shell denied) and `write` profiles
+- [ ] Supports `outputSchema` (native schema, `resultTool: true`, or `promptWithRoleAndSchema` + `parseFinalJson`)
+- [ ] Emits `onSessionId`, supports `resumeSessionId` (across permission profiles), streams `onEntry` with `ToolView`
+- [ ] Classifies errors cleanly (`limit`, `unavailable`, `timeout`, `cancelled`, `no_output`, `failed`), preserving limit reset times
+- [ ] Added tool ID to `EFFORTS` in `src/main/pipeline/engine/validate.ts` (if `effort` is supported)
+- [ ] Added unit tests and opt-in live test (`yourTool.live.test.ts`, `AIDE_LIVE_<TOOL>=1`)
+- [ ] Updated `docs/headless-cli-matrix.md` and `resources/docs/pipeline-authoring.md`
+
+### Settings
+
+- [ ] Implemented `settingsFields`, `getSettings`, `updateSettings` (using `visibleWhen` / `disabled` where appropriate)
+- [ ] Verified Settings UI renders tool fields plus auto-injected `aideMcpServer` and `pipelineEventMessages`
+
+### Accounts, Usage & Account Pool
+
+- [ ] Implemented `isLoggedIn`, `getLoginIdentifier`, `exportCredentials`, `importCredentials`, `clearCredentials`
+- [ ] Implemented `accountSwitchNeedsRestart`, `accountHint`, `refreshAccountState` if applicable
+- [ ] Implemented `getUsageInfo(cacheMaxAgeMs)` with caching, 429 backoff, proxy support, and `hasLimit`
+- [ ] Updated `docs/account-pool.md` if the CLI has pool-specific behavior

@@ -1,0 +1,315 @@
+{
+  "id": "task-tracker-v1",
+  "title": "Task tracker v1: storage, tools, binding, view",
+  "goal": "AIDE has a task tracker that agents and the user share: task files in aide/tasks/, MCP task_* tools (writes only from AIDE terminal tabs), tab binding, task_snapshot with a short orientation in the server instructions, and a Tasks tab in the UI. Drift, the full close and the Documenter come later.",
+  "spec": "docs/task-tracker-implementation.md",
+  "state": "approved",
+  "revision": 8,
+  "orchestrator": {
+    "cli": "claude-code",
+    "model": "sonnet",
+    "effort": "low",
+    "prompt": "Check that the step met its acceptance criteria and followed docs/task-tracker-implementation.md (the concept is docs/task-tracker-spec.md). Wake the Strategist if the run changed an interface a later task relies on differently from the implementation doc, if it implemented anything listed in §9 'Not in this work', if a reviewer's non-blocking findings point at a design problem, or if the run ended without a commit. You may answer a limit escalation with retry once when the last review findings are small and concrete; pass everything else on.",
+    "maxUnreviewed": 2,
+    "shadow": false,
+    "escalations": [
+      "limit"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "store",
+      "title": "Task file format and store",
+      "status": "done",
+      "phase": "Tracker v1",
+      "machine": "code-feature",
+      "params": {
+        "taskSpec": "Implement §1 (src/shared/task.ts), §2 (src/main/tasks/taskFile.ts, add the `yaml` npm dependency) and §3 (src/main/tasks/taskStore.ts: list/read/write with baseRevision checks, write lease, load-check problems, config, and an isTrackerPath helper excluded wherever isPlanPath is: run diff, commit coverage, dirty-tree warning, shadow snapshot) of docs/task-tracker-implementation.md, with the unit tests listed there. No service, MCP tools or UI yet."
+      },
+      "spec": "docs/task-tracker-implementation.md#1-shared-types--srcsharedtaskts",
+      "acceptance": [
+        "parseTask(serializeTask(t)) round-trips exactly, CRLF input parses, unknown keys and every invalid field are reported",
+        "revisionOf is a content hash: a hand edit of a task file changes it and a write with the old baseRevision is refused, writing nothing for any task of the batch",
+        "The write lease is taken exclusively, an expired lease is taken over, a held one makes the writer wait on the lease file's change bounded by its expiry (no sleep loop)",
+        "problems() reports duplicate ids, invalid files and history pointers to tasks that are not closed",
+        "aide/tasks/ paths are excluded from run diff, commit coverage, dirty-tree warning and shadow snapshot like aide/plans/",
+        "npm run typecheck and npm test pass"
+      ],
+      "checkpoint": true
+    },
+    {
+      "id": "service-tools",
+      "title": "Task service and MCP task_* tools",
+      "status": "done",
+      "phase": "Tracker v1",
+      "after": [
+        "store"
+      ],
+      "machine": "code-feature",
+      "params": {
+        "taskSpec": "First, two fixes in src/main/tasks/taskStore.ts from the review of task 'store': read(id) and exists(id) must reject ids that do not match TASK_ID_PATTERN (an id like ../../x must never resolve outside aide/tasks/), and the lease's exclusive create must treat EPERM as 'exists' when the lease file is still present (Windows reports EPERM for a file pending deletion); the retry path after a failed create must await the lease file's change instead of spinning. Then implement §4 (src/main/tasks/taskService.ts, created where PlanService is, IPC notification tasks:changed on writes and on disk changes under aide/tasks/) and §5 (src/main/pipeline/mcp/taskTools.ts registered on the same MCP server as planTools, write tools only with a live tab id, resources/docs/task-guide.md for task_guide) of docs/task-tracker-implementation.md. task_start may record the binding through a minimal function that the next task (binding-snapshot) completes; task_snapshot and the result tail are the next task's work: register task_snapshot returning a one-line placeholder only if needed for the tool list."
+      },
+      "spec": "docs/task-tracker-implementation.md#4-service--srcmaintaskstaskservicets",
+      "acceptance": [
+        "Every write tool fails with the documented message when the MCP context has no live tab id; read tools work without one",
+        "task_create generates a unique slug id from the title when none is given; migration-style creation with status done, label and claim stores confirmed: null",
+        "task_update enforces the status transitions of §4 and refuses others with the rule",
+        "The interim task_close moves superseded tasks to history pointing at the closing task, and sends a claim-less, decidedAgainst-less task to history itself",
+        "task_search excludes history unless asked and lists planned by rank first; task_get returns revision and claim chain",
+        "npm run typecheck and npm test pass"
+      ]
+    },
+    {
+      "id": "binding-snapshot",
+      "title": "Tab binding, task_snapshot, orientation and tails",
+      "status": "done",
+      "phase": "Tracker v1",
+      "after": [
+        "service-tools"
+      ],
+      "machine": "code-feature",
+      "params": {
+        "taskSpec": "Implement §6 (bindings.json per user, cleared on tab close / task leaving active / another start, other users' bindings read on a shared folder, the current task shown on the terminal tab) and §7 (the tracker part of serverInstructions within 2,500 characters with the rule first, task_snapshot sections 0-4 with the label budget and relevance order, and the per-connection tail appended to task, plan and pipeline tool results) of docs/task-tracker-implementation.md."
+      },
+      "spec": "docs/task-tracker-implementation.md#6-tab-binding",
+      "acceptance": [
+        "Closing a terminal tab removes its binding; a task paused or closed loses its bindings",
+        "serverInstructions with a tracker of 300 claims stays within 2,500 characters for the tracker part and starts with the rule sentence (test)",
+        "task_snapshot over budget keeps whole tags in the documented order and ends with the count of claims left out (test)",
+        "A tool result gets the tail only when something changed for that connection since its last tail, at most 5 items (test)",
+        "npm run typecheck and npm test pass"
+      ]
+    },
+    {
+      "id": "tasks-view",
+      "title": "Tasks tab in the UI",
+      "status": "done",
+      "phase": "Tracker v1",
+      "after": [
+        "binding-snapshot"
+      ],
+      "machine": "code-feature",
+      "params": {
+        "taskSpec": "Implement §8 of docs/task-tracker-implementation.md: the Tasks tab button next to the Pipeline tab button in the terminal panel's tab strip, TasksView with Now / Planned / Backlog / Project / Decided against sections, search with an include-history toggle, the task card with its actions, quick add, drag to rank (fractional rank), store useTaskStore and IPC tasks:list / tasks:get / tasks:create / tasks:update / tasks:changed, preload interface kept in sync in editor.ts and env.d.ts. English UI text; look of PlanView.tsx."
+      },
+      "spec": "docs/task-tracker-implementation.md#8-ui--the-tasks-tab",
+      "acceptance": [
+        "The Tasks tab appears next to the Pipeline tab and shows the sections of §8 from aide/tasks/",
+        "Quick add creates a task with a generated id; dragging in Planned writes a fractional rank and the order persists",
+        "A change made through MCP or by hand in aide/tasks/ appears in the view without reopening it",
+        "Clicking a doc link opens the file in the editor",
+        "npm run typecheck and npm test pass"
+      ],
+      "checkpoint": true
+    },
+    {
+      "id": "feature-switches",
+      "title": "Feature switches for pipelines, plans and the task tracker (+ two Tasks view fixes)",
+      "status": "done",
+      "phase": "Tracker v1",
+      "after": [
+        "tasks-view"
+      ],
+      "machine": "code-feature",
+      "params": {
+        "taskSpec": "First, two fixes in src/renderer/src/components/tasks/TasksView.tsx from the review of task 'tasks-view': every IPC call (tasksSearch, tasksGet and the others) gets a rejection handler that shows the error in the view and logs it through logManager, so the view never stays on 'Searching…'/'Loading…'; and openInEditor refuses a doc or description link that resolves outside the project root.\n\nThen three switches — pipelines, plans, tracker — with a layered value. The effective value of each switch for a project is the LAST layer that sets it, in this order: (1) built-in default: on; (2) global: the user's app config (`features: { pipelines?, plans?, tracker? }`), edited in Settings' global part, applies to every project that does not override it, live (changing it affects existing projects too, not only new ones); (3) project: `features` in the project's shared `aide/config.json` (read by readSharedConfig, the same file as the `git` section) — there is NO UI for this layer: it takes effect only when someone puts it into the file by hand (e.g. copies a config), and it is picked up like the git section is; (4) personal: `features` in the user's per-project settings `.aide/users/<user>/settings.json`, edited in Settings for the open project as a three-state choice per switch: 'Default' (inherit, writes nothing / removes the key), 'On', 'Off'. Missing files, sections or keys mean 'not set at this layer'. The personal UI shows next to each switch the value it would inherit and from which layer ('on — built-in default', 'off — global', 'off — project config'). Add a section '## 10. Feature switches' to docs/task-tracker-implementation.md describing exactly what you built, including the layer order.\n\nWhat 'off' means for each: (1) its MCP tools are not in the tool list of AIDE's MCP server for this project and user (pipeline_* / plan_* / task_*), and its part of serverInstructions and of pipeline_hello is left out; the tool list is read at the client's initialize, so a change applies to CLI sessions started after saving, and Settings says so next to the switches; (2) its UI is hidden: the Pipeline tab / the plan views and PlanSensor in the status bar / the Tasks tab and the current-task label on terminal tabs; (3) its IPC handlers answer with a clear 'turned off in Settings' error instead of acting; (4) nothing on disk is deleted: aide/plans/, aide/tasks/ and run history stay and come back when the switch is on again. Dependencies: plans run through pipelines, so with pipelines off the plans switch stays usable but the plan autopilot (plan_run) is unavailable and says why; the tracker depends on neither. Turning pipelines off (at any layer the UI edits) while a run or an autopilot of the open project is working is refused with the reason. The tracker's tool-result tail is not added when the tracker is off. English UI text; follow how existing settings are stored and shown."
+      },
+      "spec": "docs/task-tracker-implementation.md",
+      "acceptance": [
+        "TasksView shows an error instead of staying on Loading/Searching when an IPC call fails, and a link resolving outside the project is not opened",
+        "With no `features` anywhere AIDE behaves exactly as before (tests)",
+        "Layer order default -> global -> project -> personal is honoured: a test sets combinations of layers and checks the effective value for each switch",
+        "Two projects resolve independently: a personal or project-config switch in project A does not affect project B (test)",
+        "The project layer has no UI; a `features` section copied by hand into aide/config.json takes effect",
+        "With a switch off, a newly initialized MCP session has none of that feature's tools and none of its text in the server instructions (test per switch)",
+        "With a switch off its UI is hidden and its IPC handlers refuse with the 'turned off in Settings' message; files on disk are untouched",
+        "Pipelines off: plan_run is unavailable with the reason, other plan tools work; turning pipelines off during a run is refused",
+        "npm run typecheck and npm test pass"
+      ],
+      "checkpoint": true
+    },
+    {
+      "id": "migrate-aide",
+      "title": "Migrate AIDE's own state into the tracker",
+      "status": "done",
+      "phase": "Tracker v1",
+      "after": [
+        "feature-switches"
+      ],
+      "spec": "docs/task-tracker-spec.md#migration",
+      "acceptance": [
+        "The Strategist creates tasks from STAGES.md, PLAN.md, Status/Planned lines in docs/ and the state parts of CLAUDE.md, all unverified, and the user reviews them before the old files are cleaned"
+      ]
+    }
+  ],
+  "followups": [
+    {
+      "id": "f1",
+      "text": "TaskStore.read(id)/exists(id) do not check `id` against TASK_ID_PATTERN, so an id like `../../x` resolves outside aide/tasks/. Only write() checks it, through taskProblems. Nothing calls these yet, but the service/MCP layer in §4–§5 will pass ids from agents, so validate the id here or there.",
+      "from": "store",
+      "at": "2026-11-20T14:08:09.642Z"
+    },
+    {
+      "id": "f2",
+      "text": "acquireLease: when readLease() returns null (for example a transient EPERM/EBUSY read on Windows while another process holds the file) and tryCreate keeps failing with EEXIST, the `continue` path retries synchronously with no await. That spins the main thread until the read succeeds. Treating an unreadable-but-existing lease like an empty one (expiry by mtime) would avoid this.",
+      "from": "store",
+      "at": "2026-11-20T14:08:09.642Z"
+    },
+    {
+      "id": "f3",
+      "text": "tryCreate: on Windows, openSync('wx') on a lease file that is pending deletion can fail with EPERM rather than EEXIST. This throws out of write() instead of retrying. Consider treating EPERM as 'exists' when the file is still present.",
+      "from": "store",
+      "at": "2026-11-20T14:08:09.642Z"
+    },
+    {
+      "id": "f4",
+      "text": "Expired-lease takeover (write, then read back the token) can still let two writers both see their own token if their reads and writes interleave. The spec accepts this design; a short note in the code would help later readers.",
+      "from": "store",
+      "at": "2026-11-20T14:08:09.642Z"
+    },
+    {
+      "id": "f5",
+      "text": "git.ts: the constant `NOT_PLANS` now also excludes aide/tasks; a name like `NOT_RECORDS` would match the new `isAideRecordPath`.",
+      "from": "store",
+      "at": "2026-11-20T14:08:09.642Z"
+    },
+    {
+      "id": "f6",
+      "text": "waitForLeaseChange: if fs.watch emits 'error' immediately every time, the wait/re-check cycle becomes an async busy loop until the lease expires. This is unlikely and bounded by the expiry.",
+      "from": "store",
+      "at": "2026-11-20T14:08:09.642Z"
+    },
+    {
+      "id": "f7",
+      "text": "TaskService.start emits 'changed' twice when it writes: once from write() and again after bindTab. The second emit could be skipped when the task was written, since the binding has no renderer view yet.",
+      "from": "service-tools",
+      "at": "2026-11-20T14:20:25.002Z"
+    },
+    {
+      "id": "f8",
+      "text": "slugFromTitle strips diacritics with a regex range of literal combining characters (`[̀-ͯ]`). Spell it as `[̀-ͯ]` so the source does not depend on invisible characters surviving editors and tooling.",
+      "from": "service-tools",
+      "at": "2026-11-20T14:20:25.002Z"
+    },
+    {
+      "id": "f9",
+      "text": "The test 'start refuses blocked, done and cancelled tasks' only covers done. Add the blocked and cancelled cases, or rename the test.",
+      "from": "service-tools",
+      "at": "2026-11-20T14:20:25.002Z"
+    },
+    {
+      "id": "f10",
+      "text": "TaskService.user() defaults to os.userInfo().username, while userDir comes from getProjectUserPath. If the .aide/users/<user> name is ever derived differently, activeBy and journal names will differ from the per-user folder name. Consider taking the user name from the same source.",
+      "from": "service-tools",
+      "at": "2026-11-20T14:20:25.002Z"
+    },
+    {
+      "id": "f11",
+      "text": "task_guide's handler is not wrapped in reader(): if the guide file cannot be read, readFileSync throws and the client gets a protocol failure instead of a readable error result.",
+      "from": "service-tools",
+      "at": "2026-11-20T14:20:25.002Z"
+    },
+    {
+      "id": "f12",
+      "text": "Each of the service's own writes also comes back through the FS watcher (task temp files and renames under aide/tasks/), so the renderer gets 'tasks:changed' twice per write. This is harmless now; worth deduplicating when the Tasks tab (§8) starts listening.",
+      "from": "service-tools",
+      "at": "2026-11-20T14:20:25.002Z"
+    },
+    {
+      "id": "f13",
+      "text": "closeSimple with outcome 'cancelled' on a reopened task keeps the old label and claim on a cancelled task. Decide whether cancelling a reopened claim should keep it, or require supersedes / to-history.",
+      "from": "service-tools",
+      "at": "2026-11-20T14:20:25.002Z"
+    },
+    {
+      "id": "f14",
+      "text": "src/main/ipc/index.ts: the new `tasks:tab-tasks` handler and its heading comment were inserted between the `// ── Plans: the plan tab` heading and the plan handlers. The Plans heading now sits above the Tasks section. Move the Tasks block above or below the Plans section.",
+      "from": "binding-snapshot",
+      "at": "2026-11-20T14:35:28.125Z"
+    },
+    {
+      "id": "f15",
+      "text": "src/main/windows/editor.ts: there is a double blank line after the imports, before `unbindTaskTabs`.",
+      "from": "binding-snapshot",
+      "at": "2026-11-20T14:35:28.125Z"
+    },
+    {
+      "id": "f16",
+      "text": "TrackerTail leaves out a connection's own changes by matching the `by` string (`alice/tab 3`). The same user on another host has tab ids that also start at tab-1, so a change made in their tab 3 is hidden from this host's tab 3. This is a rare edge case. Recording the connection id or the host with the change would avoid it.",
+      "from": "binding-snapshot",
+      "at": "2026-11-20T14:35:28.125Z"
+    },
+    {
+      "id": "f17",
+      "text": "Other users' bindings.json files live under `.aide/`, which the FS watcher skips, so their bind and unbind events do not mark the tracker dirty. The tail's stale-active problem keys update only on the next tracker change. task_snapshot is unaffected because it reads fresh.",
+      "from": "binding-snapshot",
+      "at": "2026-11-20T14:35:28.125Z"
+    },
+    {
+      "id": "f18",
+      "text": "`withTrackerTail` also appends the tail to `isError` results and to the compact-JSON results of pipeline tools. This is fine by the spec ('added to plan and pipeline tool results'), and nothing in AIDE or the shim parses that text. It is worth noting in the guide if agents are expected to parse JSON results.",
+      "from": "binding-snapshot",
+      "at": "2026-11-20T14:35:28.125Z"
+    },
+    {
+      "id": "f19",
+      "text": "TasksView.tsx SearchHits and TaskCard: `void window.editorApi.tasksSearch(...)/tasksGet(...).then(...)` has no `.catch`. A rejected IPC call becomes an unhandled rejection, and the view stays on 'Searching…' or 'Loading…' with nothing written to the 'Tasks' log channel. Add a catch that logs through logManager the way connectTaskStore does.",
+      "from": "tasks-view",
+      "at": "2026-11-20T14:45:45.245Z"
+    },
+    {
+      "id": "f20",
+      "text": "TasksView.tsx openInEditor: only a leading './' or '/' is stripped, so a doc or description link like '../other/file.md' opens a file outside the project. Consider refusing paths that resolve outside projectPath.",
+      "from": "tasks-view",
+      "at": "2026-11-20T14:45:45.245Z"
+    },
+    {
+      "id": "f21",
+      "text": "TaskService.changeKey leaves out the stale-active problems (staleActives depends on time and runActive). The board's Now/problems list therefore updates only when a file or binding changes. No event announced this before either, but a later 'changed' that differs only in staleness is now dropped.",
+      "from": "tasks-view",
+      "at": "2026-11-20T14:45:45.245Z"
+    },
+    {
+      "id": "f22",
+      "text": "taskBoard: a duplicate id (already reported as a problem) produces two board items with the same id, which means duplicate React keys and both rows highlighted on select. This is harmless but noisy. Consider keying rows by file or skipping the second entry.",
+      "from": "tasks-view",
+      "at": "2026-11-20T14:45:45.245Z"
+    },
+    {
+      "id": "f23",
+      "text": "The 'tasks:changed' dedup in attachPipelineProject (pipeline/index.ts) is tested only indirectly through the changeKey test. A small test of the 'send once per distinct key' wrapper would lock in f12.",
+      "from": "tasks-view",
+      "at": "2026-11-20T14:45:45.245Z"
+    },
+    {
+      "id": "f24",
+      "text": "A run that is allowed to stay while pipelines are off can still restart on its own. A run stopped at a usage limit with `limitResumeAt` set resumes itself when that time comes (runner.ts ~397–401), and nothing checks the switch. Likewise, a `waiting` run whose escalation the plan's Orchestrator answers is not gated. A guard such as `projectFeatures(projectPath).pipelines` before the scheduled resume would keep a run from starting while pipelines are off.",
+      "from": "feature-switches",
+      "at": "2026-11-20T16:11:00.561Z"
+    },
+    {
+      "id": "f25",
+      "text": "`autopilotWorking` returns null when the autopilot's status is 'running' but no live run exists yet: after the Orchestrator has decided and before the next run is registered. Pipelines can be turned off in that window. If this matters, treat 'running' with no live run as working.",
+      "from": "feature-switches",
+      "at": "2026-11-20T16:11:00.561Z"
+    },
+    {
+      "id": "f26",
+      "text": "projectFeatures still reads aide/config.json and settings.json synchronously on every MCP request; an mtime-keyed cache would remove that.",
+      "from": "feature-switches",
+      "at": "2026-11-20T16:11:00.561Z"
+    },
+    {
+      "id": "f27",
+      "text": "The remote page is still not gated by the switches; §10 documents this.",
+      "from": "feature-switches",
+      "at": "2026-11-20T16:11:00.561Z"
+    },
+    {
+      "id": "f28",
+      "text": "aide/plans/task-tracker-v1.json is untracked and not part of this diff; commitPrep should not stage it unless that is intended.",
+      "from": "feature-switches",
+      "at": "2026-11-20T16:11:00.561Z"
+    }
+  ]
+}
