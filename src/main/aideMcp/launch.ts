@@ -42,7 +42,13 @@ export interface AideMcpCommand {
 }
 
 /** The MCP servers for one launch of a tab: AIDE's server when the CLI has it turned on. */
-export function aideMcpServers(tool: CliTool, tabId: string, projectPath: string, launch: AideMcpCommand): LaunchMcpServer[] {
+export function aideMcpServers(
+  tool: CliTool,
+  tabId: string,
+  projectPath: string,
+  launch: AideMcpCommand,
+  eagerTools?: string[]
+): LaunchMcpServer[] {
   if (!aideMcpEnabled(tool)) return []
   return [{
     name: AIDE_MCP_SERVER_NAME,
@@ -50,6 +56,7 @@ export function aideMcpServers(tool: CliTool, tabId: string, projectPath: string
     args: launch.args,
     env: launch.env,
     tabEnv: { AIDE_TAB_ID: tabId, AIDE_PROJECT: projectPath },
-    toolTimeoutSec: TOOL_TIMEOUT_SEC
+    toolTimeoutSec: TOOL_TIMEOUT_SEC,
+    ...(eagerTools && eagerTools.length > 0 ? { eagerTools } : {})
   }]
 }

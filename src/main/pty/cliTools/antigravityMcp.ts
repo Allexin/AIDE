@@ -42,6 +42,11 @@ export function syncAntigravityMcpConfig(projectPath: string, servers: LaunchMcp
       env: server.env
     }
     if (server.toolTimeoutSec) entry.timeoutSeconds = server.toolTimeoutSec
+    if (server.eagerTools && server.eagerTools.length > 0) {
+      const tools: Record<string, { eager: true }> = {}
+      for (const name of server.eagerTools) tools[name] = { eager: true }
+      entry.tools = tools
+    }
     mcpServers[server.name] = entry
   }
 

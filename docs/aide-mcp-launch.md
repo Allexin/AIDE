@@ -102,7 +102,9 @@ Notes:
 
 - **Claude Code**: `--mcp-config` takes several values, so it must stay the
   last argument of the command line (prompts are typed into the tab, never
-  appended).
+  appended). AIDE also sets `ENABLE_TOOL_SEARCH=false` in the tab environment
+  (unless already set by the user) so Claude Code loads AIDE's MCP tools eagerly
+  into the cached prompt prefix instead of hiding them behind deferred `ToolSearch`.
 - **Codex**: values are TOML literal strings, so paths need no escaping; a
   value with a single quote cannot be passed and the server is left out (logged).
   The arguments contain no double quotes, which Windows PowerShell 5.1 would
@@ -123,7 +125,9 @@ Notes:
 - **Google Antigravity**: Antigravity loads MCP servers from
   `~/.gemini/config/mcp_config.json`, `<workspace>/.agents/mcp_config.json`, or
   plugins; it has no per-launch `--mcp-config` flag. Before each Antigravity
-  launch, AIDE keeps its `aide` entry (with `timeoutSeconds: 3100`) in
+  launch, AIDE keeps its `aide` entry (with `timeoutSeconds: 3100` and
+  `tools.<name>.eager: true` for every tool enabled in the project, so tools
+  load into the cached prefix instead of lazily) in
   `.agents/mcp_config.json`, keeping the user's other servers there, adds
   `/.agents/mcp_config.json` to `.git/info/exclude`, and removes `aide` when the
   setting is off. The file is shared by the project's Antigravity tabs, so it

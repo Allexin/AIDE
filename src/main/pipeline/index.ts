@@ -210,7 +210,15 @@ export async function startPipelineServer(): Promise<void> {
     logEvent('pipeline-server-started', { port: pipelineServer.getPort() })
     // CLI tabs get AIDE's MCP server at launch, with the paths of this AIDE.
     const launch = shimLaunch(process.execPath, shimPath(), runtimeDir())
-    setLaunchMcpProvider((tool, tabId, projectPath) => pipelineServer.isRunning() ? aideMcpServers(tool, tabId, projectPath, launch) : [])
+    setLaunchMcpProvider((tool, tabId, projectPath) => {
+      if (!pipelineServer.isRunning()) return []
+      const eagerTools = buildPipelineTools(() => ({
+        aideVersion: app.getVersion(),
+        launcherPath,
+        features: projectFeatures(projectPath)
+      })).map((t) => t.name)
+      return aideMcpServers(tool, tabId, projectPath, launch, eagerTools)
+    })
   } catch (err) {
     // Orchestration becomes unavailable; the editor itself is unaffected.
     logEvent('pipeline-server-start-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn')

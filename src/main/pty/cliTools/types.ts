@@ -23,6 +23,8 @@ export interface LaunchMcpServer {
   tabEnv: Record<string, string>
   /** How long one tool call may take, for CLIs that cut long calls by default. */
   toolTimeoutSec?: number
+  /** Tool names that CLIs with lazy MCP loading (e.g. Antigravity) should register eagerly upfront. */
+  eagerTools?: string[]
 }
 
 /** Context passed to CliTool.prepareLaunch at spawn time. */

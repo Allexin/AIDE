@@ -170,6 +170,13 @@ function mcpConfigPath(tabId: string): string {
   return tabLaunchPath('claude-mcp', tabId, '.json')
 }
 
+/** Env vars added for Claude Code MCP launches: disables deferred ToolSearch so AIDE's tools load eagerly. */
+export function claudeMcpEnv(servers: LaunchMcpServer[], parentEnv: NodeJS.ProcessEnv = process.env): Record<string, string> | undefined {
+  if (!servers.some((s) => s.eagerTools && s.eagerTools.length > 0)) return undefined
+  if (parentEnv.ENABLE_TOOL_SEARCH !== undefined) return undefined
+  return { ENABLE_TOOL_SEARCH: 'false' }
+}
+
 /** A config for `--mcp-config`. */
 export function claudeMcpConfig(servers: LaunchMcpServer[]): string {
   const mcpServers = Object.fromEntries(servers.map((server) => [server.name, {
@@ -238,14 +245,16 @@ export const claudeCodeTool: CliTool = {
     }
     // --mcp-config adds to the user's and the project's MCP servers. It takes several
     // values, so it stays the last argument.
+    let env: Record<string, string> | undefined
     if (ctx.mcpServers.length > 0) {
       try {
         args += ` --mcp-config "${writeLaunchFile(mcpConfigPath(ctx.tabId), claudeMcpConfig(ctx.mcpServers))}"`
       } catch (err) {
         cliLog(LOG_CH, `Failed to write the MCP config for ${ctx.tabId}: ${String(err)}`)
       }
+      env = claudeMcpEnv(ctx.mcpServers)
     }
-    return { args }
+    return env ? { args, env } : { args }
   },
 
   async prepareProject(projectPath: string): Promise<void> {

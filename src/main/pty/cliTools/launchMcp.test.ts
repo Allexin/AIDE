@@ -8,7 +8,7 @@ import { syncDevinMcpConfig } from './devinMcp'
 import { syncAntigravityMcpConfig } from './antigravityMcp'
 import { buildAntigravityTabSettings } from './antigravityHooks'
 import { codexMcpArgs } from './codex'
-import { claudeMcpConfig } from './claudeCode'
+import { claudeMcpConfig, claudeMcpEnv } from './claudeCode'
 import { cursorMcpPlugin } from './cursorAgent'
 import { openCodeMcpConfigContent } from './openCode'
 
@@ -50,6 +50,9 @@ describe('AIDE MCP server at launch', () => {
   it('gives Claude Code, Cursor and OpenCode the server with the tab identity', () => {
     const env = { ...server.env, ...server.tabEnv }
     expect(JSON.parse(claudeMcpConfig([server]))).toEqual({ mcpServers: { aide: { type: 'stdio', command: server.command, args: server.args, env } } })
+    expect(claudeMcpEnv([server], {})).toBeUndefined()
+    expect(claudeMcpEnv([{ ...server, eagerTools: ['task_snapshot'] }], {})).toEqual({ ENABLE_TOOL_SEARCH: 'false' })
+    expect(claudeMcpEnv([{ ...server, eagerTools: ['task_snapshot'] }], { ENABLE_TOOL_SEARCH: 'auto:5' })).toBeUndefined()
     expect(JSON.parse(cursorMcpPlugin([server]))).toMatchObject({ name: 'aide', mcpServers: { aide: { command: server.command, args: server.args, env } } })
     const content = JSON.parse(openCodeMcpConfigContent([server], JSON.stringify({ theme: 'dark', mcp: { mine: { type: 'remote', url: 'http://x' } } })))
     expect(content).toEqual({
@@ -97,13 +100,24 @@ describe('AIDE MCP server at launch', () => {
     const path = join(project, '.agents', 'mcp_config.json')
     writeFileSync(path, JSON.stringify({ mcpServers: { mine: { command: 'node', args: ['x.js'] } } }))
 
-    expect(syncAntigravityMcpConfig(project, [server], ['aide'])).toBe(true)
+    const agyServer: LaunchMcpServer = { ...server, eagerTools: ['task_snapshot', 'agent_list', 'agent_send'] }
+    expect(syncAntigravityMcpConfig(project, [agyServer], ['aide'])).toBe(true)
     expect(JSON.parse(readFileSync(path, 'utf-8')).mcpServers).toEqual({
       mine: { command: 'node', args: ['x.js'] },
-      aide: { command: server.command, args: server.args, env: server.env, timeoutSeconds: 3100 }
+      aide: {
+        command: server.command,
+        args: server.args,
+        env: server.env,
+        timeoutSeconds: 3100,
+        tools: {
+          task_snapshot: { eager: true },
+          agent_list: { eager: true },
+          agent_send: { eager: true }
+        }
+      }
     })
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf-8')).toBe('# local\n/.agents/mcp_config.json\n')
-    expect(syncAntigravityMcpConfig(project, [server], ['aide'])).toBe(false)
+    expect(syncAntigravityMcpConfig(project, [agyServer], ['aide'])).toBe(false)
 
     // Turned off: AIDE's entry goes, user's stays.
     expect(syncAntigravityMcpConfig(project, [], ['aide'])).toBe(true)
