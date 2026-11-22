@@ -21,12 +21,14 @@ export interface AppState {
   recentProjects: RecentProject[]
   openSessions: Record<string, ProjectOpenSessions>
   activatedTools: string[]
+  defaultToolId: string | null
 }
 
 const DEFAULTS: AppState = {
   recentProjects: [],
   openSessions: {},
-  activatedTools: []
+  activatedTools: [],
+  defaultToolId: null
 }
 
 let state: AppState = structuredClone(DEFAULTS)
@@ -88,5 +90,19 @@ export function getActivatedTools(): string[] {
 
 export function setActivatedTools(ids: string[]): void {
   state.activatedTools = ids
+  if (state.defaultToolId && !ids.includes(state.defaultToolId)) {
+    state.defaultToolId = null
+  }
+  saveAppState()
+}
+
+export function getDefaultToolId(): string | null {
+  return state.defaultToolId && state.activatedTools.includes(state.defaultToolId)
+    ? state.defaultToolId
+    : null
+}
+
+export function setDefaultToolId(id: string | null): void {
+  state.defaultToolId = id && state.activatedTools.includes(id) ? id : null
   saveAppState()
 }

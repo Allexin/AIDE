@@ -4,7 +4,7 @@ import { currentAccountDisplay } from '../accounts/accountInfo'
 import { existsSync, readdirSync, readFileSync, writeFileSync, statSync, promises as fsAsync } from 'fs'
 import { join } from 'path'
 import { spawn } from 'child_process'
-import { removeRecentProject, getAppState, loadOpenSessions, getActivatedTools, setActivatedTools } from '../config/appState'
+import { removeRecentProject, getAppState, loadOpenSessions, getActivatedTools, setActivatedTools, getDefaultToolId, setDefaultToolId } from '../config/appState'
 import { getAppConfig, getToolConfig, updateAppConfig, updateToolConfig } from '../config/appConfig'
 import type { PrivacyConfig, ReasoningConfig, SessionsConfig, UpdatesConfig } from '../config/appConfig'
 import { AIDE_WORK_INSTRUCTION } from '../pipeline/mcp/tools'
@@ -32,7 +32,7 @@ import { runGitStatus } from '../filetree/gitStatus'
 import { searchProjectFileIndex } from '../filetree/fileIndex'
 import { startNativeDrag } from '../filetree/nativeDrag'
 import { ptyRegistry, pickerEditorMap, offerRestartAfterAccountChange } from '../pty/registry'
-import { getRegisteredTools, getToolById, getDefaultTool } from '../pty/cliTools/registry'
+import { getRegisteredTools, getToolById, getDefaultTool, orderToolsWithDefault } from '../pty/cliTools/registry'
 import {
   listAccounts,
   listAccountInfos,
@@ -285,17 +285,17 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     }
 
     const activated = getActivatedTools()
-    const registered = getRegisteredTools()
+    const globalDefaultId = getDefaultToolId()
+    const registered = orderToolsWithDefault(getRegisteredTools(), globalDefaultId)
     const selectableTools = registered
       .filter((tool) => activated.includes(tool.id) || tool.id === startupOptions.toolId)
       .map((tool) => ({ id: tool.id, name: tool.name }))
     if (selectableTools.length === 0) {
-      const fallback = getDefaultTool(activated)
+      const fallback = getDefaultTool(activated, globalDefaultId)
       selectableTools.push({ id: fallback.id, name: fallback.name })
     }
 
-    const configuredToolId = projectPath ? readProjectSettings(projectPath).defaultToolId : undefined
-    const requestedToolId = startupOptions.toolId ?? configuredToolId
+    const requestedToolId = startupOptions.toolId ?? globalDefaultId ?? undefined
     const defaultToolId = selectableTools.some((tool) => tool.id === requestedToolId)
       ? requestedToolId!
       : selectableTools[0].id
@@ -355,10 +355,6 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
       initialSessionKey
     })
     if (senderWin.isDestroyed()) return null
-    if (selection.sessions.length === 0 && projectPath) {
-      const settings = readProjectSettings(projectPath)
-      writeProjectSettings(projectPath, { ...settings, defaultToolId: selection.newToolId })
-    }
     const result = await ptyMgr.createInitialTabs(selection.sessions, selection.newToolId, activated)
 
     return result
@@ -563,7 +559,9 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     taskWrite(event, (projectPath, by) => taskService.restore(projectPath, id, by)))
 
   // ── CLI tools: list registered tools ──────────────────────────────────────────
-  ipcMain.handle('cli-tools:list', () => getRegisteredTools().map((t) => ({ id: t.id, name: t.name })))
+  ipcMain.handle('cli-tools:list', () =>
+    orderToolsWithDefault(getRegisteredTools(), getDefaultToolId()).map((t) => ({ id: t.id, name: t.name }))
+  )
 
   // ── CLI tools: get activated list ─────────────────────────────────────────────
   ipcMain.handle('cli-tools:get-activated', () => getActivatedTools())
@@ -571,11 +569,13 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   // ── CLI tools: get all with activation state ───────────────────────────────────
   ipcMain.handle('cli-tools:get-all', async () => {
     const activated = getActivatedTools()
+    const effectiveDefaultId = activated.length > 0 ? getDefaultTool(activated, getDefaultToolId()).id : null
     return getRegisteredTools().map((t) => ({
       id: t.id,
       name: t.name,
       installUrl: t.installUrl ?? null,
-      activated: activated.includes(t.id)
+      activated: activated.includes(t.id),
+      isDefault: t.id === effectiveDefaultId
     }))
   })
 
@@ -588,6 +588,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
       if (problem) return { ok: false, error: problem }
       const current = getActivatedTools()
       if (!current.includes(toolId)) setActivatedTools([...current, toolId])
+      rebuildMenu()
       return { ok: true }
     } catch (e) {
       return { ok: false, error: String(e) }
@@ -597,13 +598,22 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   // ── CLI tools: deactivate ─────────────────────────────────────────────────────
   ipcMain.handle('cli-tools:deactivate', (_e, toolId: string) => {
     setActivatedTools(getActivatedTools().filter((id) => id !== toolId))
+    rebuildMenu()
+  })
+
+  // ── CLI tools: set global default ─────────────────────────────────────────────
+  ipcMain.handle('cli-tools:set-default', (_e, toolId: string) => {
+    const activated = getActivatedTools()
+    if (!activated.includes(toolId) || !getToolById(toolId)) return
+    setDefaultToolId(toolId)
+    rebuildMenu()
   })
 
   // ── Tool settings: get all ────────────────────────────────────────────────────
   ipcMain.handle('tool-settings:get-all', async () => {
     const activated = getActivatedTools()
     const results = []
-    for (const tool of getRegisteredTools()) {
+    for (const tool of orderToolsWithDefault(getRegisteredTools(), getDefaultToolId())) {
       if (!activated.includes(tool.id)) continue
       // Every CLI can be an orchestrator: the pipeline event messages setting is common to all,
       // as is AIDE's MCP server for the CLIs that declare whether they can take it.
@@ -630,29 +640,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   })
 
   // ── Project settings: get default tool ───────────────────────────────────────
-  ipcMain.handle('project-settings:get-default-tool', (event) => {
-    const senderWin = BrowserWindow.fromWebContents(event.sender)
-    if (!senderWin) return null
-    for (const [projectPath, win] of openProjects) {
-      if (win === senderWin) {
-        return readProjectSettings(projectPath).defaultToolId ?? null
-      }
-    }
-    return null
-  })
-
-  // ── Project settings: set default tool ───────────────────────────────────────
-  ipcMain.handle('project-settings:set-default-tool', (event, toolId: string) => {
-    const senderWin = BrowserWindow.fromWebContents(event.sender)
-    if (!senderWin) return
-    for (const [projectPath, win] of openProjects) {
-      if (win === senderWin) {
-        const s = readProjectSettings(projectPath)
-        writeProjectSettings(projectPath, { ...s, defaultToolId: toolId })
-        return
-      }
-    }
-  })
+  ipcMain.handle('project-settings:get-default-tool', () => getDefaultToolId())
 
   // ── Terminal: open session picker window ──────────────────────────────────────
   ipcMain.on('terminal:open-session-picker', (event) => {
@@ -1148,13 +1136,17 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
   // ── Accounts: get tools list ─────────────────────────────────────────────────
   ipcMain.handle('accounts:get-tools', () => {
     const activated = getActivatedTools()
-    return getRegisteredTools()
-      .filter((t) => activated.includes(t.id) && t.hasAccountSystem())
-      .map((t) => ({
-        id: t.id,
-        name: t.name,
-        hasAccount: typeof t.isLoggedIn === 'function'
-      }))
+    return orderToolsWithDefault(getRegisteredTools(), getDefaultToolId())
+      .filter((t) => activated.includes(t.id))
+      .map((t) => {
+        const supported = t.hasAccountSystem()
+        return {
+          id: t.id,
+          name: t.name,
+          hasAccountSystem: supported,
+          unsupportedReason: supported ? null : (t.accountUnsupportedReason ?? 'Account management is not supported for this CLI.')
+        }
+      })
   })
 
   // ── Accounts: check if logged in ───────────────────────────────────────────
@@ -1448,7 +1440,7 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
 
   ipcMain.handle('settings:get-activated-tools', () => {
     const activated = getActivatedTools()
-    return getRegisteredTools()
+    return orderToolsWithDefault(getRegisteredTools(), getDefaultToolId())
       .filter((t) => activated.includes(t.id))
       .map((t) => ({ id: t.id, name: t.name }))
   })
@@ -1482,12 +1474,9 @@ export function setupIpcHandlers(openProjects: Map<string, BrowserWindow>, remot
     const ptyMgr = ptyRegistry.get(editorWin)
     if (!ptyMgr) return
 
-    let projectPath: string | undefined
-    for (const [p, w] of openProjects) {
-      if (w === editorWin) { projectPath = p; break }
-    }
-    const effectiveToolId = toolId ?? (projectPath ? readProjectSettings(projectPath).defaultToolId : undefined)
-    const tabInfo = await ptyMgr.createNewSessionTab(effectiveToolId, getActivatedTools())
+    const activated = getActivatedTools()
+    const effectiveToolId = toolId ?? getDefaultToolId() ?? undefined
+    const tabInfo = await ptyMgr.createNewSessionTab(effectiveToolId, activated)
     editorWin.webContents.send('terminal:new-tab', tabInfo)
     pickerWin.close()
   })

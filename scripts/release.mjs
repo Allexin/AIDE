@@ -8,7 +8,7 @@
  * - Runs npm run build (bumps patch version + builds via electron-vite)
  * - Packages portable zip via electron-builder
  * - Creates git commit + tag
- * - Generates release notes via Claude Code
+ * - Generates release notes via Google Antigravity (`agy`)
  * - Pushes the commit and tag, publishes the GitHub release with the zip attached
  *
  * Token: GITHUB_TOKEN, or `--token-file <path>` (the toolbar passes
@@ -44,6 +44,31 @@ function readVersion() {
 function fail(message) {
   console.error(`\n❌ ${message}`)
   process.exit(1)
+}
+
+function resolveAgyExecutable() {
+  if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
+    const candidate = resolve(process.env.LOCALAPPDATA, 'agy', 'bin', 'agy.exe')
+    if (existsSync(candidate)) return candidate
+  }
+  return 'agy'
+}
+
+function parseAgyResult(stdout) {
+  let resultEvent = null
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line || !line.startsWith('{')) continue
+    try {
+      const event = JSON.parse(line)
+      if (event && event.event === 'result' && event.result && typeof event.result === 'object') {
+        resultEvent = event.result
+      }
+    } catch {
+      // Ignore non-JSON log lines
+    }
+  }
+  return resultEvent
 }
 
 console.log('\n📦 AIDE Release Tool\n')
@@ -130,8 +155,8 @@ if (notes) {
     console.warn('⚠  No commits found since previous release. Release notes will be empty.')
   }
 
-  // Step 6: generate release notes via Claude Code
-  console.log('\n🤖 Generating release notes via Claude Code...')
+  // Step 6: generate release notes via Google Antigravity
+  console.log('\n🤖 Generating release notes via Google Antigravity...')
   const today = new Date().toISOString().slice(0, 10)
   const prompt = `You are generating release notes for AIDE (a desktop code editor).
 
@@ -164,29 +189,56 @@ Rules:
 - Be concise — one line per change
 - Use the commit messages as source material; rephrase for clarity`
 
-  const claudeExe = resolve(process.env.USERPROFILE || '', '.local', 'bin', 'claude.exe')
-  // Proxy is required for Claude Code to reach Anthropic API.
+  const agyExe = resolveAgyExecutable()
+  // Proxy is required for Antigravity to reach Google APIs in restricted networks.
   // Set HTTPS_PROXY in your environment to override the default.
-  const proxyEnv = process.env.HTTPS_PROXY ? {} : {
+  const proxyEnv = (process.env.HTTPS_PROXY || process.env.https_proxy) ? {} : {
     HTTPS_PROXY: 'http://192.168.1.99:7897',
     HTTP_PROXY:  'http://192.168.1.99:7897',
-    NO_PROXY:    'localhost,127.0.0.1'
+    NO_PROXY:    'localhost,127.0.0.1,::1'
   }
-  const claudeResult = spawnSync(claudeExe, ['-p', prompt], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    maxBuffer: 1024 * 1024,
-    env: { ...process.env, ...proxyEnv }
+  const agySettings = JSON.stringify({
+    agentMode: '',
+    toolPermission: 'request-review',
+    enableTerminalSandbox: false,
+    permissions: {
+      deny: ['write_file(*)', 'read_url(*)', 'execute_url(*)', 'mcp(*)']
+    }
   })
-  if (claudeResult.status !== 0 || !claudeResult.stdout.trim()) {
-    const err = claudeResult.stderr || claudeResult.error?.message || 'unknown error'
-    console.error(`\n❌ Claude Code failed: ${err}`)
-    console.error('   Ensure claude.exe is at %USERPROFILE%\\.local\\bin\\claude.exe')
+  const agyInput = JSON.stringify({ event: 'user', message: { content: prompt } }) + '\n'
+  const agyResult = spawnSync(
+    agyExe,
+    [
+      '--input-format', 'stream-json',
+      '--output-format', 'stream-json',
+      '--disable-slash-commands',
+      '--settings', agySettings
+    ],
+    {
+      cwd: ROOT,
+      encoding: 'utf8',
+      input: agyInput,
+      maxBuffer: 10 * 1024 * 1024,
+      env: { ...process.env, ...proxyEnv, PWD: ROOT }
+    }
+  )
+  const parsedResult = parseAgyResult(agyResult.stdout || '')
+  const responseText = typeof parsedResult?.response === 'string' ? parsedResult.response.trim() : ''
+  const isOk = agyResult.status === 0 && parsedResult?.status === 'SUCCESS' && Boolean(responseText)
+  if (!isOk) {
+    const err =
+      (typeof parsedResult?.error === 'string' && parsedResult.error.trim()) ||
+      agyResult.stderr?.trim() ||
+      agyResult.error?.message ||
+      (parsedResult?.status && parsedResult.status !== 'SUCCESS' ? `status=${parsedResult.status}` : '') ||
+      'unknown error'
+    console.error(`\n❌ Google Antigravity failed: ${err}`)
+    console.error('   Ensure agy.exe is at %LOCALAPPDATA%\\agy\\bin\\agy.exe (or on PATH)')
     console.error('   You can create release notes manually using docs/release-format.md')
     process.exit(1)
   }
 
-  notes = claudeResult.stdout.trim()
+  notes = responseText
   writeFileSync(notesPath, notes, 'utf8')
   console.log(`✓ Release notes written to release/AIDE-${version}-release-notes.txt`)
 }

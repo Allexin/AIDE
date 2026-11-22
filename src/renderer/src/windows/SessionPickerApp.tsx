@@ -139,7 +139,6 @@ export default function SessionPickerApp(): React.ReactElement {
   const handleSelectTool = useCallback((toolId: string): void => {
     setDefaultToolId(toolId)
     setToolDropdownOpen(false)
-    window.sessionPickerApi.setDefaultToolId(toolId)
   }, [])
 
   const currentToolName = activatedTools.find((t) => t.id === defaultToolId)?.name

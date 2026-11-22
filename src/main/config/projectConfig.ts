@@ -7,7 +7,6 @@ export interface ProjectSettings {
   activePanelRatio: number
   collapsedWidthPx: number
   fileTreeWidth: number
-  defaultToolId?: string
   /** The personal layer of the feature switches (src/shared/features.ts); absent when it sets none. */
   features?: FeatureLayer
   /** Where the file viewer window was last placed (docs/file-viewer-spec.md). */

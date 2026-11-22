@@ -11,9 +11,8 @@ import type { PtyManager } from '../pty/ptyManager'
 import { loadOrGeneratePin, regeneratePin, validatePin } from './auth'
 import { PtyBridge, type RemoteTab } from './ptyBridge'
 import { getAppConfig, type RemoteButtonRow } from '../config/appConfig'
-import { getActivatedTools } from '../config/appState'
-import { readProjectSettings } from '../config/projectConfig'
-import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
+import { getActivatedTools, getDefaultToolId } from '../config/appState'
+import { getRegisteredTools, getToolById, orderToolsWithDefault } from '../pty/cliTools/registry'
 import { readToolbarButtons as readProjectToolbarButtons, type ToolbarButton, isSplitter } from '../config/toolbarConfig'
 import { spawnButtonProcess, killButtonProcess, addProcessObserver, addOutputObserver, getRunningButtonIds } from '../toolbar/processManager'
 import { addLogObserver } from '../pty/cliTools/cliLogger'
@@ -314,14 +313,14 @@ export class RemoteServer {
     return projectWin ? this.bridge.getTabsForWindow(projectWin) : []
   }
 
-  private getActivatedToolEntries(projectPath: string): { tools: Array<{ id: string; name: string }>; defaultToolId: string | null } {
+  private getActivatedToolEntries(_projectPath: string): { tools: Array<{ id: string; name: string }>; defaultToolId: string | null } {
     const activated = getActivatedTools()
-    const tools = getRegisteredTools()
+    const globalDefault = getDefaultToolId()
+    const tools = orderToolsWithDefault(getRegisteredTools(), globalDefault)
       .filter((tool) => activated.includes(tool.id))
       .map((tool) => ({ id: tool.id, name: tool.name }))
-    const projectDefault = readProjectSettings(projectPath).defaultToolId
-    const defaultToolId = projectDefault && activated.includes(projectDefault)
-      ? projectDefault
+    const defaultToolId = globalDefault && activated.includes(globalDefault)
+      ? globalDefault
       : (tools[0]?.id ?? null)
     return { tools, defaultToolId }
   }
@@ -1248,9 +1247,10 @@ export class RemoteServer {
       req.on('end', () => {
         let data: { toolId?: string } = {}
         try { data = JSON.parse(body || '{}') as { toolId?: string } } catch {}
+        const activated = getActivatedTools()
         const requestedToolId = typeof data.toolId === 'string' && data.toolId ? data.toolId : undefined
-        const effectiveToolId = requestedToolId ?? readProjectSettings(projectPath).defaultToolId
-        this.bridge.createTabForWindow(win, effectiveToolId, getActivatedTools()).then((tabInfo) => {
+        const effectiveToolId = requestedToolId ?? getDefaultToolId() ?? undefined
+        this.bridge.createTabForWindow(win, effectiveToolId, activated).then((tabInfo) => {
           if (!tabInfo) { res.writeHead(404); res.end('Project not found'); return }
           if (!win.isDestroyed()) win.webContents.send('terminal:new-tab', tabInfo)
           res.writeHead(200, { 'Content-Type': 'application/json' })

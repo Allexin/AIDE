@@ -240,7 +240,6 @@ interface EditorAPI {
   getCliTools: () => Promise<{ id: string; name: string }[]>
   getActivatedTools: () => Promise<string[]>
   getDefaultToolId: () => Promise<string | null>
-  setDefaultToolId: (toolId: string) => Promise<void>
 
   // Accounts
   getAccountCurrentInfo: (toolId: string) => Promise<{ label: string; saved: boolean } | null>
@@ -438,7 +437,6 @@ interface SessionPickerAPI {
   getActivatedTools: () => Promise<string[]>
   getCliTools: () => Promise<{ id: string; name: string }[]>
   getDefaultToolId: () => Promise<string | null>
-  setDefaultToolId: (toolId: string) => Promise<void>
   openHistory: (sessionId: string, toolId: string, sessionTitle: string) => void
 }
 
@@ -484,7 +482,7 @@ interface CliAccountInfo {
 }
 
 interface AccountManagerAPI {
-  getTools: () => Promise<{ id: string; name: string }[]>
+  getTools: () => Promise<{ id: string; name: string; hasAccountSystem: boolean; unsupportedReason: string | null }[]>
   isLoggedIn: (toolId: string) => Promise<boolean>
   getLoginIdentifier: (toolId: string) => Promise<string | null>
   listAccounts: (toolId: string) => Promise<CliAccountInfo[]>
@@ -564,12 +562,14 @@ interface CliToolEntry {
   name: string
   installUrl: string | null
   activated: boolean
+  isDefault: boolean
 }
 
 interface CliToolsAPI {
   getAll: () => Promise<CliToolEntry[]>
   activate: (toolId: string) => Promise<{ ok: boolean; error?: string }>
   deactivate: (toolId: string) => Promise<void>
+  setDefault: (toolId: string) => Promise<void>
   copyToolId: (toolId: string) => void
   close: () => void
 }

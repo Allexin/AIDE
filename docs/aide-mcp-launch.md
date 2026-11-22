@@ -95,6 +95,7 @@ Verified live on 2026-10-29 with a probe server that reports its environment.
 | OpenCode | `OPENCODE_CONFIG_CONTENT` in the tab's environment (merged over an existing value) | `opencode run --standalone` |
 | Cursor Agent | a per-tab plugin directory (`.cursor-plugin/plugin.json` with `mcpServers`), `--plugin-dir "<dir>"` | print and interactive: loaded without an approval prompt, nothing stored in `~/.cursor` |
 | Devin | the project's `.devin/mcp_config.local.json` | print and interactive: loaded without an approval prompt; `AIDE_TAB_ID` arrives from Devin's own environment |
+| Google Antigravity | the project's `.agents/mcp_config.json` + per-tab `--settings` allowing `mcp(aide/*)` | print (`--input-format stream-json`): loaded and called without an approval prompt; `AIDE_TAB_ID` arrives from Antigravity's own environment |
 | Qwen Code | not supported (legacy) | — |
 
 Notes:
@@ -119,6 +120,17 @@ Notes:
   environment, with the tab's `AIDE_TAB_ID`, to MCP servers. In a git repository
   rooted at the project, AIDE adds the file to `.git/info/exclude`. The setting
   says so.
+- **Google Antigravity**: Antigravity loads MCP servers from
+  `~/.gemini/config/mcp_config.json`, `<workspace>/.agents/mcp_config.json`, or
+  plugins; it has no per-launch `--mcp-config` flag. Before each Antigravity
+  launch, AIDE keeps its `aide` entry (with `timeoutSeconds: 3100`) in
+  `.agents/mcp_config.json`, keeping the user's other servers there, adds
+  `/.agents/mcp_config.json` to `.git/info/exclude`, and removes `aide` when the
+  setting is off. The file is shared by the project's Antigravity tabs, so it
+  carries no `tabEnv`; Antigravity passes its own environment (`AIDE_TAB_ID`,
+  `AIDE_PROJECT`) to stdio MCP servers. Because Antigravity defaults MCP tools
+  to Ask, the per-tab `--settings` file merges `mcp(aide/*)` into
+  `permissions.allow` so AIDE's tools run without prompting.
 
 ## Existing entries
 

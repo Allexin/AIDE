@@ -1,7 +1,7 @@
 ---
 id: viewer-mermaid-images
 title: Render Mermaid and local images in viewer Markdown
-status: active
+status: planned
 rank: null
 tags: [mcp, editor]
 docs: [docs/file-viewer-spec.md, docs/rendered-preview-spec.md]
@@ -17,7 +17,7 @@ confirmed: null
 acknowledged: null
 check: null
 source: null
-activeBy: [Allex]
+activeBy: []
 created: 2026-11-20T19:04:37.240Z
 closed: null
 ---
@@ -28,3 +28,4 @@ Markdown in the viewer shows Mermaid blocks as code and relative images as their
 ## Journal
 - 2026-11-20 created by Allex/tab 1
 - 2026-11-20 Allex/tab 1: started (planned → active)
+- 2026-11-22 Allex: active → planned

@@ -24,7 +24,21 @@ export function getToolById(id: string): CliTool | undefined {
   return [...cliToolRegistry, ...builtinTools].find((t) => t.id === id)
 }
 
-export function getDefaultTool(activatedTools: string[]): CliTool {
+export function orderToolsWithDefault<T extends { id: string }>(
+  tools: T[],
+  defaultToolId: string | null | undefined
+): T[] {
+  if (!defaultToolId) return tools
+  const idx = tools.findIndex((t) => t.id === defaultToolId)
+  if (idx <= 0) return tools
+  return [tools[idx], ...tools.slice(0, idx), ...tools.slice(idx + 1)]
+}
+
+export function getDefaultTool(activatedTools: string[], preferredDefaultId?: string | null): CliTool {
+  if (preferredDefaultId && activatedTools.includes(preferredDefaultId)) {
+    const preferred = cliToolRegistry.find((t) => t.id === preferredDefaultId)
+    if (preferred) return preferred
+  }
   const first = cliToolRegistry.find((t) => activatedTools.includes(t.id))
   return first ?? plainShellTool
 }

@@ -269,7 +269,7 @@ src/main/pty/
     devin.ts / devinScanner.ts / devinHooks.ts / devinMcp.ts
     openCode.ts / openCodeScanner.ts / openCodeAuth.ts / openCodeParts.ts
     qwenCode.ts / qwenCodeScanner.ts
-    antigravity.ts
+    antigravity.ts / antigravityScanner.ts / antigravityHooks.ts / antigravityMcp.ts / antigravityUsage.ts
     plainShell.ts             — built-in fallback
 
 src/main/aideMcp/
@@ -293,7 +293,7 @@ src/main/pipeline/
   engine/validate.ts          — EFFORTS table & schema validation per CLI
   headless/
     types.ts / index.ts / common.ts
-    claudeHeadless.ts / codexHeadless.ts / cursorHeadless.ts / devinHeadless.ts / openCodeHeadless.ts
+    claudeHeadless.ts / codexHeadless.ts / cursorHeadless.ts / devinHeadless.ts / openCodeHeadless.ts / antigravityHeadless.ts
 
 src/main/remote/
   index.ts                    — Remote Access (uses scanSessions, history, contextInsert, getUsageInfo)

@@ -5,6 +5,7 @@ interface CliToolEntry {
   name: string
   installUrl: string | null
   activated: boolean
+  isDefault: boolean
 }
 
 type RowState = 'idle' | 'loading' | 'error'
@@ -16,8 +17,12 @@ export default function CliToolsApp(): React.ReactElement {
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const [copiedToolId, setCopiedToolId] = useState<string | null>(null)
 
-  useEffect(() => {
+  const reloadTools = (): void => {
     window.cliToolsApi.getAll().then(setTools)
+  }
+
+  useEffect(() => {
+    reloadTools()
   }, [])
 
   const activatedCount = tools.filter((t) => t.activated).length
@@ -27,7 +32,7 @@ export default function CliToolsApp(): React.ReactElement {
     setRowErrors((e) => ({ ...e, [toolId]: '' }))
     const result = await window.cliToolsApi.activate(toolId)
     if (result.ok) {
-      setTools((prev) => prev.map((t) => (t.id === toolId ? { ...t, activated: true } : t)))
+      reloadTools()
       setRowStates((s) => ({ ...s, [toolId]: 'idle' }))
     } else {
       setRowStates((s) => ({ ...s, [toolId]: 'error' }))
@@ -38,7 +43,13 @@ export default function CliToolsApp(): React.ReactElement {
   const handleDeactivate = async (toolId: string): Promise<void> => {
     setOpenDropdown(null)
     await window.cliToolsApi.deactivate(toolId)
-    setTools((prev) => prev.map((t) => (t.id === toolId ? { ...t, activated: false } : t)))
+    reloadTools()
+  }
+
+  const handleSetDefault = async (toolId: string): Promise<void> => {
+    setOpenDropdown(null)
+    await window.cliToolsApi.setDefault(toolId)
+    reloadTools()
   }
 
   const handleCopyToolId = (toolId: string): void => {
@@ -70,7 +81,7 @@ export default function CliToolsApp(): React.ReactElement {
     >
       <h2 style={{ margin: '0 0 6px', fontSize: 16, color: '#e0e0e0' }}>CLI Tools</h2>
       <p style={{ margin: '0 0 20px', fontSize: 12, color: '#777' }}>
-        Activate the tools you have installed. AIDE will use activated tools to create sessions.
+        Activate the tools you have installed and mark one as Default to list it first across AIDE.
       </p>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -150,10 +161,10 @@ export default function CliToolsApp(): React.ReactElement {
                       onClick={(e) => { e.stopPropagation(); setOpenDropdown(isOpen ? null : tool.id) }}
                       style={{
                         padding: '5px 12px',
-                        background: '#2d4f2d',
-                        border: '1px solid #3a6a3a',
+                        background: tool.isDefault ? '#1b4965' : '#2d4f2d',
+                        border: tool.isDefault ? '1px solid #2c6e91' : '1px solid #3a6a3a',
                         borderRadius: 3,
-                        color: '#89d185',
+                        color: tool.isDefault ? '#9cdcfe' : '#89d185',
                         fontSize: 12,
                         cursor: 'pointer',
                         display: 'flex',
@@ -161,7 +172,7 @@ export default function CliToolsApp(): React.ReactElement {
                         gap: 6
                       }}
                     >
-                      Activated ▾
+                      {tool.isDefault ? 'Default ▾' : 'Activated ▾'}
                     </button>
                     {isOpen && (
                       <div
@@ -175,9 +186,29 @@ export default function CliToolsApp(): React.ReactElement {
                           border: '1px solid #454545',
                           borderRadius: 3,
                           zIndex: 100,
-                          minWidth: 110
+                          minWidth: 130
                         }}
                       >
+                        {!tool.isDefault && (
+                          <button
+                            onClick={() => handleSetDefault(tool.id)}
+                            style={{
+                              display: 'block',
+                              width: '100%',
+                              padding: '7px 14px',
+                              background: 'none',
+                              border: 'none',
+                              color: '#9cdcfe',
+                              fontSize: 12,
+                              cursor: 'pointer',
+                              textAlign: 'left'
+                            }}
+                            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#37373d' }}
+                            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'none' }}
+                          >
+                            Set as Default
+                          </button>
+                        )}
                         <button
                           onClick={() => handleDeactivate(tool.id)}
                           style={{

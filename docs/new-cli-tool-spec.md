@@ -166,6 +166,7 @@ Full interface in `src/main/pty/cliTools/types.ts`:
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `registerSignalHandler` | `(tabId: string, handler: (event: string) => void) => void` | Called by `PtyManager` on spawn. Store the callback to emit tab events (notably `'completeAndWait'`, which triggers completion sounds and marks the tab idle for Pipeline `EventRelay`). |
+| `onHookEvent` | `(binding: HookBinding) => string \| void` | Optional callback invoked when `HookServer` receives a POST for a tab of this tool (alongside session/transcript binding). Returning a string sends it as the HTTP 200 response body (used e.g. by Antigravity's `title.command` hook). |
 | `detectTitleEvent` | `(tabId: string, prevTitle: string \| null, newTitle: string) => void` | Called on every OSC title change. Emit events via the registered signal handler. |
 | `onPtyActivity` | `(tabId: string) => void` | Called on every PTY data chunk. Used by CLIs without idle OSC titles to run an inactivity timer that emits `'completeAndWait'`. |
 | `deregisterTab` | `(tabId: string) => void` | Called when a PTY tab closes or disposes. Clean up signal handlers, inactivity timers, and per-tab launch files. |
@@ -741,7 +742,8 @@ export interface SettingsField {
 2. Credential export/import is technically impossible (e.g. opaque OS-only credentials or inaccessible auth flow).
 
 When `hasAccountSystem()` returns `false`:
-- The tool is hidden from Account Manager, Settings → Accounts, and the "Load Account" menu.
+- The tool is hidden from the "Load Account" menu and excluded from the Pipeline Account Pool.
+- Its tab in Account Manager shows the current login identifier from `getLoginIdentifier()` (if known) and its `accountUnsupportedReason` explanation, with no save/switch/pool controls.
 - `getLoginIdentifier()` is still called for the status bar (static label, no "not saved" warning).
 
 ### Core account methods

@@ -2,12 +2,14 @@ import http from 'http'
 import { randomBytes } from 'crypto'
 import { logEvent } from '../diagnostics'
 
-/** A single binding fact reported by a Claude Code hook. */
+/** A single binding fact reported by a CLI hook. */
 export interface HookBinding {
   tabId: string
   event: string
   sessionId: string | null
   transcriptPath: string | null
+  /** Full parsed JSON payload from stdin, when available. */
+  payload?: Record<string, unknown>
 }
 
 /**
@@ -26,7 +28,7 @@ class HookServer {
   private server: http.Server | null = null
   private port = 0
   private token = ''
-  private readonly handlers = new Map<string, (b: HookBinding) => void>()
+  private readonly handlers = new Map<string, (b: HookBinding) => string | void>()
 
   async start(): Promise<void> {
     if (this.server) return
@@ -65,8 +67,9 @@ class HookServer {
     return this.token
   }
 
-  /** Register a per-tab handler. Called by PtyManager when a tab is spawned. */
-  register(tabId: string, handler: (b: HookBinding) => void): void {
+  /** Register a per-tab handler. Called by PtyManager when a tab is spawned.
+   *  A string return value is sent as the HTTP 200 response body (default 'ok'). */
+  register(tabId: string, handler: (b: HookBinding) => string | void): void {
     this.handlers.set(tabId, handler)
   }
 
@@ -113,23 +116,39 @@ class HookServer {
       } catch {}
     })
     req.on('end', () => {
-      // Respond immediately so the hook (and thus the turn) is never blocked.
-      res.statusCode = 200
-      res.end('ok')
-      if (aborted || token !== this.token) return
+      if (aborted || token !== this.token) {
+        res.statusCode = 200
+        res.end('ok')
+        return
+      }
       const handler = this.handlers.get(tabId)
-      if (!handler) return
+      if (!handler) {
+        res.statusCode = 200
+        res.end('ok')
+        return
+      }
 
       let sessionId: string | null = null
       let transcriptPath: string | null = null
+      let payload: Record<string, unknown> | undefined
       try {
-        const payload = JSON.parse(body)
-        sessionId = typeof payload.session_id === 'string' ? payload.session_id : null
-        transcriptPath = typeof payload.transcript_path === 'string' ? payload.transcript_path : null
+        const parsed: unknown = JSON.parse(body)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          payload = parsed as Record<string, unknown>
+          sessionId = typeof payload.session_id === 'string' && payload.session_id ? payload.session_id : null
+          transcriptPath = typeof payload.transcript_path === 'string' && payload.transcript_path ? payload.transcript_path : null
+        }
       } catch {
         // Malformed payload — still fire with what we have (query params).
       }
-      handler({ tabId, event, sessionId, transcriptPath })
+      let reply: string | void = undefined
+      try {
+        reply = handler({ tabId, event, sessionId, transcriptPath, payload })
+      } catch {
+        // Never fail the HTTP response; hooks must not block a turn.
+      }
+      res.statusCode = 200
+      res.end(typeof reply === 'string' ? reply : 'ok')
     })
   }
 }

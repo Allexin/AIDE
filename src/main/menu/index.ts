@@ -2,7 +2,7 @@ import { Menu, MenuItem, BrowserWindow, dialog, app } from 'electron'
 import type { RemoteServer } from '../remote'
 import { basename } from 'path'
 import { existsSync } from 'fs'
-import { getAppState } from '../config/appState'
+import { getAppState, getDefaultToolId } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { createPickerWindow } from '../windows/picker'
 import { createAccountManagerWindow } from '../windows/accountManager'
@@ -11,7 +11,7 @@ import { openRemoteConnectWindow } from '../windows/remoteConnect'
 import { openCliToolsWindow } from '../windows/cliTools'
 import { getRunningCount, killAllProcesses } from '../toolbar/processManager'
 import { registerCommand } from './commandRegistry'
-import { getRegisteredTools, getToolById } from '../pty/cliTools/registry'
+import { getRegisteredTools, getToolById, orderToolsWithDefault } from '../pty/cliTools/registry'
 import { listAccounts, updateAccount as updateStoredAccount, getActiveAccount, setActiveAccount } from '../config/accountStorage'
 import { offerRestartAfterAccountChange } from '../pty/registry'
 import { getCommandLineArgumentsHelp } from '../startupArgs'
@@ -280,7 +280,7 @@ export function rebuildMenu(): void {
 
   // Build "Load Account" submenu per tool
   const loadAccountSubmenu: Electron.MenuItemConstructorOptions[] = []
-  for (const tool of getRegisteredTools()) {
+  for (const tool of orderToolsWithDefault(getRegisteredTools(), getDefaultToolId())) {
     const cliTool = getToolById(tool.id)
     if (cliTool && !cliTool.hasAccountSystem()) continue
 

@@ -18,7 +18,7 @@ const AGENT = {
     role: { type: 'string', description: 'Role file relative to the machine file, e.g. "roles/implementer.md".' },
     cli: { type: 'string', description: 'CLI tool id; defaults to defaults.cli.' },
     model: { type: 'string' },
-    effort: { type: 'string', description: 'Reasoning effort: Claude Code low|medium|high|xhigh|max; Codex low|medium|high|xhigh|max|ultra (per model). Default: defaults.effort, else the CLI default (for Codex: the user\'s config).' },
+    effort: { type: 'string', description: 'Reasoning effort: Claude Code & Antigravity low|medium|high|xhigh|max; Codex low|medium|high|xhigh|max|ultra (per model). Default: defaults.effort, else the CLI default (for Codex: the user\'s config).' },
     permissions: { enum: ['read-only', 'write'], description: 'Default write. Reviewers: read-only.' },
     session: { type: 'string', description: '"keep" (default: each visit continues this step\'s own session), "new" (fresh every visit), or "continue:<earlier agent step>".' },
     task: { type: 'string', description: 'Task text; may use {{params.x}} and {{outputs.step.field}}.' },
@@ -78,7 +78,7 @@ export const MACHINE_FILE_SCHEMA = {
     defaults: {
       type: 'object',
       properties: {
-        cli: { type: 'string', description: 'CLI tool id for agent steps without their own: "claude-code", "codex", "open-code", "cursor-agent" or "devin".' },
+        cli: { type: 'string', description: 'CLI tool id for agent steps without their own: "claude-code", "codex", "open-code", "cursor-agent", "devin" or "antigravity".' },
         model: { type: 'string' },
         effort: { type: 'string', description: 'Reasoning effort for agent steps without their own.' },
         timeoutMin: { type: 'number' }

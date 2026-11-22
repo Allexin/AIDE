@@ -5,12 +5,14 @@ export interface CliToolEntry {
   name: string
   installUrl: string | null
   activated: boolean
+  isDefault: boolean
 }
 
 interface CliToolsAPI {
   getAll: () => Promise<CliToolEntry[]>
   activate: (toolId: string) => Promise<{ ok: boolean; error?: string }>
   deactivate: (toolId: string) => Promise<void>
+  setDefault: (toolId: string) => Promise<void>
   copyToolId: (toolId: string) => void
   close: () => void
 }
@@ -19,6 +21,7 @@ const cliToolsApi: CliToolsAPI = {
   getAll: () => ipcRenderer.invoke('cli-tools:get-all'),
   activate: (toolId: string) => ipcRenderer.invoke('cli-tools:activate', toolId),
   deactivate: (toolId: string) => ipcRenderer.invoke('cli-tools:deactivate', toolId),
+  setDefault: (toolId: string) => ipcRenderer.invoke('cli-tools:set-default', toolId),
   copyToolId: (toolId: string) => clipboard.writeText(toolId),
   close: () => ipcRenderer.send('cli-tools:closed')
 }

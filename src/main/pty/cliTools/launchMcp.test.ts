@@ -5,6 +5,8 @@ import { join } from 'path'
 import type { LaunchMcpServer } from './types'
 import { shellLiteral } from './launchFiles'
 import { syncDevinMcpConfig } from './devinMcp'
+import { syncAntigravityMcpConfig } from './antigravityMcp'
+import { buildAntigravityTabSettings } from './antigravityHooks'
 import { codexMcpArgs } from './codex'
 import { claudeMcpConfig } from './claudeCode'
 import { cursorMcpPlugin } from './cursorAgent'
@@ -85,5 +87,69 @@ describe('AIDE MCP server at launch', () => {
     writeFileSync(join(project, '.devin', 'mcp_config.local.json'), '{ broken')
     expect(() => syncDevinMcpConfig(project, [server], ['aide'])).toThrow(/not valid JSON/)
     expect(readFileSync(join(project, '.devin', 'mcp_config.local.json'), 'utf-8')).toBe('{ broken')
+  })
+
+  it("keeps Antigravity's .agents/mcp_config.json with timeoutSeconds, excludes it from git, and builds per-tab settings", () => {
+    const project = tempDir()
+    mkdirSync(join(project, '.git', 'info'), { recursive: true })
+    writeFileSync(join(project, '.git', 'info', 'exclude'), '# local\n')
+    mkdirSync(join(project, '.agents'))
+    const path = join(project, '.agents', 'mcp_config.json')
+    writeFileSync(path, JSON.stringify({ mcpServers: { mine: { command: 'node', args: ['x.js'] } } }))
+
+    expect(syncAntigravityMcpConfig(project, [server], ['aide'])).toBe(true)
+    expect(JSON.parse(readFileSync(path, 'utf-8')).mcpServers).toEqual({
+      mine: { command: 'node', args: ['x.js'] },
+      aide: { command: server.command, args: server.args, env: server.env, timeoutSeconds: 3100 }
+    })
+    expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf-8')).toBe('# local\n/.agents/mcp_config.json\n')
+    expect(syncAntigravityMcpConfig(project, [server], ['aide'])).toBe(false)
+
+    // Turned off: AIDE's entry goes, user's stays.
+    expect(syncAntigravityMcpConfig(project, [], ['aide'])).toBe(true)
+    expect(Object.keys(JSON.parse(readFileSync(path, 'utf-8')).mcpServers)).toEqual(['mine'])
+
+    // Per-tab --settings merges permissions, trusts workspace, and wires title hook only when user has none.
+    const winSettings = buildAntigravityTabSettings({
+      tabId: 'tab-3',
+      projectPath: project,
+      hook: { port: 12345, token: 'tok' },
+      mcpServerNames: ['aide'],
+      userSettings: { permissions: { allow: ['command(git)'], deny: ['write_file(.env)'] }, trustedWorkspaces: ['C:\\Other'] },
+      curlPath: 'C:\\Windows\\System32\\curl.exe',
+      platform: 'win32'
+    })
+    expect(winSettings).toMatchObject({
+      trustedWorkspaces: ['C:\\Other', project],
+      permissions: { allow: ['command(git)', 'mcp(aide/*)'], deny: ['write_file(.env)'] },
+      title: { type: 'command', enabled: true }
+    })
+    const winCmd = (winSettings?.title as { command: string }).command
+    expect(winCmd).toBe('C:\\Windows\\System32\\curl.exe -s -m 2 -X POST http://127.0.0.1:12345/hook?tab=tab-3^&event=Title^&token=tok --data-binary @-')
+    expect(winCmd).not.toContain('"')
+
+    const linuxSettings = buildAntigravityTabSettings({
+      tabId: 'tab-3',
+      projectPath: project,
+      hook: { port: 12345, token: 'tok' },
+      mcpServerNames: [],
+      userSettings: { trustedWorkspaces: [project] },
+      curlPath: '/usr/bin/curl',
+      platform: 'linux'
+    })
+    expect((linuxSettings?.title as { command: string }).command).toBe(
+      '"/usr/bin/curl" -s -m 2 -X POST "http://127.0.0.1:12345/hook?tab=tab-3&event=Title&token=tok" --data-binary @-'
+    )
+
+    // Preserves a user-configured title command.
+    const withUserTitle = buildAntigravityTabSettings({
+      tabId: 'tab-3',
+      projectPath: project,
+      hook: { port: 12345, token: 'tok' },
+      mcpServerNames: [],
+      userSettings: { trustedWorkspaces: [project], title: { type: 'command', command: '~/my-title.sh' } },
+      curlPath: 'curl'
+    })
+    expect(withUserTitle).toBeNull()
   })
 })

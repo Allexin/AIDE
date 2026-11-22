@@ -246,10 +246,12 @@ AIDE composes the prompt; you only write the role file and the step fields.
   get the same.
 
   Custom schemas go into `schemas`; for Codex they must be strict
-  (`additionalProperties: false`, every property in `required`). OpenCode 2,
+  (`additionalProperties: false`, every property in `required`). Claude Code,
+  Codex and Antigravity (`antigravity`) enforce schemas natively. OpenCode 2,
   Cursor and Devin have no structured-output mode: the schema is sent as an
   instruction and the answer is parsed from the final message, so a malformed
-  answer fails the visit at validation more often than with Claude Code or Codex.
+  answer fails the visit at validation more often than with Claude Code, Codex
+  or Antigravity.
 
 **Sessions** (`session`):
 
@@ -269,7 +271,8 @@ instructions contradicted roles); Codex steps run without the user config;
 OpenCode 2 steps run with every MCP server of the user and project configs
 switched off; Cursor steps run with their own config home (no user MCP servers,
 rules or skills); Devin steps run without its MCP servers and without what it
-imports from Claude Code and Cursor.
+imports from Claude Code and Cursor; Antigravity steps deny all MCP tools via
+session-only `--settings` (`mcp(*)`).
 
 **What an agent was sent** is kept per visit (`nodes/<step>-<visit>.input.jsonl`:
 the message and the system prompt append of every CLI invocation, including
@@ -277,9 +280,10 @@ retries and continuations). The run view in AIDE shows it on the step's
 **Input** tab — the first place to look when an agent did something odd.
 
 **Model and effort** (`model`, `effort` on a step, or in `defaults`; `effort` and
-`model` also on a commit `reviewer`). Effort levels: Claude Code `low`, `medium`,
-`high`, `xhigh`, `max`; Codex `low` … `ultra` (the exact set depends on the
-model); OpenCode 2 (`open-code`) takes the model's variant name (`model#variant`),
+`model` also on a commit `reviewer`). Effort levels: Claude Code and Antigravity
+(`antigravity`) `low`, `medium`, `high`, `xhigh`, `max`; Codex `low` … `ultra`
+(the exact set depends on the model); OpenCode 2 (`open-code`) takes the model's
+variant name (`model#variant`),
 whose set is per model and checked by OpenCode when the step runs. Without one,
 Claude Code uses its own default, Codex uses the model and effort of the user's
 Codex config — not the model's built-in default, which can be as low as `low` —

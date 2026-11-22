@@ -29,7 +29,8 @@ const PARAM_TYPES = new Set(['string', 'string[]', 'path', 'glob[]', 'number', '
 const EFFORTS: Record<string, string[] | null> = {
   'claude-code': ['low', 'medium', 'high', 'xhigh', 'max'],
   codex: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-  'open-code': null
+  'open-code': null,
+  antigravity: ['low', 'medium', 'high', 'xhigh', 'max']
 }
 
 function checkEffort(effort: string | undefined, cli: string | undefined, where: string, err: (m: string) => void): void {

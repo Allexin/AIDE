@@ -155,3 +155,58 @@ export function devinToolView(name: string, input: unknown): ToolView | undefine
       return undefined
   }
 }
+
+/** Antigravity CLI tools (`read_file`, `write_file`, `edit_file`, `run_command`, `grep_search`, `find_by_name`, …). */
+export function antigravityToolView(name: string, input: unknown): ToolView | undefined {
+  const args = obj(input)
+  const path = str(args.Path) ?? str(args.AbsolutePath) ?? str(args.TargetFile) ?? str(args.path) ?? ''
+  const range = (): string | undefined => {
+    const start = typeof args.StartLine === 'number' && args.StartLine > 0 ? args.StartLine : undefined
+    const end = typeof args.EndLine === 'number' && args.EndLine > 0 ? args.EndLine : undefined
+    if (start === undefined && end === undefined) return undefined
+    if (start !== undefined && end !== undefined) return `lines ${start}–${end}`
+    return start !== undefined ? `from line ${start}` : `up to line ${end}`
+  }
+  switch (name) {
+    case 'read_file':
+    case 'view_file':
+      return path ? { kind: 'read', path, range: range() } : undefined
+    case 'write_file':
+    case 'write_to_file':
+      return path ? { kind: 'write', path, content: String(args.Content ?? args.CodeContent ?? '') } : undefined
+    case 'edit_file':
+    case 'replace_file_content':
+      return path
+        ? {
+            kind: 'edit',
+            path,
+            edits: [{
+              oldText: String(args.Target ?? args.TargetContent ?? ''),
+              newText: String(args.Replacement ?? args.ReplacementContent ?? '')
+            }]
+          }
+        : undefined
+    case 'multi_replace_file_content': {
+      if (!path) return undefined
+      const chunks = Array.isArray(args.ReplacementChunks)
+        ? args.ReplacementChunks.map((chunk) => {
+            const c = obj(chunk)
+            return { oldText: String(c.TargetContent ?? ''), newText: String(c.ReplacementContent ?? '') }
+          })
+        : []
+      return { kind: 'edit', path, edits: chunks }
+    }
+    case 'run_command':
+      return str(args.CommandLine) ? { kind: 'shell', command: String(args.CommandLine) } : undefined
+    case 'grep_search':
+      return str(args.Query)
+        ? { kind: 'search', pattern: String(args.Query), path: str(args.SearchPath) }
+        : undefined
+    case 'find_by_name':
+      return str(args.Pattern)
+        ? { kind: 'search', pattern: String(args.Pattern), path: str(args.SearchDirectory) }
+        : undefined
+    default:
+      return undefined
+  }
+}

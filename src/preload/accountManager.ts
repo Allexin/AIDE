@@ -18,8 +18,15 @@ interface AccountSwitchConflict {
 
 type LoadAccountResult = true | false | { conflict: AccountSwitchConflict } | { error: string }
 
+interface AccountToolInfo {
+  id: string
+  name: string
+  hasAccountSystem: boolean
+  unsupportedReason: string | null
+}
+
 interface AccountManagerAPI {
-  getTools: () => Promise<{ id: string; name: string }[]>
+  getTools: () => Promise<AccountToolInfo[]>
   isLoggedIn: (toolId: string) => Promise<boolean>
   getLoginIdentifier: (toolId: string) => Promise<string | null>
   listAccounts: (toolId: string) => Promise<CliAccountInfo[]>

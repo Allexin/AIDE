@@ -13,6 +13,8 @@ interface CliAccountInfo {
 interface ToolInfo {
   id: string
   name: string
+  hasAccountSystem: boolean
+  unsupportedReason: string | null
 }
 
 interface AccountSwitchConflict {
@@ -52,6 +54,8 @@ export default function AccountManagerApp(): React.ReactElement {
   const [toast, setToast] = useState<string | null>(null)
   const [conflict, setConflict] = useState<(AccountSwitchConflict & { accountId: string }) | null>(null)
 
+  const activeTool = tools.find((t) => t.id === activeToolId) ?? null
+
   const showToast = useCallback((msg: string) => {
     setToast(msg)
     setTimeout(() => setToast(null), 3000)
@@ -64,15 +68,24 @@ export default function AccountManagerApp(): React.ReactElement {
     })
   }, [])
 
-  const refresh = useCallback(async (toolId: string) => {
-    if (!toolId) return
-    await api().refreshState(toolId)
+  const refresh = useCallback(async (tool: ToolInfo | null) => {
+    if (!tool) return
+    if (!tool.hasAccountSystem) {
+      const identifier = await api().getLoginIdentifier(tool.id)
+      setLoginIdentifier(identifier)
+      setLoggedIn(!!identifier)
+      setAccounts([])
+      setActiveAccountId(null)
+      setHint(null)
+      return
+    }
+    await api().refreshState(tool.id)
     const [loggedInResult, identifier, accs, active, toolHint] = await Promise.all([
-      api().isLoggedIn(toolId),
-      api().getLoginIdentifier(toolId),
-      api().listAccounts(toolId),
-      api().getActiveAccount(toolId),
-      api().getHint(toolId)
+      api().isLoggedIn(tool.id),
+      api().getLoginIdentifier(tool.id),
+      api().listAccounts(tool.id),
+      api().getActiveAccount(tool.id),
+      api().getHint(tool.id)
     ])
     setHint(toolHint)
     setLoggedIn(loggedInResult)
@@ -82,12 +95,12 @@ export default function AccountManagerApp(): React.ReactElement {
   }, [])
 
   useEffect(() => {
-    refresh(activeToolId)
+    void refresh(activeTool)
     // The pipeline account pool switches accounts and marks them exhausted while the window is open.
-    const onFocus = (): void => { void refresh(activeToolId) }
+    const onFocus = (): void => { void refresh(activeTool) }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
-  }, [activeToolId, refresh])
+  }, [activeTool, refresh])
 
   const handleSaveCurrent = async (): Promise<void> => {
     const name = saveName.trim()
@@ -98,7 +111,7 @@ export default function AccountManagerApp(): React.ReactElement {
     if (result) {
       setSaveName('')
       showToast('Account saved')
-      refresh(activeToolId)
+      void refresh(activeTool)
     } else {
       showToast('Not logged in — cannot save')
     }
@@ -107,14 +120,14 @@ export default function AccountManagerApp(): React.ReactElement {
   const handleDelete = async (accountId: string): Promise<void> => {
     await api().deleteAccount(activeToolId, accountId)
     showToast('Account deleted')
-    refresh(activeToolId)
+    void refresh(activeTool)
   }
 
   const handleUpdate = async (accountId: string): Promise<void> => {
     const result = await api().updateAccount(activeToolId, accountId)
     if (result) {
       showToast('Account updated with current credentials')
-      refresh(activeToolId)
+      void refresh(activeTool)
     } else {
       showToast('Not logged in — cannot update')
     }
@@ -122,19 +135,19 @@ export default function AccountManagerApp(): React.ReactElement {
 
   const handleInPool = async (accountId: string, inPool: boolean): Promise<void> => {
     await api().setInPool(activeToolId, accountId, inPool)
-    refresh(activeToolId)
+    void refresh(activeTool)
   }
 
   const handleMove = async (accountId: string, delta: -1 | 1): Promise<void> => {
     await api().moveAccount(activeToolId, accountId, delta)
-    refresh(activeToolId)
+    void refresh(activeTool)
   }
 
   const handleLoad = async (accountId: string, autoSaveMode: 'check' | 'force' | 'skip' = 'check'): Promise<void> => {
     const result = await api().loadAccount(activeToolId, accountId, autoSaveMode)
     if (result === true) {
       showToast('Account loaded')
-      refresh(activeToolId)
+      void refresh(activeTool)
     } else if (result === false) {
       showToast('Failed to load account')
     } else if ('error' in result) {
@@ -162,105 +175,138 @@ export default function AccountManagerApp(): React.ReactElement {
         ))}
       </div>
 
-      {/* Status */}
-      <div style={styles.section}>
-        <div style={styles.statusLine}>
-          <span style={{ color: loggedIn ? '#4ec9b0' : '#808080' }}>
-            {loggedIn ? '\u25CF' : '\u25CB'}
-          </span>
-          {' '}
-          {loggedIn
-            ? `Logged in${loginIdentifier ? ` as ${loginIdentifier}` : ''}`
-            : 'Not logged in'}
-        </div>
-      </div>
+      <div style={styles.content}>
+        {activeTool && !activeTool.hasAccountSystem ? (
+          <>
+            <div style={styles.section}>
+              <div style={styles.statusLine}>
+                <span style={{ color: loginIdentifier ? '#4ec9b0' : '#808080' }}>
+                  {loginIdentifier ? '\u25CF' : '\u25CB'}
+                </span>
+                {' '}
+                {loginIdentifier
+                  ? `Logged in as ${loginIdentifier}`
+                  : 'Account not detected yet — open a tab to read the active sign-in'}
+              </div>
+            </div>
 
-      {/* Saved accounts */}
-      <div style={styles.section}>
-        <div style={styles.sectionTitle}>Saved accounts</div>
-        {accounts.length === 0 ? (
-          <div style={styles.empty}>No saved accounts</div>
-        ) : (
-          <div style={styles.accountList}>
-            {accounts.map((acc, index) => (
-              <div key={acc.id} style={styles.accountRow}>
-                <div style={styles.accountInfo}>
-                  <div style={styles.accountName}>
-                    {acc.name}
-                    {acc.id === activeAccountId && <span style={styles.activeBadge}>active</span>}
-                  </div>
-                  <div style={styles.accountMeta}>
-                    {acc.identifier} &middot; saved{' '}
-                    {new Date(acc.savedAt).toLocaleDateString()}
-                  </div>
-                  <label style={styles.poolLabel}>
-                    <input
-                      type="checkbox"
-                      style={styles.poolCheck}
-                      checked={acc.inPool}
-                      onChange={(e) => handleInPool(acc.id, e.target.checked)}
-                    />
-                    Switch to this account when a pipeline hits a usage limit
-                  </label>
-                  {acc.exhausted && (
-                    <div style={styles.exhausted}>
-                      {acc.exhaustedUntil
-                        ? `Usage limit reached — available again at ${new Date(acc.exhaustedUntil).toLocaleString()}`
-                        : 'Usage limit reached — reset time unknown; load it by hand to use it again'}
-                    </div>
-                  )}
-                </div>
-                <div style={styles.accountActions}>
-                  <button style={styles.smallBtn} disabled={index === 0} onClick={() => handleMove(acc.id, -1)} title="Move up (switching order)">
-                    &uarr;
-                  </button>
-                  <button style={styles.smallBtn} disabled={index === accounts.length - 1} onClick={() => handleMove(acc.id, 1)} title="Move down (switching order)">
-                    &darr;
-                  </button>
-                  <button style={styles.smallBtn} onClick={() => handleLoad(acc.id)} title="Load this account's credentials">
-                    Load
-                  </button>
-                  <button style={styles.smallBtn} onClick={() => handleUpdate(acc.id)} title="Update with current credentials">
-                    Update
-                  </button>
-                  <button
-                    style={{ ...styles.smallBtn, color: '#f44' }}
-                    onClick={() => handleDelete(acc.id)}
-                    title="Delete saved account"
-                  >
-                    Delete
-                  </button>
+            <div style={styles.section}>
+              <div style={styles.sectionTitle}>Account management not supported</div>
+              <div style={styles.unsupportedRow}>
+                <div style={styles.unsupportedReason}>{activeTool.unsupportedReason}</div>
+                <div style={styles.unsupportedNote}>
+                  Sign in or switch accounts using {activeTool.name} directly.
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-        <PoolHint accounts={accounts} activeAccountId={activeAccountId} />
-      </div>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Status */}
+            <div style={styles.section}>
+              <div style={styles.statusLine}>
+                <span style={{ color: loggedIn ? '#4ec9b0' : '#808080' }}>
+                  {loggedIn ? '\u25CF' : '\u25CB'}
+                </span>
+                {' '}
+                {loggedIn
+                  ? `Logged in${loginIdentifier ? ` as ${loginIdentifier}` : ''}`
+                  : 'Not logged in'}
+              </div>
+            </div>
 
-      {/* Save current */}
-      <div style={styles.section}>
-        <div style={styles.saveRow}>
-          <input
-            style={styles.input}
-            type="text"
-            placeholder="Account name..."
-            value={saveName}
-            onChange={(e) => setSaveName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleSaveCurrent() }}
-          />
-          <button
-            style={styles.btn}
-            onClick={handleSaveCurrent}
-            disabled={saving || !saveName.trim() || !loggedIn}
-          >
-            Save Current As...
-          </button>
-        </div>
-        {hint ? (
-          <div style={styles.hint}>{hint}</div>
-        ) : !loggedIn && (
-          <div style={styles.hint}>Not logged in, so there is nothing to save: log in with {tools.find((t) => t.id === activeToolId)?.name ?? 'the CLI'} first, then save the account here.</div>
+            {/* Saved accounts */}
+            <div style={styles.section}>
+              <div style={styles.sectionTitle}>Saved accounts</div>
+              {accounts.length === 0 ? (
+                <div style={styles.empty}>No saved accounts</div>
+              ) : (
+                <div style={styles.accountList}>
+                  {accounts.map((acc, index) => (
+                    <div key={acc.id} style={styles.accountRow}>
+                      <div style={styles.accountInfo}>
+                        <div style={styles.accountName}>
+                          {acc.name}
+                          {acc.id === activeAccountId && <span style={styles.activeBadge}>active</span>}
+                        </div>
+                        <div style={styles.accountMeta}>
+                          {acc.identifier} &middot; saved{' '}
+                          {new Date(acc.savedAt).toLocaleDateString()}
+                        </div>
+                        <label style={styles.poolLabel}>
+                          <input
+                            type="checkbox"
+                            style={styles.poolCheck}
+                            checked={acc.inPool}
+                            onChange={(e) => handleInPool(acc.id, e.target.checked)}
+                          />
+                          Switch to this account when a pipeline hits a usage limit
+                        </label>
+                        {acc.exhausted && (
+                          <div style={styles.exhausted}>
+                            {acc.exhaustedUntil
+                              ? `Usage limit reached — available again at ${new Date(acc.exhaustedUntil).toLocaleString()}`
+                              : 'Usage limit reached — reset time unknown; load it by hand to use it again'}
+                          </div>
+                        )}
+                      </div>
+                      <div style={styles.accountActions}>
+                        <button style={styles.smallBtn} disabled={index === 0} onClick={() => handleMove(acc.id, -1)} title="Move up (switching order)">
+                          &uarr;
+                        </button>
+                        <button style={styles.smallBtn} disabled={index === accounts.length - 1} onClick={() => handleMove(acc.id, 1)} title="Move down (switching order)">
+                          &darr;
+                        </button>
+                        <button style={styles.smallBtn} onClick={() => handleLoad(acc.id)} title="Load this account's credentials">
+                          Load
+                        </button>
+                        <button style={styles.smallBtn} onClick={() => handleUpdate(acc.id)} title="Update with current credentials">
+                          Update
+                        </button>
+                        <button
+                          style={{ ...styles.smallBtn, color: '#f44' }}
+                          onClick={() => handleDelete(acc.id)}
+                          title="Delete saved account"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <PoolHint accounts={accounts} activeAccountId={activeAccountId} />
+              <div style={styles.tosWarning}>
+                Account rotation on usage limits is prohibited by the Terms of Service of most subscription providers. Enable it at your own risk only if you understand what you are doing.
+              </div>
+            </div>
+
+            {/* Save current */}
+            <div style={styles.section}>
+              <div style={styles.saveRow}>
+                <input
+                  style={styles.input}
+                  type="text"
+                  placeholder="Account name..."
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleSaveCurrent() }}
+                />
+                <button
+                  style={styles.btn}
+                  onClick={handleSaveCurrent}
+                  disabled={saving || !saveName.trim() || !loggedIn}
+                >
+                  Save Current As...
+                </button>
+              </div>
+              {hint ? (
+                <div style={styles.hint}>{hint}</div>
+              ) : !loggedIn && (
+                <div style={styles.hint}>Not logged in, so there is nothing to save: log in with {tools.find((t) => t.id === activeToolId)?.name ?? 'the CLI'} first, then save the account here.</div>
+              )}
+            </div>
+          </>
         )}
       </div>
 
@@ -333,8 +379,30 @@ const styles: Record<string, React.CSSProperties> = {
   },
   tabBar: {
     display: 'flex',
+    flexWrap: 'wrap' as const,
     borderBottom: '1px solid #333',
-    background: '#252526'
+    background: '#252526',
+    flexShrink: 0
+  },
+  content: {
+    flex: 1,
+    overflowY: 'auto' as const
+  },
+  unsupportedRow: {
+    padding: '10px 12px',
+    background: '#2d2d2d',
+    borderRadius: 4
+  },
+  unsupportedReason: {
+    fontSize: 12,
+    color: '#ccc',
+    lineHeight: 1.5
+  },
+  unsupportedNote: {
+    fontSize: 11,
+    color: '#888',
+    marginTop: 8,
+    lineHeight: 1.4
   },
   tab: {
     padding: '8px 16px',
@@ -425,6 +493,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   hint: {
     fontSize: 11,
+    marginTop: 8,
+    lineHeight: 1.4
+  },
+  tosWarning: {
+    fontSize: 11,
+    color: '#f48771',
     marginTop: 8,
     lineHeight: 1.4
   },

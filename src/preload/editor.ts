@@ -148,7 +148,6 @@ export interface EditorAPI {
   getCliTools: () => Promise<{ id: string; name: string }[]>
   getActivatedTools: () => Promise<string[]>
   getDefaultToolId: () => Promise<string | null>
-  setDefaultToolId: (toolId: string) => Promise<void>
 
   // Accounts
   getAccountCurrentInfo: (toolId: string) => Promise<{ label: string; saved: boolean } | null>
@@ -450,7 +449,6 @@ const editorApi: EditorAPI = {
   getCliTools: () => ipcRenderer.invoke('cli-tools:list'),
   getActivatedTools: () => ipcRenderer.invoke('cli-tools:get-activated'),
   getDefaultToolId: () => ipcRenderer.invoke('project-settings:get-default-tool'),
-  setDefaultToolId: (toolId: string) => ipcRenderer.invoke('project-settings:set-default-tool', toolId),
 
   // Accounts
   getAccountCurrentInfo: (toolId: string) =>

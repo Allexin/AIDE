@@ -9,7 +9,7 @@ import { cliLog } from './cliTools/cliLogger'
 import { getHookServer } from '../hooks/hookServer'
 import type { HookBinding } from '../hooks/hookServer'
 import { defaultShell } from '../platform'
-import type { SavedSessionEntry } from '../config/appState'
+import { getDefaultToolId, type SavedSessionEntry } from '../config/appState'
 import { getAppConfig } from '../config/appConfig'
 import { logEvent, countPtyData } from '../diagnostics'
 import { getProjectUserPath } from '../config/projectUserData'
@@ -171,7 +171,7 @@ export class PtyManager {
       if (tool) return tool
       cliLog('startup', `Unknown CLI tool id "${toolId}". Falling back to the default CLI.`)
     }
-    return getDefaultTool(activatedTools)
+    return getDefaultTool(activatedTools, getDefaultToolId())
   }
 
   private handleRestoreDeadSessions(tabIds: string[], activatedTools: string[]): void {
@@ -187,7 +187,7 @@ export class PtyManager {
       }
 
       if (dead.size === tabIds.length) {
-        const defaultTool = getDefaultTool(activatedTools)
+        const defaultTool = getDefaultTool(activatedTools, getDefaultToolId())
         const info = this.spawnNewSessionTab(defaultTool)
         this.send('terminal:new-tab', { tabId: info.tabId, sessionId: info.sessionId, toolId: info.toolId, toolName: info.toolName })
       }
@@ -213,19 +213,19 @@ export class PtyManager {
   }
 
   async createNewSessionTab(toolId?: string, activatedTools: string[] = []): Promise<SessionTabInfo> {
-    const tool = (toolId ? getToolById(toolId) : undefined) ?? getDefaultTool(activatedTools)
+    const tool = (toolId ? getToolById(toolId) : undefined) ?? getDefaultTool(activatedTools, getDefaultToolId())
     await tool.prepareProject?.(this.projectPath)
     return this.spawnNewSessionTab(tool)
   }
 
   async resumeSessionTab(sessionId: string, toolId?: string, activatedTools: string[] = []): Promise<SessionTabInfo> {
-    const tool = (toolId ? getToolById(toolId) : undefined) ?? getDefaultTool(activatedTools)
+    const tool = (toolId ? getToolById(toolId) : undefined) ?? getDefaultTool(activatedTools, getDefaultToolId())
     await tool.prepareProject?.(this.projectPath)
     return this.spawnResumeTab(sessionId, false, tool)
   }
 
   async createNewSessionWithPrompt(prompt: string, toolId?: string, activatedTools: string[] = []): Promise<SessionTabInfo> {
-    const tool = (toolId ? getToolById(toolId) : undefined) ?? getDefaultTool(activatedTools)
+    const tool = (toolId ? getToolById(toolId) : undefined) ?? getDefaultTool(activatedTools, getDefaultToolId())
     await tool.prepareProject?.(this.projectPath)
     const tabInfo = this.spawnNewSessionTab(tool)
 
@@ -438,23 +438,32 @@ export class PtyManager {
     this.debugLog(`assignNewSession: ${sessionId} — deferring to hook binding (${waitingTabs.length} waiting tabs)`)
   }
 
-  /** Authoritative binding from a Claude Code hook. Rebinds only when the
-   *  session or transcript actually changes (so a same-session Stop is a no-op). */
-  private handleHookBinding(b: HookBinding): void {
+  /** Authoritative binding from a CLI hook. Rebinds only when the session or
+   *  transcript actually changes (so a same-session Stop is a no-op). Also
+   *  forwards the payload to `tool.onHookEvent` when implemented. */
+  private handleHookBinding(b: HookBinding): string | void {
     const tab = this.tabs.get(b.tabId)
-    if (!tab || !b.sessionId) return
+    if (!tab) return
 
-    const prevPath = this.hookBoundPath.get(b.tabId)
-    const changed = tab.sessionId !== b.sessionId || prevPath !== (b.transcriptPath ?? undefined)
-    if (!changed) return
+    // Let the tool process the payload first (and normalize any tool-specific
+    // transcript_path quirks before ThinkingWatcher binds to it).
+    const reply = tab.tool.onHookEvent?.(b)
 
-    if (tab.sessionId !== b.sessionId) {
-      tab.sessionId = b.sessionId
-      this.send('terminal:tab-session-id', { tabId: b.tabId, sessionId: b.sessionId })
+    if (b.sessionId) {
+      const prevPath = this.hookBoundPath.get(b.tabId)
+      const changed = tab.sessionId !== b.sessionId || prevPath !== (b.transcriptPath ?? undefined)
+      if (changed) {
+        if (tab.sessionId !== b.sessionId) {
+          tab.sessionId = b.sessionId
+          this.send('terminal:tab-session-id', { tabId: b.tabId, sessionId: b.sessionId })
+        }
+        if (b.transcriptPath) this.hookBoundPath.set(b.tabId, b.transcriptPath)
+        this.debugLog(`hook bind: ${b.event} ${b.tabId} → ${b.sessionId} @ ${b.transcriptPath ?? '?'}`)
+        this.onSessionAssigned?.(b.tabId, b.sessionId, tab.tool, b.transcriptPath)
+      }
     }
-    if (b.transcriptPath) this.hookBoundPath.set(b.tabId, b.transcriptPath)
-    this.debugLog(`hook bind: ${b.event} ${b.tabId} → ${b.sessionId} @ ${b.transcriptPath ?? '?'}`)
-    this.onSessionAssigned?.(b.tabId, b.sessionId, tab.tool, b.transcriptPath)
+
+    return reply
   }
 
   /** Register a tab with the hook server and ask the tool what to add to its launch:

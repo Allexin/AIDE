@@ -1,5 +1,6 @@
 import type { SettingsField } from '../../../shared/settingsTypes'
 import type { HeadlessCapability } from '../../pipeline/headless/types'
+import type { HookBinding } from '../../hooks/hookServer'
 export type { SettingsField }
 
 export interface CliSession {
@@ -168,10 +169,16 @@ export interface CliTool {
    *    (b) make it technically impossible to implement credential export/import.
    *  Return true for all other tools — account management must be implemented
    *  whenever the CLI's credential storage allows it.
-   *  When false: tool is hidden from the Accounts UI and Load Account menu,
-   *  but getLoginIdentifier() is still called for the status bar.
+   *  When false: tool is hidden from the Load Account menu and Pipeline Account Pool;
+   *  its tab in Account Manager shows the current login identifier (if known) and
+   *  `accountUnsupportedReason` without account-management controls, and
+   *  getLoginIdentifier() is still called for the status bar.
    */
   hasAccountSystem(): boolean
+
+  /** Human-readable explanation shown on this CLI's tab in Account Manager
+   *  when hasAccountSystem() returns false. */
+  readonly accountUnsupportedReason?: string
 
   /** What the Account Manager should tell about the current login beyond logged in / not, e.g.
    *  why there is nothing to save although the CLI works. Null when there is nothing to add. */
@@ -248,6 +255,11 @@ export interface CliTool {
    *  emit tab-level events (e.g. 'completeAndWait') back to the manager.
    */
   registerSignalHandler?(tabId: string, handler: (event: string) => void): void
+
+  /** Optional handler called when AIDE's hook server receives a callback for a tab
+   *  of this tool (in addition to session/transcript binding). May return a string
+   *  to send as the HTTP response body (e.g. a formatted window title). */
+  onHookEvent?(binding: HookBinding): string | void
 
   /** Clean up tab-related state when a PTY tab is closed. */
   deregisterTab?(tabId: string): void
