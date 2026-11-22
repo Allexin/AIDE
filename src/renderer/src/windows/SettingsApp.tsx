@@ -63,7 +63,8 @@ const TABS: { id: TabId; label: string }[] = [
 const FEATURE_NOTE: Record<FeatureName, string> = {
   pipelines: 'The Pipeline tab and the pipeline_* tools of agents.',
   plans: 'The plan views, the plan sensor in the status bar and the plan_* tools. Plans run through pipelines: with pipelines off, the plan autopilot cannot run.',
-  tracker: 'The Tasks tab, the current task on terminal tabs and the task_* tools.'
+  tracker: 'The Tasks tab, the current task on terminal tabs and the task_* tools.',
+  agents: 'Inter-agent messaging (agent_list, agent_send) within a project and across open AIDE windows.'
 }
 
 const fieldsetStyle: React.CSSProperties = {
@@ -182,7 +183,7 @@ function FeaturesSection({ value, onChange }: {
           const choice = project.personal[name] === undefined ? 'default' : project.personal[name] ? 'on' : 'off'
           return (
             <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-              <span style={{ width: 100, flexShrink: 0 }}>{FEATURE_LABEL[name]}</span>
+              <span style={{ width: 120, flexShrink: 0 }}>{FEATURE_LABEL[name]}</span>
               <select
                 value={choice}
                 onChange={(e) => onChange({ ...value, project: { ...project, personal: withFeatureChoice(project.personal, name, e.target.value as 'default' | 'on' | 'off') } })}

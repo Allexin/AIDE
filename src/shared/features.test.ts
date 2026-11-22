@@ -29,7 +29,7 @@ describe('feature switches: layers', () => {
 
   it('switches of different layers combine', () => {
     const layers = { global: { pipelines: false, tracker: false }, project: { plans: false, tracker: true }, personal: { pipelines: true } }
-    expect(resolveFeatures(layers)).toEqual({ pipelines: true, plans: false, tracker: true })
+    expect(resolveFeatures(layers)).toEqual({ pipelines: true, plans: false, tracker: true, agents: true })
     expect(resolveFeature(layers, 'tracker')).toEqual({ on: true, source: 'project' })
   })
 
@@ -60,12 +60,20 @@ describe('feature switches: helpers', () => {
   })
 
   it('tools belong to a switch by name prefix; other tools to none', () => {
-    const expected: Array<[string, FeatureName | null]> = [['pipeline_hello', 'pipelines'], ['plan_run', 'plans'], ['task_snapshot', 'tracker'], ['toolbar_guide', null]]
+    const expected: Array<[string, FeatureName | null]> = [
+      ['pipeline_hello', 'pipelines'],
+      ['plan_run', 'plans'],
+      ['task_snapshot', 'tracker'],
+      ['agent_list', 'agents'],
+      ['agent_send', 'agents'],
+      ['toolbar_guide', null]
+    ]
     for (const [tool, feature] of expected) expect(toolFeature(tool)).toBe(feature)
   })
 
   it('says a feature is turned off in Settings', () => {
     for (const name of FEATURE_NAMES) expect(featureOffText(name)).toContain('turned off in Settings')
     expect(featureOffText('tracker')).toBe('The task tracker is turned off in Settings.')
+    expect(featureOffText('agents')).toBe('Agent messaging is turned off in Settings.')
   })
 })

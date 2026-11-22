@@ -43,12 +43,12 @@ describe('feature switches of a project', () => {
 
   it('reads global -> project -> personal, the last that sets a switch wins', () => {
     const dir = project()
-    app.features = { pipelines: false, plans: false, tracker: false }
-    expect(projectFeatures(dir)).toEqual({ pipelines: false, plans: false, tracker: false })
+    app.features = { pipelines: false, plans: false, tracker: false, agents: false }
+    expect(projectFeatures(dir)).toEqual({ pipelines: false, plans: false, tracker: false, agents: false })
     setProjectConfig(dir, { git: {}, features: { plans: true, tracker: true } })
-    expect(projectFeatures(dir)).toEqual({ pipelines: false, plans: true, tracker: true })
-    writePersonalFeatures(dir, { tracker: false, pipelines: true })
-    expect(projectFeatures(dir)).toEqual({ pipelines: true, plans: true, tracker: false })
+    expect(projectFeatures(dir)).toEqual({ pipelines: false, plans: true, tracker: true, agents: false })
+    writePersonalFeatures(dir, { tracker: false, pipelines: true, agents: true })
+    expect(projectFeatures(dir)).toEqual({ pipelines: true, plans: true, tracker: false, agents: true })
   })
 
   it('a features section put into aide/config.json by hand takes effect at the next reading', () => {
@@ -65,7 +65,7 @@ describe('feature switches of a project', () => {
     const b = project()
     writePersonalFeatures(a, { pipelines: false })
     setProjectConfig(a, { features: { plans: false } })
-    expect(projectFeatures(a)).toEqual({ pipelines: false, plans: false, tracker: true })
+    expect(projectFeatures(a)).toEqual({ pipelines: false, plans: false, tracker: true, agents: true })
     expect(projectFeatures(b)).toEqual(ALL_FEATURES_ON)
     writeGlobalFeatures({ tracker: false })
     expect(projectFeatures(a).tracker).toBe(false)
@@ -93,8 +93,8 @@ describe('feature switches of a project', () => {
 
 describe('saving the switches', () => {
   it('lists the switches a change turns off', () => {
-    expect(switchedOff(ALL_FEATURES_ON, { pipelines: false, plans: true, tracker: false })).toEqual(['pipelines', 'tracker'])
-    expect(switchedOff({ pipelines: false, plans: true, tracker: true }, ALL_FEATURES_ON)).toEqual([])
+    expect(switchedOff(ALL_FEATURES_ON, { pipelines: false, plans: true, tracker: false, agents: true })).toEqual(['pipelines', 'tracker'])
+    expect(switchedOff({ pipelines: false, plans: true, tracker: true, agents: true }, ALL_FEATURES_ON)).toEqual([])
   })
 
   it('refuses turning a switch off where it is busy, in any open project the change reaches', () => {

@@ -13,7 +13,7 @@ describe('feature store', () => {
     expect(pipelineTabShown({ ...ALL_FEATURES_ON, pipelines: false }, true, false)).toBe(false)
     expect(pipelineTabShown({ ...ALL_FEATURES_ON, pipelines: false }, true, true)).toBe(true)
     expect(pipelineTabShown({ ...ALL_FEATURES_ON, plans: false }, false, true)).toBe(false)
-    expect(pipelineTabShown({ pipelines: false, plans: false, tracker: true }, true, true)).toBe(false)
+    expect(pipelineTabShown({ ...ALL_FEATURES_ON, pipelines: false, plans: false }, true, true)).toBe(false)
   })
 
   it('a watcher hears a switch once it is known and each time it changes', () => {

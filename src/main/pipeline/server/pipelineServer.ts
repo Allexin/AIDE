@@ -8,6 +8,7 @@ import { inWaitScope, isSignificant, pipelineEvents, type PipelineEvent } from '
 import { validateAgainstSchema } from '../engine/schema'
 import type { JsonSchema } from '../engine/types'
 import type { ResultTool } from '../headless/types'
+import type { AgentDeliverRequest, AgentInfo, AgentSendResult } from '../../agents/agentMessaging'
 import { pruneStaleRuntimes, removeAllProjectRuntimes, removeProjectRuntime, writeProjectRuntime } from './runtimeFiles'
 
 /**
@@ -33,6 +34,11 @@ export interface PipelineServerOptions {
   tools: (context: RequestContext) => ToolDefinition[]
   /** Why a tool missing from that list cannot be called (see ServerInfo.unavailableTool). */
   unavailableTool?: (name: string, context: RequestContext) => string | null
+  /** Peer-to-peer inter-agent endpoints (GET /agents, POST /agents/message). */
+  agentHandlers?: {
+    list: () => AgentInfo[]
+    send: (req: AgentDeliverRequest) => Promise<AgentSendResult>
+  }
 }
 
 /** MCP server name of a step's result channel. */
@@ -189,6 +195,8 @@ export class PipelineServer {
       }
       else if (req.method === 'GET' && url.pathname === '/events') this.handleEvents(url, res, projectPath)
       else if (req.method === 'GET' && url.pathname === '/wait') this.handleWait(url, res, projectPath)
+      else if (req.method === 'GET' && url.pathname === '/agents') this.handleAgentsList(res)
+      else if (req.method === 'POST' && url.pathname === '/agents/message') await this.handleAgentMessage(req, res)
       else res.writeHead(404, { 'content-type': 'text/plain' }).end('Not found')
     } catch (err) {
       logEvent('pipeline-server-request-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn')
@@ -315,6 +323,51 @@ export class PipelineServer {
       }
     })
     timer = setTimeout(() => { done(); respond({ type: 'timeout', since }) }, timeoutSec * 1000)
+  }
+
+  private handleAgentsList(res: http.ServerResponse): void {
+    const handlers = this.options?.agentHandlers
+    if (!handlers) {
+      res.writeHead(404, { 'content-type': 'text/plain' }).end('Not available')
+      return
+    }
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ agents: handlers.list() }))
+  }
+
+  private async handleAgentMessage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const handlers = this.options?.agentHandlers
+    if (!handlers) {
+      res.writeHead(404, { 'content-type': 'text/plain' }).end('Not available')
+      return
+    }
+    const chunks: Buffer[] = []
+    let size = 0
+    for await (const chunk of req) {
+      size += (chunk as Buffer).length
+      if (size > MAX_BODY_BYTES) {
+        res.writeHead(413, { 'content-type': 'text/plain' }).end('Payload too large')
+        return
+      }
+      chunks.push(chunk as Buffer)
+    }
+    let body: unknown
+    try {
+      body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    } catch {
+      res.writeHead(400, { 'content-type': 'text/plain' }).end('Invalid JSON')
+      return
+    }
+    if (!body || typeof body !== 'object') {
+      res.writeHead(400, { 'content-type': 'text/plain' }).end('Invalid payload')
+      return
+    }
+    const payload = body as Partial<AgentDeliverRequest>
+    if (typeof payload.targetProjectPath !== 'string' || typeof payload.tabId !== 'string' || typeof payload.message !== 'string' || !payload.from || typeof payload.from !== 'object') {
+      res.writeHead(400, { 'content-type': 'text/plain' }).end('Missing required fields')
+      return
+    }
+    const result = await handlers.send(payload as AgentDeliverRequest)
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result))
   }
 }
 

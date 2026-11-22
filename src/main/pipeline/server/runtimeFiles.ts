@@ -17,9 +17,39 @@ export interface ShimLaunch {
   env: Record<string, string>
 }
 
-function projectFileName(projectPath: string): string {
+export interface ProjectRuntime {
+  projectPath: string
+  port: number
+  token: string
+  pid: number
+}
+
+/** Stable 16-hex identifier of a project path (matches its discovery file stem). */
+export function projectRuntimeKey(projectPath: string): string {
   const key = process.platform === 'win32' ? projectPath.toLowerCase() : projectPath
-  return createHash('sha256').update(key).digest('hex').slice(0, 16) + '.json'
+  return createHash('sha256').update(key).digest('hex').slice(0, 16)
+}
+
+function projectFileName(projectPath: string): string {
+  return projectRuntimeKey(projectPath) + '.json'
+}
+
+/** Read discovery files of all live AIDE project instances on this machine. */
+export function listProjectRuntimes(runtimeDir: string, isAlive: (pid: number) => boolean): ProjectRuntime[] {
+  const dir = join(runtimeDir, 'projects')
+  if (!existsSync(dir)) return []
+  const result: ProjectRuntime[] = []
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.json')) continue
+    let parsed: unknown
+    try { parsed = JSON.parse(safeRead(join(dir, name))) } catch { continue }
+    if (!parsed || typeof parsed !== 'object') continue
+    const r = parsed as Partial<ProjectRuntime>
+    if (typeof r.projectPath !== 'string' || typeof r.port !== 'number' || typeof r.token !== 'string' || typeof r.pid !== 'number') continue
+    if (!isAlive(r.pid)) continue
+    result.push({ projectPath: r.projectPath, port: r.port, token: r.token, pid: r.pid })
+  }
+  return result
 }
 
 export function writeProjectRuntime(runtimeDir: string, projectPath: string, port: number, token: string): void {

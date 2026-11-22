@@ -84,6 +84,7 @@ How long something stays on screen is a design choice, not a synchronisation.
 - Toasts, "Copied" / "Saved" confirmations, attention blinking (500 ms), elapsed-time ticks (1 s).
 - Session Picker hover delay before loading a preview — avoids flicker on fast mouse-overs.
 - Remote page long-press (550 ms) — the gesture's definition.
+- `PtyManager.submitPastedInput` (`postPasteSubmitDelayMs`, 250 ms for Codex) — Codex's TUI runs a ~120 ms `PasteBurst` window on Windows ConPTY during which an Enter key is treated as a newline inside the paste instead of submit; waiting past the burst window after the paste echoes is a protocol requirement of Codex's input parser.
 - `EditorPanel.useDialogCooldown` — ignores input for a moment after a dialog opens so a key
   pressed for the editor does not answer the dialog.
 - `utils/sound` — closes the audio context after the last note has played.

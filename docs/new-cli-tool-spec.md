@@ -158,7 +158,9 @@ Full interface in `src/main/pty/cliTools/types.ts`:
 | `prepareLaunch` | `(ctx: LaunchContext) => LaunchAdditions` | Returns extra `{ args?, env? }` for each launch: hook server wiring (`ctx.hook`) and AIDE's MCP servers (`ctx.mcpServers`). Called before every new and resumed tab spawn. |
 | `getEnvOverrides` | `() => Record<string, string>` | Synchronous env vars merged into both PTY shells and headless runs (e.g. proxy + `NO_PROXY`). Reads in-memory config only. |
 | `checkStartupHealth` | `(accumulated: string) => 'ok' \| 'dead' \| 'pending'` | Inspects accumulated PTY output. Return `'ok'` when ready for input, `'dead'` on fatal/invalid-session error, `'pending'` otherwise. **Never decide by elapsed time.** |
-| `interactiveSubmitSequence` | `() => string` | Terminal key sequence sent to submit a pasted prompt (default `'\r'`). Used by prompt injection, File Viewer Send, and Pipeline `EventRelay`. |
+| `interactiveSubmitSequence` | `() => string` | Terminal key sequence sent to submit a pasted prompt (default `'\r'`). Used by prompt injection, File Viewer Send, Pipeline `EventRelay`, and inter-agent messaging. |
+| `postPasteSubmitDelayMs` | `() => number` | Optional delay (ms) between a bracketed paste rendering and sending `interactiveSubmitSequence()`. Needed for TUIs with a paste-burst window that treats an early Enter as a newline (e.g. Codex: `250` ms). |
+| `deliverMessage` | `(ctx: AgentDeliverContext) => Promise<AgentDeliverOutcome>` | Optional native delivery for inter-agent `agent_send` messages (e.g. an HTTP API or MCP channel). When omitted, AIDE falls back to PTY delivery (checking for unsent user input and queuing while busy). |
 | `exitCommand` | `() => string` | Optional convention for the interactive command that exits the CLI (e.g. `'/exit'`). Currently has no core caller. |
 
 ### Optional methods — runtime signals, activity & tab lifecycle
@@ -475,9 +477,11 @@ checkStartupHealth(accumulated: string): 'ok' | 'dead' | 'pending' {
 - Do **not** treat any bare CSI escape sequence (`\x1b[`) as ready on Windows ConPTY; PowerShell emits CSI sequences before the CLI even launches. Prefer `tuiReadyForInput(accumulated)` (`\x1b[?1049h` followed by `\x1b[?25h`) or a CLI-specific banner/prompt marker.
 - `checkStartupHealth` drives three features: dead-session cleanup on restore, `createNewSessionWithPrompt`, and `submitWhenReady` (used by Pipeline `EventRelay`).
 
-### `interactiveSubmitSequence` (and `exitCommand`)
+### `interactiveSubmitSequence`, `postPasteSubmitDelayMs`, `deliverMessage` (and `exitCommand`)
 
-When AIDE sends text to a running tab (`createNewSessionWithPrompt`, File Viewer "Send", Pipeline `EventRelay`), `PtyManager.submitPastedInput` writes bracketed paste (`\x1b[200~<text>\x1b[201~`), waits for the next PTY output chunk (so the TUI renders the paste before Enter arrives), and then writes `tool.interactiveSubmitSequence?.() ?? '\r'`. Override `interactiveSubmitSequence()` if the CLI's keyboard protocol requires a different submit sequence.
+When AIDE sends text to a running tab (`createNewSessionWithPrompt`, File Viewer "Send", Pipeline `EventRelay`, inter-agent `agent_send`), `PtyManager.submitPastedInput` writes bracketed paste (`\x1b[200~<text>\x1b[201~`), waits for the next PTY output chunk (so the TUI renders the paste before Enter arrives), optionally waits `tool.postPasteSubmitDelayMs?.()` ms (for CLIs like Codex whose Windows ConPTY paste-burst window treats an early `\r` as a newline), and then writes `tool.interactiveSubmitSequence?.() ?? '\r'`. Override `interactiveSubmitSequence()` if the CLI's keyboard protocol requires a different submit sequence.
+
+If a CLI provides a cleaner native way to inject messages into a running interactive session (bypassing PTY paste altogether), implement `deliverMessage(ctx)`. It receives the raw `message`, the ready-to-paste `formattedText`, sender metadata, and a `deliverToPty(text)` fallback helper. When omitted, AIDE delivers directly through the PTY once idle (refusing if the user has unsent text in the input box).
 
 `exitCommand()` is an optional convention returning the slash command that exits the CLI cleanly (e.g. `'/exit'`).
 

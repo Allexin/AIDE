@@ -12,9 +12,9 @@
  * layer. Pure functions, shared by the main process and the Settings window.
  */
 
-export type FeatureName = 'pipelines' | 'plans' | 'tracker'
+export type FeatureName = 'pipelines' | 'plans' | 'tracker' | 'agents'
 
-export const FEATURE_NAMES: readonly FeatureName[] = ['pipelines', 'plans', 'tracker']
+export const FEATURE_NAMES: readonly FeatureName[] = ['pipelines', 'plans', 'tracker', 'agents']
 
 /** What one layer sets: a key per switch it sets. */
 export type FeatureLayer = Partial<Record<FeatureName, boolean>>
@@ -43,9 +43,9 @@ export interface FeatureSettings {
   project: { path: string; config: FeatureLayer; personal: FeatureLayer } | null
 }
 
-export const ALL_FEATURES_ON: FeatureSet = Object.freeze({ pipelines: true, plans: true, tracker: true })
+export const ALL_FEATURES_ON: FeatureSet = Object.freeze({ pipelines: true, plans: true, tracker: true, agents: true })
 
-export const FEATURE_LABEL: Record<FeatureName, string> = { pipelines: 'Pipelines', plans: 'Plans', tracker: 'Task tracker' }
+export const FEATURE_LABEL: Record<FeatureName, string> = { pipelines: 'Pipelines', plans: 'Plans', tracker: 'Task tracker', agents: 'Agent messaging' }
 
 const SOURCE_LABEL: Record<FeatureSource, string> = { default: 'built-in default', global: 'global', project: 'project config', personal: 'personal' }
 
@@ -74,7 +74,12 @@ export function resolveFeature(layers: FeatureLayers, name: FeatureName, upTo: E
 }
 
 export function resolveFeatures(layers: FeatureLayers): FeatureSet {
-  return { pipelines: resolveFeature(layers, 'pipelines').on, plans: resolveFeature(layers, 'plans').on, tracker: resolveFeature(layers, 'tracker').on }
+  return {
+    pipelines: resolveFeature(layers, 'pipelines').on,
+    plans: resolveFeature(layers, 'plans').on,
+    tracker: resolveFeature(layers, 'tracker').on,
+    agents: resolveFeature(layers, 'agents').on
+  }
 }
 
 /** "on — built-in default", "off — project config": a value and the layer it comes from. */
@@ -92,7 +97,9 @@ export function withFeatureChoice(layer: FeatureLayer, name: FeatureName, choice
 
 /** What a handler of a switched-off feature answers instead of acting. */
 export function featureOffText(name: FeatureName): string {
-  return name === 'tracker' ? 'The task tracker is turned off in Settings.' : `${FEATURE_LABEL[name]} are turned off in Settings.`
+  if (name === 'tracker') return 'The task tracker is turned off in Settings.'
+  if (name === 'agents') return 'Agent messaging is turned off in Settings.'
+  return `${FEATURE_LABEL[name]} are turned off in Settings.`
 }
 
 /** Why plan_run (and "Run plan") is unavailable while pipelines are off. */
@@ -103,5 +110,6 @@ export function toolFeature(toolName: string): FeatureName | null {
   if (toolName.startsWith('pipeline_')) return 'pipelines'
   if (toolName.startsWith('plan_')) return 'plans'
   if (toolName.startsWith('task_')) return 'tracker'
+  if (toolName.startsWith('agent_')) return 'agents'
   return null
 }

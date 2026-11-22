@@ -260,6 +260,12 @@ export const codexTool: CliTool = {
     return '\r'
   },
 
+  /** Codex's TUI runs a ~120 ms PasteBurst heuristic on Windows ConPTY that treats an Enter
+   *  arriving inside the burst window as a newline instead of submit (docs/timers.md). */
+  postPasteSubmitDelayMs(): number {
+    return 250
+  },
+
   // ── Startup health ────────────────────────────────────────────────────────
 
   checkStartupHealth(accumulated: string): 'ok' | 'dead' | 'pending' {

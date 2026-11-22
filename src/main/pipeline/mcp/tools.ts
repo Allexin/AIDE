@@ -10,6 +10,7 @@ import type { PlanService } from '../plan/planService'
 import { buildPlanTools } from './planTools'
 import { buildTaskTools, withTrackerTail } from './taskTools'
 import { buildViewTools, type ViewToolEnvironment } from './viewTools'
+import { buildAgentTools, type AgentToolEnvironment } from './agentTools'
 import type { TaskService } from '../../tasks/taskService'
 import { ALL_FEATURES_ON, PLAN_RUN_OFF_TEXT, toolFeature, type FeatureSet } from '../../../shared/features'
 import { TRACKER_NO_PLAN_CLAUSE, TRACKER_PLAN_CLAUSE } from '../../tasks/taskSnapshot'
@@ -53,6 +54,8 @@ export interface ToolEnvironment {
   features?: FeatureSet
   /** The file viewer (`view_show`). */
   viewShow?: ViewToolEnvironment['show']
+  /** Inter-agent messaging (`agent_list`, `agent_send`). */
+  agents?: AgentToolEnvironment
 }
 
 export const ORCHESTRATOR_RULES = [
@@ -102,6 +105,7 @@ export function serverInstructions(workInstruction: string = AIDE_WORK_INSTRUCTI
     "AIDE's MCP server: tools of the AIDE editor that has this project open.",
     ...(features.pipelines ? ['Pipeline orchestration (pipeline_* tools): AIDE runs pipeline machines — multi-step agent work with checks, review loops and commits — deterministically, and you orchestrate them.'] : []),
     ...(features.plans ? [`Plans (plan_* tools): when the user asks for a plan, or work needs several tasks tracked over sessions, make it an AIDE plan, whatever way of planning your client has; plan_guide says how. AIDE shows its progress${features.pipelines ? ' and can walk it task by task' : ''}.`] : []),
+    ...(features.agents ? ['Agent messaging (agent_list, agent_send): list other running agent tabs in this project or across open AIDE windows and send them messages.'] : []),
     'File viewer (view_show): when the user should read or review a file you wrote, show it — AIDE marks your changes since the last show, and comments of the user come back as a message.'
   ].join(' ')
   const guides = [
@@ -498,7 +502,8 @@ export function buildPipelineTools(env: () => ToolEnvironment): ToolDefinition[]
       }
     })),
     ...buildTaskTools(() => ({ tasks: env().tasks, guide: env().taskGuide, liveTab: env().liveTab })),
-    ...buildViewTools(() => ({ show: env().viewShow }))
+    ...buildViewTools(() => ({ show: env().viewShow })),
+    ...buildAgentTools(() => env().agents ?? {})
   )
   const onTailError = (err: unknown): void => { logEvent('task-tail-failed', { message: err instanceof Error ? err.message : String(err) }, 'warn') }
   // Feature switches (docs/task-tracker-implementation.md §10): the tools of a feature that is

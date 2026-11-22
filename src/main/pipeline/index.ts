@@ -29,6 +29,7 @@ import { smokeTestMachine } from './smoke'
 import { TaskService } from '../tasks/taskService'
 import { isTrackerPath } from '../tasks/taskStore'
 import { ptyRegistry } from '../pty/registry'
+import { AgentMessagingService } from '../agents/agentMessaging'
 import { addFsChangeObserver } from '../filetree/watcher'
 import { projectFeatures } from '../config/features'
 import { featureBusyReason } from './featureBusy'
@@ -100,6 +101,15 @@ export const taskService = new TaskService({
   runActive: (projectPath) => pipelineManager.activeRun(projectPath) !== null
 })
 
+/** Inter-agent discovery and messaging across local and peer AIDE windows. */
+export const agentMessaging = new AgentMessagingService({
+  managers: () => ptyRegistry.values(),
+  agentsEnabled: (projectPath) => projectFeatures(projectPath).agents,
+  tabTasks: (projectPath) => projectFeatures(projectPath).tracker ? taskService.tabTasks(projectPath) : {},
+  runtimeDir,
+  localPort: () => pipelineServer.getPort()
+})
+
 /** Whether a tab id names a terminal tab open in this AIDE. */
 function liveTab(tabId: string): boolean {
   for (const mgr of ptyRegistry.values()) if (mgr.getTabs().some((tab) => tab.tabId === tabId)) return true
@@ -151,12 +161,17 @@ function shimPath(): string {
 export async function startPipelineServer(): Promise<void> {
   new AccountPool(pipelineManager).attach()
   new EventRelay(pipelineManager).attach()
+  agentMessaging.attach()
   try {
     launcherPath = writeLauncher(runtimeDir(), process.execPath, shimPath())
     await pipelineServer.start({
       runtimeDir: runtimeDir(),
       serverName: 'aide',
       serverVersion: app.getVersion(),
+      agentHandlers: {
+        list: () => agentMessaging.listLocal(),
+        send: (req) => agentMessaging.deliverLocal(req)
+      },
       // A feature switched off in Settings leaves its part out; with the tracker off no tail starts.
       instructions: (context) => {
         const features = projectFeatures(context.projectPath)
@@ -184,7 +199,11 @@ export async function startPipelineServer(): Promise<void> {
           workInstruction,
           cacheTtl: tabCacheTtl,
           features,
-          viewShow: (projectPath, tabId, args) => viewerService.show(projectPath, tabId, args)
+          viewShow: (projectPath, tabId, args) => viewerService.show(projectPath, tabId, args),
+          agents: {
+            list: (projectPath, tabId, scope) => agentMessaging.listAgents(projectPath, tabId, scope),
+            send: (projectPath, tabId, to, message) => agentMessaging.sendMessage(projectPath, tabId, to, message)
+          }
         }))
       }
     })

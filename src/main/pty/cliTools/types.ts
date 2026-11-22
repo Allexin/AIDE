@@ -103,6 +103,15 @@ export interface CliTool {
   /** Terminal sequence used to submit an interactive command in the CLI's active keyboard mode. */
   interactiveSubmitSequence?(): string
 
+  /** Delay (ms) between a bracketed paste rendering and sending interactiveSubmitSequence().
+   *  Needed for CLIs whose TUI treats an Enter arriving inside a paste-burst window as a newline
+   *  (e.g. Codex on Windows ConPTY). See docs/timers.md. */
+  postPasteSubmitDelayMs?(): number
+
+  /** Optional native delivery for inter-agent messages (agent_send). When omitted, AIDE delivers
+   *  into the tab's PTY once idle (refusing if the user has unsent text in the input box). */
+  deliverMessage?(ctx: AgentDeliverContext): Promise<AgentDeliverOutcome>
+
   /** Command to start a new session (written to PTY stdin). */
   newSessionCommand(): string
 
@@ -289,6 +298,36 @@ export type HistoryBlock =
 export interface HistoryEntry {
   role: 'user' | 'assistant'
   blocks: HistoryBlock[]
+}
+
+export type AgentDeliverStatus = 'delivered' | 'queued' | 'rejected' | 'failed'
+
+export interface AgentDeliverOutcome {
+  status: AgentDeliverStatus
+  reason?: string
+}
+
+export interface AgentDeliverSender {
+  id: string
+  projectName: string
+  projectPath: string
+  tabId: string | null
+  toolId: string | null
+  toolName: string | null
+  title: string | null
+}
+
+export interface AgentDeliverContext {
+  tabId: string
+  sessionId: string | null
+  projectPath: string
+  /** Raw message text from the sender. */
+  message: string
+  /** Formatted text ready for terminal injection (includes sender header and reply note). */
+  formattedText: string
+  from: AgentDeliverSender
+  /** Fallback PTY delivery (checks user draft, sends immediately when idle or queues until idle). */
+  deliverToPty: (text: string) => Promise<AgentDeliverOutcome>
 }
 
 export interface UsageInfo {

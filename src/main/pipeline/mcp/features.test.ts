@@ -54,10 +54,11 @@ describe('feature switches in the MCP server', () => {
     const allOn = buildPipelineTools(() => ({ aideVersion: 't', launcherPath: 'L', features: ALL_FEATURES_ON }))
     expect(allOn.map((t) => [t.name, t.description])).toEqual(plain.map((t) => [t.name, t.description]))
     const { tools, instructions } = await session(server(() => ALL_FEATURES_ON))
-    for (const prefix of ['pipeline_', 'plan_', 'task_']) expect(tools.some((t) => t.startsWith(prefix))).toBe(true)
+    for (const prefix of ['pipeline_', 'plan_', 'task_', 'agent_']) expect(tools.some((t) => t.startsWith(prefix))).toBe(true)
     expect(instructions).toContain(TRACKER_PART)
     expect(instructions).toContain('pipeline_hello')
     expect(instructions).toContain('plan_guide')
+    expect(instructions).toContain('agent_list')
   })
 
   it('pipelines off: no pipeline_* tools and no pipeline text; plan_run says why it is unavailable, other plan tools work', async () => {
@@ -121,8 +122,17 @@ describe('feature switches in the MCP server', () => {
     expect(workInstructionFor(AIDE_WORK_INSTRUCTION, ALL_FEATURES_ON)).toBe(AIDE_WORK_INSTRUCTION)
   })
 
+  it('agents off: no agent_* tools and no agent messaging text in instructions', async () => {
+    const mcp = server(() => off('agents'))
+    const { tools, instructions } = await session(mcp)
+    expect(tools.filter((t) => t.startsWith('agent_'))).toEqual([])
+    expect(instructions).not.toContain('agent_list')
+    expect(instructions).not.toContain('Agent messaging')
+    expect(await call(mcp, 'agent_list')).toEqual({ text: 'Agent messaging is turned off in Settings.', isError: true })
+  })
+
   it('two projects on one server resolve independently', async () => {
-    const mcp = server((projectPath) => projectPath === 'a' ? { pipelines: false, plans: false, tracker: false } : ALL_FEATURES_ON)
+    const mcp = server((projectPath) => projectPath === 'a' ? { pipelines: false, plans: false, tracker: false, agents: false } : ALL_FEATURES_ON)
     const a = await session(mcp, 'a')
     const b = await session(mcp, 'b')
     expect(a.tools).toEqual(['toolbar_guide', 'view_show'])

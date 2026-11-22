@@ -241,6 +241,19 @@ export class PtyManager {
     return tabInfo
   }
 
+  getProjectPath(): string {
+    return this.projectPath
+  }
+
+  getTabTool(tabId: string): CliTool | null {
+    return this.tabs.get(tabId)?.tool ?? null
+  }
+
+  isTabReady(tabId: string): boolean {
+    if (!this.tabs.has(tabId)) return false
+    return !this.healthChecks.has(tabId)
+  }
+
   getTabs(): SessionTabInfo[] {
     return Array.from(this.tabs.values()).map((t) => ({
       tabId: t.tabId,
@@ -267,6 +280,10 @@ export class PtyManager {
     tab.pty.write(`\x1b[200~${text}\x1b[201~`)
     if (!(await echoed)) {
       cliLog('startup', `${tab.toolName} did not render the pasted prompt within ${ECHO_TIMEOUT_MS / 1000}s; submitting anyway.`)
+    }
+    const postPasteDelay = tab.tool.postPasteSubmitDelayMs?.() ?? 0
+    if (postPasteDelay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, postPasteDelay))
     }
     if (!this.tabs.has(tabId)) return
     tab.pty.write(tab.tool.interactiveSubmitSequence?.() ?? '\r')
@@ -384,6 +401,7 @@ export class PtyManager {
       this.titleBufs.delete(tab.tabId)
       this.prevTitleCache.delete(tab.tabId)
       this.healthChecks.delete(tab.tabId)
+      tabActivity.forget(tab.tabId)
       try {
         tab.pty.kill()
       } catch {}
@@ -640,6 +658,7 @@ export class PtyManager {
       this.debugLog(`  DEAD session: tabId=${tabId} sessionId=${tab?.sessionId} buf_start="${hc.buf.slice(0, 200).replace(/\n/g, '\\n')}"`)
     }
     if (result === 'ok') {
+      tabActivity.markIdle(tabId)
       this.send('terminal:tab-ready', { tabId })
     } else if (!hc.silent) {
       this.send('terminal:dead-session', { tabId, sessionId: tab?.sessionId ?? null })
