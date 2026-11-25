@@ -17,6 +17,7 @@ failure, never treated as success.
 |---|---|---|---|
 | `PtyManager.startHealthCheck` (`READY_TIMEOUT_MS`) | 15 s | the CLI's ready/dead signal in its output | verdict `unknown`; a queued prompt is not sent and a line is logged |
 | `PtyManager.submitPastedInput` (`ECHO_TIMEOUT_MS`) | 2 s | the CLI rendering a bracketed paste before Enter is sent | logs and submits anyway |
+| `antigravity.preloadAntigravityMcp` (`PRELOAD_*_WAIT_MS`) | 0.5–4 s | Antigravity TUI startup settling, `/mcp` echo, MCP overlay listing `aide`, and `Esc` closing the overlay (temporary workaround for a known Antigravity CLI issue where workspace MCP servers do not attach until `/mcp` or turn 2) | advances to the next step / sends `Esc` so the overlay is never left open |
 | `PtyManager.closeTabAndWaitExit` (`EXIT_TIMEOUT_MS`) | 5 s | the PTY's `onExit` before a session is resumed again | `pty-restart-exit-timeout` diagnostics event, resume proceeds |
 | `toolbar/processManager.forceKill` (`KILL_TIMEOUT_MS`) | 5 s | `taskkill` and the process `exit` | the restart proceeds |
 | `pipeline/processRunner` | per call | the child process | process is killed, `process-timeout` event |

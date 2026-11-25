@@ -110,6 +110,10 @@ export interface CliTool {
    *  (e.g. Codex on Windows ConPTY). See docs/timers.md. */
   postPasteSubmitDelayMs?(): number
 
+  /** Optional hook run once startup health reports 'ok' (before the tab is marked idle/ready).
+   *  Used for post-startup TUI actions such as preloading MCP servers. */
+  onTabReady?(ctx: TabReadyContext): Promise<void> | void
+
   /** Optional native delivery for inter-agent messages (agent_send). When omitted, AIDE delivers
    *  into the tab's PTY once idle (refusing if the user has unsent text in the input box). */
   deliverMessage?(ctx: AgentDeliverContext): Promise<AgentDeliverOutcome>
@@ -300,6 +304,19 @@ export type HistoryBlock =
 export interface HistoryEntry {
   role: 'user' | 'assistant'
   blocks: HistoryBlock[]
+}
+
+export interface TabReadyContext {
+  tabId: string
+  projectPath: string
+  /** Write directly to the tab's PTY (without marking it as user input). */
+  write: (data: string) => void
+  /** Subscribe to raw PTY output chunks; returns an unsubscribe function. */
+  subscribeOutput: (cb: (data: string) => void) => () => void
+  /** True if the user already has unsent text in the input box (abort any automated TUI actions). */
+  hasUserDraft: () => boolean
+  /** True once the tab has been closed. */
+  isClosed: () => boolean
 }
 
 export type AgentDeliverStatus = 'delivered' | 'queued' | 'rejected' | 'failed'

@@ -658,6 +658,28 @@ export class PtyManager {
       this.debugLog(`  DEAD session: tabId=${tabId} sessionId=${tab?.sessionId} buf_start="${hc.buf.slice(0, 200).replace(/\n/g, '\\n')}"`)
     }
     if (result === 'ok') {
+      if (tab.tool.onTabReady) {
+        void Promise.resolve(tab.tool.onTabReady({
+          tabId,
+          projectPath: this.projectPath,
+          write: (seq) => { try { this.tabs.get(tabId)?.pty.write(seq) } catch {} },
+          subscribeOutput: (cb) => this.subscribeToOutput(tabId, cb),
+          hasUserDraft: () => tabActivity.hasUserDraft(tabId),
+          isClosed: () => !this.tabs.has(tabId)
+        })).catch((err) => {
+          cliLog('startup', `${tab.toolName} onTabReady failed for ${tabId}: ${err instanceof Error ? err.message : String(err)}`)
+        }).finally(() => {
+          this.healthChecks.delete(tabId)
+          if (!this.tabs.has(tabId)) {
+            hc.onResult?.('dead')
+            return
+          }
+          tabActivity.markIdle(tabId, true)
+          this.send('terminal:tab-ready', { tabId })
+          hc.onResult?.('ok')
+        })
+        return
+      }
       tabActivity.markIdle(tabId)
       this.send('terminal:tab-ready', { tabId })
     } else if (!hc.silent) {

@@ -10,7 +10,7 @@
 
 import { existsSync } from 'fs'
 import { basename } from 'path'
-import { AIDE_MCP_SERVER_NAME } from '../../aideMcp/launch'
+import { AIDE_MCP_KEY, AIDE_MCP_SERVER_NAME } from '../../aideMcp/launch'
 import { getToolConfig, updateToolConfig } from '../../config/appConfig'
 import type { HookBinding } from '../../hooks/hookServer'
 import { antigravityHeadless, resolveAntigravityExecutable } from '../../pipeline/headless/antigravityHeadless'
@@ -36,13 +36,139 @@ import {
   recordAntigravityHookQuota
 } from './antigravityUsage'
 import { tuiReadyForInput } from './startupHealth'
-import type { CliSession, CliTool, HistoryEntry, LaunchAdditions, LaunchContext, SettingsField, UsageInfo } from './types'
+import { tabActivity } from '../tabActivity'
+import type { CliSession, CliTool, HistoryEntry, LaunchAdditions, LaunchContext, SettingsField, TabReadyContext, UsageInfo } from './types'
 
 const TOOL_ID = 'antigravity'
 const TOOL_NAME = 'Google Antigravity'
 const LOG_CH = 'Antigravity'
 
+export const PRELOAD_MCP_KEY = 'preloadMcpOnStart'
+
 const INACTIVITY_THRESHOLD = 5 // fallback seconds of PTY silence if title hook is not active
+
+/** Safety bounds & settle windows for the temporary `/mcp` + `Esc` startup preload workaround (docs/timers.md). */
+const PRELOAD_SETTLE_MS = 600
+const PRELOAD_MAX_STARTUP_WAIT_MS = 4000
+const PRELOAD_ECHO_WAIT_MS = 1000
+const PRELOAD_OVERLAY_SETTLE_MS = 500
+const PRELOAD_OVERLAY_MAX_WAIT_MS = 4000
+const PRELOAD_CLOSE_WAIT_MS = 500
+
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+}
+
+function waitForOutputQuiet(ctx: TabReadyContext, quietMs: number, maxMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    if (ctx.isClosed()) { resolve(); return }
+    let done = false
+    const finish = (): void => {
+      if (done) return
+      done = true
+      clearTimeout(maxTimer)
+      clearTimeout(quietTimer)
+      unsub()
+      resolve()
+    }
+    let quietTimer = setTimeout(finish, quietMs)
+    const maxTimer = setTimeout(finish, maxMs)
+    const unsub = ctx.subscribeOutput(() => {
+      if (ctx.isClosed()) { finish(); return }
+      clearTimeout(quietTimer)
+      quietTimer = setTimeout(finish, quietMs)
+    })
+  })
+}
+
+function waitForOutputMatch(ctx: TabReadyContext, predicate: (plain: string) => boolean, settleMs: number, maxMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (ctx.isClosed()) { resolve(false); return }
+    let done = false
+    let buf = ''
+    let settleTimer: ReturnType<typeof setTimeout> | null = null
+    const finish = (matched: boolean): void => {
+      if (done) return
+      done = true
+      clearTimeout(maxTimer)
+      if (settleTimer) clearTimeout(settleTimer)
+      unsub()
+      resolve(matched)
+    }
+    const maxTimer = setTimeout(() => finish(false), maxMs)
+    const unsub = ctx.subscribeOutput((chunk) => {
+      if (ctx.isClosed()) { finish(false); return }
+      buf += stripAnsi(chunk)
+      if (predicate(buf)) {
+        if (settleTimer) clearTimeout(settleTimer)
+        settleTimer = setTimeout(() => finish(true), settleMs)
+      }
+    })
+  })
+}
+
+function waitForNextChunk(ctx: TabReadyContext, timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    if (ctx.isClosed()) { resolve(); return }
+    let done = false
+    const finish = (): void => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      unsub()
+      resolve()
+    }
+    const timer = setTimeout(finish, timeoutMs)
+    const unsub = ctx.subscribeOutput(() => finish())
+  })
+}
+
+/**
+ * Temporary workaround for a known Antigravity CLI 1.5.x issue: interactive TUI tabs
+ * do not attach workspace MCP servers until the first turn or `/mcp` opens. Opening
+ * and immediately closing `/mcp` triggers MCP initialization at zero token cost.
+ */
+export async function preloadAntigravityMcp(
+  ctx: TabReadyContext,
+  timings: {
+    settleMs?: number
+    maxStartupWaitMs?: number
+    echoWaitMs?: number
+    overlaySettleMs?: number
+    overlayMaxWaitMs?: number
+    closeWaitMs?: number
+  } = {}
+): Promise<boolean> {
+  const settleMs = timings.settleMs ?? PRELOAD_SETTLE_MS
+  const maxStartupWaitMs = timings.maxStartupWaitMs ?? PRELOAD_MAX_STARTUP_WAIT_MS
+  const echoWaitMs = timings.echoWaitMs ?? PRELOAD_ECHO_WAIT_MS
+  const overlaySettleMs = timings.overlaySettleMs ?? PRELOAD_OVERLAY_SETTLE_MS
+  const overlayMaxWaitMs = timings.overlayMaxWaitMs ?? PRELOAD_OVERLAY_MAX_WAIT_MS
+  const closeWaitMs = timings.closeWaitMs ?? PRELOAD_CLOSE_WAIT_MS
+
+  await waitForOutputQuiet(ctx, settleMs, maxStartupWaitMs)
+  if (ctx.isClosed() || ctx.hasUserDraft()) return false
+
+  const echoed = waitForNextChunk(ctx, echoWaitMs)
+  ctx.write('/mcp')
+  await echoed
+  if (ctx.isClosed() || ctx.hasUserDraft()) return false
+
+  const overlayReady = waitForOutputMatch(
+    ctx,
+    (plain) => /\baide\b/i.test(plain) || /Tools:/i.test(plain) || /No MCP/i.test(plain),
+    overlaySettleMs,
+    overlayMaxWaitMs
+  )
+  ctx.write('\r')
+  await overlayReady
+  if (ctx.isClosed()) return false
+
+  const closed = waitForNextChunk(ctx, closeWaitMs)
+  ctx.write('\x1b')
+  await closed
+  return true
+}
 
 interface InactivityState {
   counter: number
@@ -226,6 +352,15 @@ export const antigravityTool: CliTool = {
     if (becameIdle || becameConfirmation) {
       signalByTab.get(binding.tabId)?.('completeAndWait')
     }
+    // Always sync tabActivity with Antigravity's authoritative agent_state (fast turns
+    // can skip emitting 'working' before 'idle', and initial hooks report 'idle' with
+    // prevState === ''; syncing here avoids leaving the tab stuck as busy without
+    // triggering spurious completion sounds).
+    if (BUSY_STATES.has(state)) {
+      tabActivity.markBusy(binding.tabId)
+    } else if (WAIT_STATES.has(state) || confirm) {
+      tabActivity.markIdle(binding.tabId)
+    }
 
     return formatAntigravityTitle(payload)
   },
@@ -259,6 +394,12 @@ export const antigravityTool: CliTool = {
 
   onPtyActivity(tabId: string): void {
     ensureFallbackInactivityTimer(tabId)
+  },
+
+  async onTabReady(ctx: TabReadyContext): Promise<void> {
+    const cfg = getToolConfig(TOOL_ID)
+    if (cfg[AIDE_MCP_KEY] === false || cfg[PRELOAD_MCP_KEY] === false) return
+    await preloadAntigravityMcp(ctx)
   },
 
   registerSignalHandler(tabId: string, handler: (event: string) => void): void {
@@ -364,6 +505,13 @@ export const antigravityTool: CliTool = {
           { value: 'max', label: 'max' }
         ],
         default: ''
+      },
+      {
+        key: PRELOAD_MCP_KEY,
+        label: 'Preload AIDE MCP tools on startup (/mcp)',
+        description: 'Temporary workaround for a known Antigravity CLI issue where workspace MCP tools do not load until the second turn: opens and closes /mcp right after startup (uses no tokens).',
+        type: 'boolean',
+        default: true
       }
     ]
   },

@@ -168,13 +168,14 @@ class TabActivity extends EventEmitter {
   private readonly idle = new Set<string>()
   private readonly drafts = new Map<string, DraftState>()
 
-  markIdle(tabId: string): void {
+  markIdle(tabId: string, forceEmit = false): void {
     const draft = this.drafts.get(tabId)
     if (draft?.singleBusyKey) {
       draft.text = ''
       draft.singleBusyKey = false
     }
-    if (this.idle.has(tabId)) return
+    const alreadyIdle = this.idle.has(tabId)
+    if (alreadyIdle && !forceEmit) return
     this.idle.add(tabId)
     this.emit('idle', tabId)
   }

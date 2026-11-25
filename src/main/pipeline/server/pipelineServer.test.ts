@@ -304,12 +304,16 @@ describe('pipeline server + stdio shim', () => {
       await until(() => shim.child.exitCode !== null)
     })
 
-    it('a cancelling notification does not mark the tab busy, a request does', async () => {
+    it('housekeeping MCP messages do not mark the tab busy, only tools/call does', async () => {
       const tabHeaders = { ...headers, 'x-aide-tab': 'tab-cancel' }
       tabActivity.markIdle('tab-cancel')
       await fetch(`${base}/mcp`, { method: 'POST', headers: tabHeaders, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 99 } }) })
       expect(tabActivity.isIdle('tab-cancel')).toBe(true)
       await fetch(`${base}/mcp`, { method: 'POST', headers: tabHeaders, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) })
+      expect(tabActivity.isIdle('tab-cancel')).toBe(true)
+      await fetch(`${base}/mcp`, { method: 'POST', headers: tabHeaders, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) })
+      expect(tabActivity.isIdle('tab-cancel')).toBe(true)
+      await fetch(`${base}/mcp`, { method: 'POST', headers: tabHeaders, body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'pipeline_hello', arguments: {} } }) })
       expect(tabActivity.isIdle('tab-cancel')).toBe(false)
       tabActivity.forget('tab-cancel')
     })

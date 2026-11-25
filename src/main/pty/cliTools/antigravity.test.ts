@@ -12,7 +12,8 @@ import {
   readAntigravitySessionPreview,
   workspaceUrisMatchProject
 } from './antigravityScanner'
-import { antigravityTool, formatAntigravityTitle } from './antigravity'
+import { antigravityTool, formatAntigravityTitle, preloadAntigravityMcp } from './antigravity'
+import { tabActivity } from '../tabActivity'
 import {
   formatAntigravityUsage,
   hasElapsedReset,
@@ -164,8 +165,22 @@ describe('antigravityTool helpers', () => {
     })
     expect(reply).toBe('✳ Build')
     expect(events).toEqual(['completeAndWait'])
+    expect(tabActivity.isIdle('tab-test')).toBe(true)
+
+    // Fast turn where agy reports 'idle' directly (prevState was already 'idle'):
+    // tabActivity still returns to idle without firing a duplicate completeAndWait sound.
+    tabActivity.markBusy('tab-test')
+    expect(tabActivity.isIdle('tab-test')).toBe(false)
+    antigravityTool.onHookEvent?.({
+      tabId: 'tab-test', event: 'Title', sessionId: 's1', transcriptPath: null,
+      payload: { agent_state: 'idle', conversation_title: 'Build' }
+    })
+    expect(tabActivity.isIdle('tab-test')).toBe(true)
+    expect(events).toEqual(['completeAndWait'])
+
     expect(await antigravityTool.getLoginIdentifier?.()).toBe('dev@example.com')
     antigravityTool.deregisterTab?.('tab-test')
+    tabActivity.forget('tab-test')
   })
 
   it('checks startup health without timing heuristics', () => {
@@ -177,5 +192,46 @@ describe('antigravityTool helpers', () => {
   it('declares why account management is unsupported', () => {
     expect(antigravityTool.hasAccountSystem()).toBe(false)
     expect(antigravityTool.accountUnsupportedReason).toMatch(/keyring/i)
+  })
+
+  it('preloads MCP via /mcp + Enter + Esc and aborts if the user starts typing', async () => {
+    const writes: string[] = []
+    const listeners = new Set<(d: string) => void>()
+    const emit = (d: string): void => { for (const cb of listeners) cb(d) }
+
+    const ok = await preloadAntigravityMcp(
+      {
+        tabId: 'tab-1',
+        projectPath: 'E:\\p',
+        write: (data) => {
+          writes.push(data)
+          if (data === '/mcp') setTimeout(() => emit('/mcp'), 5)
+          if (data === '\r') setTimeout(() => emit('\x1b[32maide\x1b[0m  Tools: agent_list'), 5)
+          if (data === '\x1b') setTimeout(() => emit('> '), 5)
+        },
+        subscribeOutput: (cb) => { listeners.add(cb); return () => listeners.delete(cb) },
+        hasUserDraft: () => false,
+        isClosed: () => false
+      },
+      { settleMs: 10, maxStartupWaitMs: 50, echoWaitMs: 50, overlaySettleMs: 10, overlayMaxWaitMs: 100, closeWaitMs: 50 }
+    )
+    expect(ok).toBe(true)
+    expect(writes).toEqual(['/mcp', '\r', '\x1b'])
+
+    // Aborts cleanly without writing anything when user already typed a draft
+    const blockedWrites: string[] = []
+    const aborted = await preloadAntigravityMcp(
+      {
+        tabId: 'tab-2',
+        projectPath: 'E:\\p',
+        write: (data) => blockedWrites.push(data),
+        subscribeOutput: () => () => {},
+        hasUserDraft: () => true,
+        isClosed: () => false
+      },
+      { settleMs: 10, maxStartupWaitMs: 50 }
+    )
+    expect(aborted).toBe(false)
+    expect(blockedWrites).toEqual([])
   })
 })

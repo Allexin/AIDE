@@ -356,7 +356,12 @@ export class AgentMessagingService {
     const existing = this.pending.get(tabId)
     if (existing) existing.messages.push(text)
     else this.pending.set(tabId, { projectPath: mgr.getProjectPath(), messages: [text] })
-    return { status: 'queued' }
+    return {
+      status: 'queued',
+      reason: !mgr.isTabReady(tabId)
+        ? 'Target agent is still starting; message is queued and will be delivered once ready.'
+        : 'Target agent is currently busy; message is queued and will be delivered once it becomes idle.'
+    }
   }
 
   private async flush(tabId: string): Promise<void> {

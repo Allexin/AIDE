@@ -75,9 +75,11 @@ function isAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' }
 }
 
-/** Whether a JSON-RPC payload holds a request (notifications have no id). */
-function hasRequest(payload: unknown): boolean {
-  return (Array.isArray(payload) ? payload : [payload]).some((m) => !!m && typeof m === 'object' && (m as { id?: unknown }).id !== undefined && (m as { id?: unknown }).id !== null)
+/** Whether a JSON-RPC payload invokes an MCP tool (handshake/discovery like initialize, tools/list, ping does not mean the agent is busy). */
+function hasToolCall(payload: unknown): boolean {
+  return (Array.isArray(payload) ? payload : [payload]).some(
+    (m) => !!m && typeof m === 'object' && (m as { method?: unknown }).method === 'tools/call'
+  )
 }
 
 export class PipelineServer {
@@ -233,7 +235,7 @@ export class PipelineServer {
       return
     }
     const tabId = req.headers['x-aide-tab'] ? String(req.headers['x-aide-tab']) : null
-    if (tabId && hasRequest(payload)) tabActivity.markBusy(tabId)
+    if (tabId && hasToolCall(payload)) tabActivity.markBusy(tabId)
     const response = await mcp.handle(payload, {
       projectPath,
       connectionId: String(req.headers['x-aide-conn'] ?? ''),
