@@ -73,6 +73,8 @@ export default function FileViewerApp(): React.ReactElement {
     setNotice(null)
     setNetwork(payload.pageNetwork)
     setPageStale(false)
+    setStops(0)
+    setStop(0)
     setReloadKey((k) => k + 1)
     pendingScroll.current = { anchor: payload.anchor }
   }, [])

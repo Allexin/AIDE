@@ -182,7 +182,9 @@ const SNAP_PX = 8
 export const MarkView = forwardRef<MarkViewHandle, Props>(function MarkView({ src, alt, marks, tool, selectedId, onChange, onSelect }, ref) {
   const svg = useMemo(() => svgText(src), [src])
   const svgViewBox = useMemo(() => (svg ? svgBox(svg) : null), [svg])
-  const [natural, setNatural] = useState<Box | null>(null)
+  /** Natural size paired with its `src`: no effect clears it (a clearing effect raced with `img.onLoad` on `data:` URLs). */
+  const [measured, setMeasured] = useState<{ src: string; box: Box } | null>(null)
+  const natural = measured && measured.src === src ? measured.box : null
   const box = svgViewBox ?? natural
 
   const frameRef = useRef<HTMLDivElement>(null)
@@ -197,6 +199,7 @@ export const MarkView = forwardRef<MarkViewHandle, Props>(function MarkView({ sr
   const spaceDown = useRef(false)
   const marksRef = useRef(marks)
   marksRef.current = marks
+  const prevSrc = useRef(src)
 
   useLayoutEffect(() => {
     const el = frameRef.current
@@ -207,13 +210,27 @@ export const MarkView = forwardRef<MarkViewHandle, Props>(function MarkView({ sr
     return () => ro.disconnect()
   }, [])
 
-  useEffect(() => {
-    setNatural(null)
-    setView({ zoom: 1, panX: 0, panY: 0 })
-  }, [src])
+  useLayoutEffect(() => {
+    if (prevSrc.current !== src) {
+      prevSrc.current = src
+      drag.current = null
+      setSnapMark(null)
+      setView({ zoom: 1, panX: 0, panY: 0 })
+    }
+    if (svgViewBox) return
+    const im = imgRef.current
+    // Cover images that decoded synchronously before onLoad (common for data: URLs).
+    if (im && im.complete && im.naturalWidth > 0 && im.naturalHeight > 0 && im.getAttribute('src') === src) {
+      setMeasured((prev) =>
+        prev && prev.src === src && prev.box.w === im.naturalWidth && prev.box.h === im.naturalHeight
+          ? prev
+          : { src, box: { x: 0, y: 0, w: im.naturalWidth, h: im.naturalHeight } }
+      )
+    }
+  }, [src, svgViewBox])
 
   const pad = 16
-  const fit = box && frame.w > 0 ? Math.min((frame.w - 2 * pad) / box.w, (frame.h - 2 * pad) / box.h) : 0
+  const fit = box && frame.w > 0 && frame.h > 0 ? Math.min(Math.max(1, frame.w - 2 * pad) / box.w, Math.max(1, frame.h - 2 * pad) / box.h) : 0
   const scale = fit * view.zoom
   const dw = box ? box.w * scale : 0
   const dh = box ? box.h * scale : 0
@@ -415,6 +432,7 @@ export const MarkView = forwardRef<MarkViewHandle, Props>(function MarkView({ sr
   return (
     <div ref={frameRef} className="vm-frame" onWheel={onWheel}>
       <img
+        key={src}
         ref={imgRef}
         src={src}
         alt={alt}
@@ -422,7 +440,9 @@ export const MarkView = forwardRef<MarkViewHandle, Props>(function MarkView({ sr
         draggable={false}
         onLoad={(e) => {
           const im = e.currentTarget
-          if (!svgViewBox) setNatural({ x: 0, y: 0, w: im.naturalWidth, h: im.naturalHeight })
+          if (!svgViewBox && im.naturalWidth > 0 && im.naturalHeight > 0 && im.getAttribute('src') === src) {
+            setMeasured({ src, box: { x: 0, y: 0, w: im.naturalWidth, h: im.naturalHeight } })
+          }
         }}
         style={box ? { left: ox, top: oy, width: dw, height: dh } : { visibility: 'hidden' }}
       />
