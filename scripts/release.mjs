@@ -98,6 +98,13 @@ if (headIsRelease) {
   }
 }
 
+if (!resume) {
+  const dirty = runCapture('git status --porcelain')
+  if (dirty) {
+    fail('Working tree has uncommitted changes. Commit or stash them before releasing.')
+  }
+}
+
 // Step 1: fetch previous stable release from GitHub (fail fast before any heavy work)
 console.log('🌐 Fetching previous stable release from GitHub...')
 const prevResult = spawnSync('node', ['scripts/get-prev-release.mjs'], {
@@ -187,7 +194,8 @@ Rules:
 - Omit "chore: release" commits
 - Group changes into "What's new" and "Fixes" sections; omit a section if empty
 - Be concise — one line per change
-- Use the commit messages as source material; rephrase for clarity`
+- Use the commit messages as source material; rephrase for clarity
+- Do NOT call any tools; use only the commit list provided above`
 
   const agyExe = resolveAgyExecutable()
   // Proxy is required for Antigravity to reach Google APIs in restricted networks.
@@ -202,7 +210,7 @@ Rules:
     toolPermission: 'request-review',
     enableTerminalSandbox: false,
     permissions: {
-      deny: ['write_file(*)', 'read_url(*)', 'execute_url(*)', 'mcp(*)']
+      deny: ['command(*)', 'read_file(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)', 'mcp(*)']
     }
   })
   const agyInput = JSON.stringify({ event: 'user', message: { content: prompt } }) + '\n'
